@@ -177,18 +177,12 @@ function walk(dir: string, out: string[] = []): string[] {
 const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\s\/\/[^\n"'`]*$/gm, "");
 const sources = walk("server").map((f) => [f, stripComments(read(f))] as const);
 
-/** Files other batches had in flight on 2026-11-07 (ARES, CRMP): left for the merge, not exempt for good. */
-const AFFECTED_ROWS_LEFT_FOR_MERGE = [
-  "server/areEngine.ts",
-  "server/routers/are/campaigns.ts",
-  "server/routers/are/execution.ts",
-  "server/routers/are/prospects.ts",
-  "server/services/are/stepHold.ts",
-  "server/routers/crm.ts",
-  "server/routers/recordLists.ts",
-  "server/services/company/mergeService.ts",
-  "server/services/contactMerge.ts",
-];
+/**
+ * Files left for the merge while other batches had them in flight. ARES and
+ * CRMP landed before this batch's final merge (2026-11-07), and their reads
+ * were converted then, so the list is empty; it stays for the next time.
+ */
+const AFFECTED_ROWS_LEFT_FOR_MERGE: string[] = [];
 
 describe("nothing reads rows changed except the helper", () => {
   const readers = sources.filter(([f, s]) => f !== "server/_core/claim.ts" && /\.affectedRows\b|affectedRows\s*\?\?|\{ affectedRows\?/.test(s)).map(([f]) => f);

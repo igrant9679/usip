@@ -117,8 +117,7 @@ describe("the daily caps count from the workspace's midnight", () => {
     };
     const handMade = walk("server").filter((f) => /setUTCHours\(0, ?0, ?0, ?0\)|function startOfUtcDay/.test(readFileSync(join(ROOT, f), "latin1")));
     // The one left is startOfLocalDay's own fallback for a zone Intl refuses.
-    // (workspace.ts's trend7d is replaced by METR's F44 at the merge.)
-    expect(handMade.filter((f) => f !== "server/routers/workspace.ts")).toEqual(["server/services/workspaceTimezone.ts"]);
+    expect(handMade).toEqual(["server/services/workspaceTimezone.ts"]);
   });
 
   it("the LinkedIn invite budget stays on UTC days on purpose, the same as the Auto path", () => {

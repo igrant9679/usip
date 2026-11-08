@@ -5,8 +5,16 @@
  * aggregate, sort, row cap. Right panel = live results. Reports save per
  * workspace (reports.save/list) and export to CSV. All field access is
  * validated server-side against per-object whitelists (reports.schema).
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F45): a date groups by day, week or
+ * month in the workspace's zone; results say how many rows or groups there are
+ * in all, with totals over all of them, and page through them; /reports?report=
+ * opens a saved report (its id) or a preset ("preset:<key>"), and the address
+ * follows the report on screen; and a scheduled report shows when it last went
+ * and how its last send went.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useSearch } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -20,8 +28,9 @@ import {
 import { ReportInsights } from "@/components/usip/ReportInsights";
 import { confirmAction } from "@/components/usip/Common";
 import {
-  BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, SlidersHorizontal, Sparkles, Trash2, X,
+  BarChart3, ChevronLeft, ChevronRight, Clock, Download, FolderOpen, Link2, Loader2, Play, Plus, Save, SlidersHorizontal, Sparkles, Trash2, X,
 } from "lucide-react";
+import { reportHref, scheduleStatus } from "@/lib/reportLinks";
 import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
@@ -33,6 +42,8 @@ type Spec = {
   columns: string[];
   filters: Filter[];
   groupBy?: string;
+  /** For a date groupBy: day, week or month, in the workspace's zone (F45). */
+  groupBucket?: "day" | "week" | "month";
   aggregate?: "count" | "sum_value" | "avg_value";
   aggregateField?: string;
   sort?: { field: string; dir: "asc" | "desc" };
@@ -122,12 +133,24 @@ export default function Reports() {
   const [builderOpen, setBuilderOpen] = useState(false);
   const [armed, setArmed] = useState(false); // true once the user hits Run
 
+  // Which page of rows or groups is on screen (F45). Any change to the report
+  // itself goes back to the first page.
+  const [page, setPage] = useState(0);
+  const specKey = JSON.stringify(spec);
+  useEffect(() => { setPage(0); }, [specKey]);
+
+  // /reports?report=<saved id> or ?report=preset:<key> opens that report once
+  // the lists have loaded (F45); opening one from the panel writes the address.
+  const [, navigate] = useLocation();
+  const reportParam = new URLSearchParams(useSearch()).get("report");
+  const deepLinked = useRef(false);
+
   const objSchema = schema.data?.[spec.object];
   // Seed default columns once the schema arrives / object changes.
   const effectiveColumns = spec.columns.length ? spec.columns : (objSchema?.defaultColumns ?? []);
   const runnableSpec = useMemo(
-    () => ({ ...spec, columns: effectiveColumns }) as Spec,
-    [spec, effectiveColumns],
+    () => ({ ...spec, columns: effectiveColumns, offset: page * spec.limit }) as Spec & { offset: number },
+    [spec, effectiveColumns, page],
   );
 
   // Typing a filter value re-ran the report on every keystroke (G54, X4.3):
@@ -151,7 +174,7 @@ export default function Reports() {
   });
   const utils = trpc.useUtils();
   const save = trpc.reports.save.useMutation({
-    onSuccess: (r) => { utils.reports.list.invalidate(); setLoadedId(r.id); setSaveOpen(false); toast.success("Report saved"); },
+    onSuccess: (r) => { utils.reports.list.invalidate(); setLoadedId(r.id); setSaveOpen(false); toast.success("Report saved"); navigate(reportHref({ id: r.id }), { replace: true }); },
     onError: (e) => toast.error(e.message),
   });
   const remove = trpc.reports.remove.useMutation({
@@ -162,6 +185,8 @@ export default function Reports() {
   const setObject = (object: string) => {
     setSpec({ object, columns: [], filters: [], limit: 200 });
     setLoadedId(null); setLoadedName(""); setArmed(false);
+    // A new report: the address no longer names the one that was open.
+    navigate("/reports", { replace: true });
   };
   const toggleColumn = (key: string) => {
     setSpec((s) => {
@@ -174,6 +199,29 @@ export default function Reports() {
     setLoadedId(r.id);
     setLoadedName(r.name);
     setArmed(true);
+    navigate(reportHref({ id: r.id }), { replace: true });
+  };
+  const loadPreset = (p: Record<string, any>) => {
+    setSpec(p.spec as Spec); setLoadedId(null); setLoadedName(p.name); setArmed(true);
+    navigate(reportHref({ preset: p.key }), { replace: true });
+  };
+  useEffect(() => {
+    if (deepLinked.current || !reportParam) return;
+    if (reportParam.startsWith("preset:")) {
+      const p = (presets.data ?? []).find((x: any) => x.key === reportParam.slice(7));
+      if (p) { deepLinked.current = true; loadPreset(p); }
+      else if (presets.data) { deepLinked.current = true; toast.error("That preset report doesn't exist."); }
+      return;
+    }
+    const r = (saved.data as Record<string, any>[] | undefined)?.find((x) => String(x.id) === reportParam);
+    if (r) { deepLinked.current = true; loadSaved(r); }
+    else if (saved.data) { deepLinked.current = true; toast.error("That saved report isn't in this workspace."); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportParam, presets.data, saved.data]);
+  const copyLink = () => {
+    const href = loadedId ? reportHref({ id: loadedId }) : reportParam ? `/reports?report=${encodeURIComponent(reportParam)}` : null;
+    if (!href) return;
+    void navigator.clipboard?.writeText(window.location.origin + href).then(() => toast.success("Link copied"), () => toast.error("Couldn't copy the link"));
   };
 
   const columnsMeta = objSchema?.columns ?? [];
@@ -181,6 +229,9 @@ export default function Reports() {
   // A date is an instant, so grouping on one made a group per row; the server
   // refuses it, and the picker doesn't offer it (G54).
   const groupableFields = columnsMeta.filter((c) => c.kind !== "date");
+  // ...except by day, week or month, in the workspace's zone (F45).
+  const dateFields = columnsMeta.filter((c) => c.kind === "date");
+  const groupIsDate = !!spec.groupBy && dateFields.some((c) => c.key === spec.groupBy);
 
   return (
     <Shell title="Reports">
@@ -190,6 +241,11 @@ export default function Reports() {
           <BarChart3 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Reports</h1>
           {loadedName && <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{loadedName}</span>}
+          {(loadedId || reportParam) && armed ? (
+            <Button variant="ghost" size="sm" className="h-7 gap-1.5" onClick={copyLink} aria-label="Copy a link to this report">
+              <Link2 className="size-3.5" /> Copy link
+            </Button>
+          ) : null}
           <div className="flex-1" />
           <PhoneRailButton onClick={() => setBuilderOpen(true)} icon={SlidersHorizontal}>Build</PhoneRailButton>
           {can("export_data") && (
@@ -224,7 +280,7 @@ export default function Reports() {
                       type="button"
                       title={p.description}
                       className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
-                      onClick={() => { setSpec(p.spec as Spec); setLoadedId(null); setLoadedName(p.name); setArmed(true); }}
+                      onClick={() => loadPreset(p)}
                     >
                       <Sparkles className="size-3.5 shrink-0" style={{ color: accent }} />
                       <span className="truncate">{p.name}</span>
@@ -238,8 +294,10 @@ export default function Reports() {
                 <section>
                   <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Saved reports</h2>
                   <div className="space-y-0.5">
-                    {(saved.data as Record<string, any>[]).map((r) => (
-                      <div key={r.id} className={cn("group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-muted", loadedId === r.id && "bg-muted font-medium")}>
+                    {(saved.data as Record<string, any>[]).map((r) => {
+                      const status = scheduleStatus(r);
+                      return (
+                      <div key={r.id} className={cn("group flex flex-wrap items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-muted", loadedId === r.id && "bg-muted font-medium")}>
                         <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => loadSaved(r)}>
                           <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
                           <span className="truncate">{r.name}</span>
@@ -248,8 +306,8 @@ export default function Reports() {
                         <button
                           type="button"
                           aria-label={`Schedule ${r.name}`}
-                          title={r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
-                          className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
+                          title={status ? status.text : r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
+                          className={cn("shrink-0 rounded p-0.5", status?.failed ? "text-rose-600" : r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
                           onClick={() => setSchedFor(r)}
                         >
                           <Clock className="size-3" />
@@ -262,8 +320,12 @@ export default function Reports() {
                         >
                           <Trash2 className="size-3" />
                         </button>
+                        {status ? (
+                          <div className={cn("basis-full pl-5 text-[10.5px] leading-tight", status.failed ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground")}>{status.text}</div>
+                        ) : null}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </section>
               )}
@@ -336,12 +398,32 @@ export default function Reports() {
                 <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Group by</h2>
                 <select aria-label="Group by"
                   value={spec.groupBy ?? ""}
-                  onChange={(e) => setSpec((s) => ({ ...s, groupBy: e.target.value || undefined, aggregate: e.target.value ? (s.aggregate ?? "count") : undefined }))}
+                  onChange={(e) => {
+                    const key = e.target.value || undefined;
+                    const isDate = !!key && dateFields.some((c) => c.key === key);
+                    setSpec((s) => ({ ...s, groupBy: key, groupBucket: isDate ? (s.groupBucket ?? "month") : undefined, aggregate: key ? (s.aggregate ?? "count") : undefined }));
+                  }}
                   className={cn(selectCls, "w-full")}
                 >
                   <option value="">No grouping (row list)</option>
                   {groupableFields.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  {dateFields.length > 0 && (
+                    <optgroup label="By date (day, week or month)">
+                      {dateFields.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </optgroup>
+                  )}
                 </select>
+                {groupIsDate && (
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                    By
+                    <select aria-label="Date bucket" value={spec.groupBucket ?? "month"} onChange={(e) => setSpec((s) => ({ ...s, groupBucket: e.target.value as Spec["groupBucket"] }))} className={cn(selectCls, "flex-1")}>
+                      <option value="day">Day</option>
+                      <option value="week">Week (from Monday)</option>
+                      <option value="month">Month</option>
+                    </select>
+                    <span className="text-[10.5px]">workspace time</span>
+                  </div>
+                )}
                 {spec.groupBy && (
                   <div className="mt-1.5 flex items-center gap-1.5">
                     {/* Sum and Average showed a field as picked and sent none, so the
@@ -377,7 +459,17 @@ export default function Reports() {
                 )}
               </section>
 
-              {/* sort + limit */}
+              {/* sort + limit (groups page by Max rows too) */}
+              {spec.groupBy && (
+                <section>
+                  <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                    Groups per page
+                    <select aria-label="Groups per page" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
+                      {[50, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                </section>
+              )}
               {!spec.groupBy && (
                 <section>
                   <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sort & limit</h2>
@@ -398,8 +490,8 @@ export default function Reports() {
                     )}
                   </div>
                   <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-muted-foreground">
-                    Max rows
-                    <select aria-label="Max rows" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
+                    Rows per page
+                    <select aria-label="Rows per page" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
                       {[50, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
                     </select>
                   </div>
@@ -428,13 +520,26 @@ export default function Reports() {
               <div className="p-8 text-center text-[13px] text-muted-foreground">Couldn't run the report: {result.error.message}</div>
             ) : (
               <>
-                <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2 text-[12px] text-muted-foreground">
-                  <span className="font-medium text-foreground tabular-nums">{result.data?.rows.length ?? 0}</span>
-                  {result.data?.grouped ? "groups" : "rows"}
-                  {/* The cap used to cut the list without a word (G54). */}
+                <div className="flex flex-wrap items-center gap-2 border-b border-border/70 px-4 py-2 text-[12px] text-muted-foreground">
+                  {/* How many in all, and which of them are on screen (F45). The
+                      cap used to cut the list without a word (G54). */}
+                  <span className="tabular-nums">
+                    {(result.data?.rows.length ?? 0) === 0 ? "0" : `${(result.data?.offset ?? 0) + 1}–${(result.data?.offset ?? 0) + (result.data?.rows.length ?? 0)}`}
+                    {" of "}
+                    <span className="font-medium text-foreground">{(result.data?.total ?? result.data?.rows.length ?? 0).toLocaleString()}</span>
+                  </span>
+                  {result.data?.grouped ? (result.data?.bucket ? `${result.data.bucket}s, workspace time` : "groups") : "rows"}
                   {result.data?.truncated && (
-                    <span className="text-amber-700 dark:text-amber-400">
-                      · the first {result.data.rows.length} only, there are more{result.data.grouped ? "" : ". Raise Max rows or add a filter"}
+                    <span className="text-amber-700 dark:text-amber-400">· more on the next page</span>
+                  )}
+                  {(page > 0 || result.data?.truncated) && (
+                    <span className="inline-flex items-center gap-0.5">
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" aria-label="Previous page" disabled={page === 0 || result.isFetching} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                        <ChevronLeft className="size-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" aria-label="Next page" disabled={!result.data?.truncated || result.isFetching} onClick={() => setPage((p) => p + 1)}>
+                        <ChevronRight className="size-3.5" />
+                      </Button>
                     </span>
                   )}
                   {result.isFetching && <Loader2 className="size-3 animate-spin" />}
@@ -477,6 +582,22 @@ export default function Reports() {
                       <tr><td colSpan={(result.data?.columns ?? []).length || 1} className="px-4 py-10 text-center text-muted-foreground">No rows match this report.</td></tr>
                     )}
                   </tbody>
+                  {/* Totals over EVERY matching row, not just this page (F45). */}
+                  {(result.data?.rows ?? []).length > 0 && result.data?.totals && Object.keys(result.data.totals).length > 0 && (
+                    <tfoot>
+                      <tr className="bg-muted/40 font-medium">
+                        {(result.data?.columns ?? []).map((c, i) => {
+                          const t = result.data!.totals[c.key];
+                          const kind = result.data!.totalKinds?.[c.key];
+                          return (
+                            <td key={c.key} className={cn("border-t border-border px-3 py-2", c.kind === "number" && "tabular-nums")}>
+                              {t != null ? `${kind === "avg" ? "Avg " : ""}${fmtCell(Math.round(t * 100) / 100, "number")}` : i === 0 ? `Total, all ${(result.data!.grouped ? result.data!.totals.n ?? result.data!.total : result.data!.total).toLocaleString()} rows` : ""}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </>
             )}
@@ -559,11 +680,20 @@ function ScheduleDialog({ report, onClose }: { report: Record<string, any> | nul
             <div className="text-[12px] font-medium">Frequency</div>
             <select aria-label="Frequency" value={freq} onChange={(e) => setFreq(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
               <option value="none">Not scheduled</option>
-              <option value="daily">Daily (mornings, UTC)</option>
-              <option value="weekly">Weekly (Monday mornings)</option>
-              <option value="monthly">Monthly (the 1st)</option>
+              <option value="daily">Daily (8 AM, workspace time)</option>
+              <option value="weekly">Weekly (Monday, 8 AM workspace time)</option>
+              <option value="monthly">Monthly (the 1st, 8 AM workspace time)</option>
             </select>
           </div>
+          {/* When it last went, and how the last try went (F45). */}
+          {(() => {
+            const st = scheduleStatus(report);
+            return st ? (
+              <div className={cn("rounded-md border px-2.5 py-1.5 text-[12px]", st.failed ? "border-rose-300 text-rose-700 dark:border-rose-800 dark:text-rose-300" : "text-muted-foreground")}>{st.text}</div>
+            ) : (
+              <div className="text-[12px] text-muted-foreground">Not sent yet.</div>
+            );
+          })()}
           <div className="space-y-1.5">
             <div className="text-[12px] font-medium">Recipients</div>
             <Input aria-label="Recipients" value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="alice@company.com, bob@company.com" />

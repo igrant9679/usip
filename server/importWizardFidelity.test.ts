@@ -53,7 +53,9 @@ describe("wiring — every stage renders what the server now returns", () => {
   const page = readFileSync("client/src/pages/usip/ImportContacts.tsx", "utf8");
 
   it("parseCSV returns column profiles; the mapping step renders fill % + samples + the parsed preview", () => {
-    expect(router).toContain("columnStats: buildColumnStats(headers, rows)");
+    // 2026-11-07 (CRMP, F32): the profile is built in describeFile, from the
+    // rows as the importer reads them (through a preset when there is one).
+    expect(router).toContain("columnStats: buildColumnStats(r.headers, r.rows)");
     expect(page).toContain("% filled");
     expect(page).toContain("Preview first {previewRows.length} rows (as parsed)");
     expect(page).toContain("Required-field coverage");

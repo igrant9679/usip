@@ -56,6 +56,9 @@ export const AUTO_AUDIT_SKIP: Record<string, string> = {
   "mailbox.aiDraftReply": "drafts text, writes nothing",
   "mailbox.aiDraftForward": "drafts text, writes nothing",
   "conversations.draftReply": "drafts text, writes nothing",
+  // A POST only so thousands of ids fit (F36, 2026-11-07): reads who works at
+  // a do-not-contact company before an enrolment, and changes no data.
+  "prospects.doNotContactCompanies": "checks companies, writes nothing",
   // Forgets the mailbox cache so the next read asks the provider (L8, PR 55,
   // added at the merge 2026-11-07): one per Refresh click, changes no data.
   "mailbox.refresh": "clears a cache, writes nothing",

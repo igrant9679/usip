@@ -27,6 +27,7 @@ import {
 import type { getDb } from "../db";
 import { normalizeSuppressionEmail } from "../unsubscribe";
 import { noteAuditRecorded } from "../_core/requestContext";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -67,7 +68,7 @@ export const CONTACT_POLY_REFS = [
  */
 export const CONTACT_FILLABLE = ["email", "title", "phone", "linkedinUrl", "city", "seniority", "accountId"] as const;
 
-const affected = (r: unknown) => Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+const affected = affectedRowsOf;
 const blank = (v: unknown) => v === null || v === undefined || v === "";
 
 export async function mergeContacts(

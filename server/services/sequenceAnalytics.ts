@@ -14,9 +14,10 @@
  * 2nd and dropped the evening of the 3rd.
  */
 import { and, asc, eq, gt, gte, inArray, isNotNull, lte, sql, type SQL } from "drizzle-orm";
-import { emailDrafts, enrollments, sequences } from "../../drizzle/schema";
+import { emailDrafts, emailReplies, enrollments, sequences } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { dayRangeBounds } from "./calendarDeadline";
+import { genuineReplyScope } from "./replyScope";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 
 export type SequencePerformance = {
@@ -89,4 +90,89 @@ export async function sequencePerformance(
       openRate: pct(uniqueOpens, s), clickRate: pct(uniqueClicks, s), bounceRate: pct(b, s), exitRate: pct(exited, totalEnrolled),
     };
   });
+}
+
+/* ── One sequence, step by step (audit 2026-10-20, O41) ──────────────────────
+ *
+ * getStepAnalytics read every draft of the sequence, then every draft id
+ * again, to count them per step in JavaScript; getEnrollmentStepStats and
+ * getEnrollmentStats read every enrolment row to count them. These count in
+ * SQL, grouped by step or status, and give the numbers the old code gave:
+ * sent is drafts marked sent; opens, clicks and bounces count every draft of
+ * the step; replies count every matched reply row whose draft is the step's;
+ * a draft from before migration 0063 (no step) is the -1 row, shown only when
+ * one of them was sent.
+ */
+
+export type StepAnalyticsRow = {
+  stepIndex: number; stepType: string; stepLabel: string;
+  sent: number; uniqueOpens: number; uniqueClicks: number; bounced: number; replied: number;
+  openRate: number; clickRate: number; replyRate: number; bounceRate: number;
+};
+
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+export async function stepAnalytics(
+  db: Db,
+  ws: number,
+  seq: { id: number; steps: unknown },
+): Promise<StepAnalyticsRow[]> {
+  const steps = (Array.isArray(seq.steps) ? seq.steps : []) as Array<{ type?: string; subject?: string } | null>;
+  const mine = [eq(emailDrafts.workspaceId, ws), eq(emailDrafts.sequenceId, seq.id)];
+  const countWhere = (...more: SQL[]) =>
+    db.select({ step: emailDrafts.stepIndex, n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(...mine, ...more)).groupBy(emailDrafts.stepIndex);
+  const [sent, opened, clicked, bounced, replied] = await Promise.all([
+    countWhere(eq(emailDrafts.status, "sent")),
+    countWhere(gt(emailDrafts.openCount, 0)),
+    countWhere(gt(emailDrafts.clickCount, 0)),
+    countWhere(isNotNull(emailDrafts.bouncedAt)),
+    db.select({ step: emailDrafts.stepIndex, n: sql<number>`count(*)` }).from(emailReplies)
+      .innerJoin(emailDrafts, and(eq(emailDrafts.id, emailReplies.draftId), eq(emailDrafts.workspaceId, emailReplies.workspaceId)))
+      .where(and(eq(emailReplies.workspaceId, ws), genuineReplyScope(), ...mine))
+      .groupBy(emailDrafts.stepIndex),
+  ]);
+  const by = (rows: Array<{ step: number | null; n: number }>) => {
+    const m = new Map<number, number>();
+    for (const r of rows) m.set(r.step ?? -1, (m.get(r.step ?? -1) ?? 0) + Number(r.n));
+    return m;
+  };
+  const [sentBy, openedBy, clickedBy, bouncedBy, repliedBy] = [by(sent), by(opened), by(clicked), by(bounced), by(replied)];
+  const row = (stepIndex: number, stepType: string, stepLabel: string): StepAnalyticsRow => {
+    const s = sentBy.get(stepIndex) ?? 0;
+    const o = openedBy.get(stepIndex) ?? 0;
+    const c = clickedBy.get(stepIndex) ?? 0;
+    const b = bouncedBy.get(stepIndex) ?? 0;
+    const r = repliedBy.get(stepIndex) ?? 0;
+    return {
+      stepIndex, stepType, stepLabel, sent: s, uniqueOpens: o, uniqueClicks: c, bounced: b, replied: r,
+      openRate: pct(o, s), clickRate: pct(c, s), replyRate: pct(r, s), bounceRate: pct(b, s),
+    };
+  };
+  // One row per defined step, zeros included, so the ladder is whole.
+  const out = steps.map((s, i) => row(
+    i,
+    s?.type ?? "unknown",
+    s?.type === "email" ? (s.subject ?? `Email step ${i + 1}`) : `${s?.type ?? "?"} step ${i + 1}`,
+  ));
+  if ((sentBy.get(-1) ?? 0) > 0) out.push(row(-1, "unknown", "(legacy / pre-0063 drafts)"));
+  return out;
+}
+
+/** How many of a sequence's enrolments stand on each step, counted in SQL. */
+export async function enrollmentStepCounts(db: Db, ws: number, sequenceId: number): Promise<Array<{ step: number; count: number }>> {
+  const rows = await db.select({ step: enrollments.currentStep, n: sql<number>`count(*)` }).from(enrollments)
+    .where(and(eq(enrollments.sequenceId, sequenceId), eq(enrollments.workspaceId, ws)))
+    .groupBy(enrollments.currentStep);
+  return rows.map((r) => ({ step: Number(r.step), count: Number(r.n) })).sort((a, b) => a.step - b.step);
+}
+
+/** A sequence's enrolments by status, counted in SQL. */
+export async function enrollmentStatusCounts(db: Db, ws: number, sequenceId: number): Promise<{ active: number; paused: number; finished: number; exited: number }> {
+  const rows = await db.select({ status: enrollments.status, n: sql<number>`count(*)` }).from(enrollments)
+    .where(and(eq(enrollments.sequenceId, sequenceId), eq(enrollments.workspaceId, ws)))
+    .groupBy(enrollments.status);
+  const out = { active: 0, paused: 0, finished: 0, exited: 0 };
+  for (const r of rows) if (r.status in out) out[r.status as keyof typeof out] = Number(r.n);
+  return out;
 }

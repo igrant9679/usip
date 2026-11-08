@@ -231,7 +231,14 @@ describe("the avoid-rule check", () => {
     expect(engine).toContain("an avoid rule from your research and");
     const agent = read("server/routers/are/prospects.ts");
     expect(agent).toContain("const brief = await checkBrief(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);");
-    expect(agent).toMatch(/sequenceRewriteCount: 0,\n\s+copyHoldReason,\n/);
+    // 2026-11-07 (audit A75, batch ARES): the same write now also bumps the
+    // version a step edit checks; the hold is still written with the steps.
+    expect(agent).toContain([
+      "      sequenceRewriteCount: 0,",
+      "      // Every write of the steps bumps the version a step edit checks (A75).",
+      "      sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1`,",
+      "      copyHoldReason,",
+    ].join("\n"));
 
     h.db.rowsOf("prospect_intelligence").push({ id: 1, prospectQueueId: 5, workspaceId: 2, copyHoldReason: "Breaks your research's avoid rule" });
     const ctx = (ws: number) => ({

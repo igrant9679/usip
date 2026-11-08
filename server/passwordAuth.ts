@@ -569,7 +569,12 @@ export function registerPasswordAuthRoutes(app: Express) {
           // success, so the same six digits cannot be replayed for the rest of
           // their ~90-second window.
           const { matchTotpStep, totpRefusal } = await import("./services/totp");
-          const step = matchTotpStep(user.mfaTotpSecret, totpCode);
+          // Stored encrypted (services/totpSecret.ts). One that won't decrypt
+          // matches no code: the account still needs its second factor, and
+          // a backup code or an admin's Reset 2FA is the way back in.
+          const { openTotpSecret } = await import("./services/totpSecret");
+          const key = openTotpSecret(user.mfaTotpSecret);
+          const step = key ? matchTotpStep(key, totpCode) : null;
           if (step === null || !(await useTotpStep(db, user.id, step))) {
             // A wrong or spent code is a failure against the account too (G9):
             // whoever holds the password gets ten guesses at the code, not ten

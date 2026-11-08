@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
@@ -220,6 +221,8 @@ export default function SequencesV2() {
       {/* A failed load says so instead of showing an empty page (audit X1.6). */}
       <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="flex flex-col h-full min-h-0" style={{ ["--seq-accent" as any]: accent }}>
+        {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+        <SendingStatusBar surface="sequences" className="shrink-0" />
         {/* header */}
         <div className="relative shrink-0 px-4 pt-2 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />

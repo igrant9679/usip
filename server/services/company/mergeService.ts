@@ -13,6 +13,7 @@ import {
   attachments, recordFiles, calendarEvents, voiceCalls, crmNotes, recordListMembers,
   qbrs, contractAmendments, supportTickets,
 } from "../../../drizzle/schema";
+import { affectedRowsOf } from "../../_core/claim";
 
 export interface DuplicateGroup {
   /** The shared normalized domain, or name, the accounts collide on. */
@@ -143,7 +144,7 @@ export type MergeResult = {
   customerFolded?: { from: number; into: number; droppedArr: string } | null;
 };
 
-const affected = (r: unknown) => Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+const affected = affectedRowsOf;
 
 /**
  * Merge a duplicate account into the one that survives.

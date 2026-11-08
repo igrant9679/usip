@@ -32,6 +32,11 @@ const PersonInput = z.object({
   keywords: z.array(z.string()).optional(),
   seniority: z.string().optional(),
   department: z.string().optional(),
+  // A campaign launch's whole targeting (audit A56). Bounded: the LinkedIn
+  // searches it makes are capped at CAMPAIGN_RUN_MAX_QUERIES anyway.
+  jobTitles: z.array(z.string().max(200)).max(50).optional(),
+  industries: z.array(z.string().max(200)).max(50).optional(),
+  locations: z.array(z.string().max(200)).max(50).optional(),
 });
 
 const AccountInput = z.object({
@@ -54,7 +59,8 @@ export const discoveryRouter = router({
       // candidate, as before.
       // `holdForReview` (audit F38): keep the finds unsaved, each labelled new
       // or already in People, until someone presses Save to People.
-      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional(), holdForReview: z.boolean().optional() }),
+      // `addToCampaign` (audit A56): the Scraper tab's launch puts the saved people in its campaign too.
+      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional(), holdForReview: z.boolean().optional(), addToCampaign: z.boolean().optional() }),
       z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional(), holdForReview: z.boolean().optional() }),
     ]))
     .mutation(async ({ ctx, input }) => {
@@ -73,6 +79,7 @@ export const discoveryRouter = router({
       return queueDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null, {
         sources: input.sources ?? null,
         holdForReview: input.holdForReview ?? false,
+        addToCampaign: input.mode === "person" && input.campaignId != null && (input as { addToCampaign?: boolean }).addToCampaign === true,
       });
     }),
 

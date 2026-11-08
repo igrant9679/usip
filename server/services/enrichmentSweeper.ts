@@ -34,6 +34,7 @@ import { areCampaigns, notifications, prospectQueue, prospects, workspaceSetting
 import { getDb } from "../db";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { resolveVerifiedEmail } from "./scraper";
+import { withIdentityRekey } from "./are/queueIdentity";
 import { runComprehensiveEnrichment } from "./enrichment/comprehensivePass";
 import { getReoonKey, reoonCheckBalance, reoonStatusToUsip, reoonVerifySingle } from "./reoon";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "./quickenrich";
@@ -504,7 +505,7 @@ export async function backfillQueueCompanies(opts: {
       const patch: Record<string, unknown> = { enrichedAt: null, enrichmentStatus: "pending" };
       if (company) patch.companyName = company.slice(0, 200);
       if (domain) { patch.companyDomain = domain.slice(0, 200); withDomain++; }
-      await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, r.id));
+      await db.update(prospectQueue).set(withIdentityRekey(patch) as never).where(eq(prospectQueue.id, r.id));
       filled++;
     } catch (e) {
       console.error(`[EnrichmentSweep] LinkedIn backfill for queue ${r.id} failed:`, (e as Error).message);
@@ -785,7 +786,7 @@ export async function sweepWorkspace(
           patch.enrichmentStatus = "failed";
           patch.enrichmentError = `quickenrich: ${found.reason}`.slice(0, 500);
         }
-        await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+        await db.update(prospectQueue).set(withIdentityRekey(patch) as never).where(eq(prospectQueue.id, q.id));
       } catch (e) {
         result.attempted++;
         result.fromQueue++;
@@ -840,7 +841,7 @@ export async function sweepWorkspace(
         } else if (found.reason) {
           patch.enrichmentError = found.reason.slice(0, 500);
         }
-        await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+        await db.update(prospectQueue).set(withIdentityRekey(patch) as never).where(eq(prospectQueue.id, q.id));
         // The find reaches the People row too, through the merge, exactly as
         // the QuickEnrich pass's does (audit 2026-10-20, P82): it stopped at
         // the queue row, so People stayed empty beside a row being sent to.

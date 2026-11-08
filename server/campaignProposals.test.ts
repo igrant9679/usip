@@ -96,7 +96,10 @@ describe("the plumbing", () => {
     expect(client("components", "usip", "CampaignProposals.tsx")).toContain("trpc.are.campaigns.redraftProposal.useMutation");
     expect(svc).toContain('p.campaignId == null && !/^Already in|^In the sequence/.test(p.skipReason ?? "")');
   });
-  it("accept creates the campaign ACTIVE with batch approval, no discovery, and pushes through the one write path", () => {
+  // 2026-11-07 (audit A31): accept now creates a DRAFT — a person activates
+  // it, and that first launch asks for the time zone. Executed in
+  // proposalCreatesDraft.test.ts; the other pins here are unchanged.
+  it("accept creates the campaign as a DRAFT with batch approval, no discovery, and pushes through the one write path", () => {
     const fn = svc.slice(svc.indexOf("export async function acceptProposal"), svc.indexOf("export async function dismissProposal"));
     expect(fn).toContain('autonomyMode: "batch_approval"');
     expect(fn).toContain("prospectSources: []");
@@ -106,7 +109,9 @@ describe("the plumbing", () => {
     // 2026-11-03: the rule moved to shared/areSources so the tab reads it too, and
     // campaignSourcesRead.test.ts runs it through the router and the engine.
     expect(read("areEngine.ts")).toContain("const sources: string[] = campaignSources(campaign.prospectSources);");
-    expect(fn).toContain('status: "active"');
+    expect(fn).toContain('status: "draft"');
+    expect(fn).not.toContain('status: "active"');
+    expect(fn).not.toContain("startedAt: new Date()");
     expect(fn).toContain('await import("./are/pushPeople")');
     expect(fn).toContain("pushPeopleIntoCampaign(workspaceId, campaignId, ids.slice(i, i + 100), { generateSequence: true })");
   });

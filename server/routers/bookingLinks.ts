@@ -331,6 +331,9 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
           email: opts.email, source: opts.leadSource ?? "booking_link", status: "new",
         }, link.userId ?? null))
         .catch(() => { /* workflow firing is best-effort */ });
+      // Scored when made, off the request (audit 2026-10-20, F33); no
+      // enrolment comes of it.
+      void import("./leadScoring").then((m) => m.scoreNewLeadInBackground(link.workspaceId, createdLeadId)).catch(() => {});
     }
   }
 

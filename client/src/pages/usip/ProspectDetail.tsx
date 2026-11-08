@@ -15,7 +15,8 @@
 import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { Shell } from "@/components/usip/Shell";
+import { QueryError, Shell } from "@/components/usip/Shell";
+import { isNotFoundError } from "@/components/usip/QueryState";
 import { DetailHeader, DetailSection, DetailBody, LifecycleStepper } from "@/components/usip/DetailShell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
@@ -85,7 +86,7 @@ export default function ProspectDetail() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
 
-  const { data: p, isLoading } = trpc.prospects.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
+  const { data: p, isLoading, error, refetch } = trpc.prospects.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
   // Campaign membership + the queueId key each membership's dossier lives
   // under — same proc the People list rows use (owner ask 2026-09-20).
   const { data: enrollments } = trpc.prospects.enrollmentsFor.useQuery(
@@ -136,6 +137,10 @@ export default function ProspectDetail() {
 
   const [editing, setEditing] = useState<EditDraft | null>(null);
 
+  // A failed load and a missing person are different facts (audit X1.6).
+  if (error && !p && !isNotFoundError(error)) {
+    return <Shell title="Prospect"><QueryError what="this person" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
+  }
   if (isLoading) {
     return <Shell title="Prospect"><div className="p-4 md:p-5 text-center text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin inline mr-2" /> Loading…</div></Shell>;
   }

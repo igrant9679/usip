@@ -38,6 +38,8 @@ import { smtpConfigRouter } from "./routers/smtpConfig";
 import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { emailActivityRouter } from "./routers/emailActivity";
+import { sequenceTimelineRouter } from "./routers/sequenceTimeline";
+import { sendingStatusRouter } from "./routers/sendingStatus";
 import { linkedinLimitsRouter } from "./routers/linkedinLimits";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
@@ -71,7 +73,6 @@ import { knowledgeBaseRouter } from "./routers/knowledgeBase";
 import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
-import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
 import { linkedinEnrichmentRouter } from "./routers/linkedinEnrichment";
@@ -128,6 +129,10 @@ export const appRouter = router({
   crmPipelines: crmPipelinesRouter,
   crmTerritoryRules: crmTerritoryRulesRouter,
   sequences: sequencesRouter,
+  // A sequence's real send dates, projected with the engine's rules (audit 2026-10-20, U4).
+  sequenceTimeline: sequenceTimelineRouter,
+  // What is stopping sends right now, for the status bar (audit 2026-10-20, U1).
+  sendingStatus: sendingStatusRouter,
   emailDrafts: emailDraftsRouter,
   emailActivity: emailActivityRouter,
   linkedinLimits: linkedinLimitsRouter,
@@ -204,7 +209,8 @@ export const appRouter = router({
   reports: reportsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,
-  prospectImports: prospectImportsRouter,
+  // prospectImports (the separate LeadRocks importer) is retired: a LeadRocks
+  // file is a preset of imports.* now (audit 2026-10-20, F32).
   placesSearch: placesSearchRouter,
   linkedinFinder: linkedinFinderRouter,
   linkedinEnrichment: linkedinEnrichmentRouter,

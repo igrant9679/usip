@@ -89,7 +89,7 @@ import {
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { stageIndexFor } from "./_core/stageSemantics";
 import { mergeOwnRequestContext, mergeRequestContext } from "./_core/requestContext";
-import { queueIdentityKeys } from "./services/are/queueIdentity";
+import { queueIdentityIndexFor, queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
 import {
@@ -123,13 +123,14 @@ import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
 import { campaignNeverTarget } from "./services/research/neverTarget";
 import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/research/downstreamAccounts";
-import { perSectorSliceGroups, pickFallback, researchTargeting, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
+import { perSectorSliceGroups, pickFallback, researchTargeting, sliceGroupKey, vendorGroupFor, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
 import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
+import { affectedRowsOf } from "./_core/claim";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 
@@ -169,6 +170,14 @@ const LINKEDIN_HELD_MS = 60 * 60_000;
 const LINKEDIN_WAIT_MS = 6 * 60 * 60_000;
 /** A due step whose copy is held for an avoid rule: looked at again in an hour (A13/A40). */
 const COPY_HELD_MS = 60 * 60_000;
+/**
+ * How long a step put back for lack of sending capacity waits before it is
+ * asked again (F13): 15 minutes, doubling, at most 6 hours. Capacity returns
+ * within the hour or at the next day's reset.
+ */
+export function dispatchRetryMs(attempts: number): number {
+  return Math.min(15 * 60_000 * 2 ** Math.max(0, attempts - 1), 6 * 60 * 60_000);
+}
 /** Sends between fresh reads of the campaign and workspace pause (A29): every one. */
 export const DISPATCH_RECHECK_EVERY = 1;
 // Final checks can spend Reoon credits and seconds — bound them per tick so
@@ -394,7 +403,7 @@ export async function purgeOldEngineLogs(now: Date = new Date()): Promise<number
     for (let i = 0; i < 200; i++) {
       const [res] = await db.execute(sql`DELETE FROM ${table} WHERE ${createdAt} < ${cutoff} LIMIT 5000`);
       batches++;
-      if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+      if (affectedRowsOf(res) < 5000) break;
     }
   }
   return batches;
@@ -457,14 +466,23 @@ export async function runAreEngine(scope?: { workspaceId: number }): Promise<Are
         .where(and(eq(areCampaigns.status, "active"), scope ? eq(areCampaigns.workspaceId, scope.workspaceId) : undefined));
 
       const archivedWs = await archivedWorkspaceIds();
-      for (const campaign of active) {
-        if (archivedWs.has(campaign.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+      // Fair turns (audit 2026-10-20, F13): workspaces in turn, each one's
+      // campaigns in turn, and a tick that runs past its budget leaves the rest
+      // to go first next time. In table order, one workspace with many busy
+      // campaigns went first every tick and everyone else waited behind it.
+      const live = active.filter((c) => !archivedWs.has(c.workspaceId)); // archived workspaces are frozen (2026-08-12)
+      const run = await runCampaignsFairly(live, async (campaign) => {
         try {
           await tickCampaign(campaign, result, step);
           result.campaignsProcessed++;
         } catch (e) {
           console.error(`[AreEngine] campaign ${campaign.id} tick failed:`, e);
         }
+      // A person's tick of their own workspace leaves the schedule's turn and
+      // carry-over alone: it sees one workspace, the schedule sees them all.
+      }, { remember: !scope });
+      if (run.deferred.length > 0) {
+        console.log(`[AreEngine] tick budget spent after ${run.ran.length} campaign(s); ${run.deferred.length} go first next tick`);
       }
     });
   } finally {
@@ -617,6 +635,82 @@ export function enrichmentRetryable(now: Date) {
 }
 
 /**
+ * How long one engine tick may keep starting campaigns (F13). A campaign that
+ * has started finishes; the ones not reached go first next tick. The cron
+ * fires every 3 minutes and skips while a tick runs, so a tick far past this
+ * was already starving every campaign after it in the order.
+ */
+export const ENGINE_TICK_BUDGET_MS = 8 * 60_000;
+
+/** Where the fair order resumes: the turn it is on, and who was left over. */
+const fairCursor = { turn: 0, deferred: [] as number[] };
+export function __resetFairCursorForTests(): void { fairCursor.turn = 0; fairCursor.deferred = []; }
+
+/**
+ * The order campaigns tick in (audit 2026-10-20, F13: "round-robin per
+ * workspace and campaign"). One workspace at a time in turn, each workspace's
+ * campaigns in turn, so every workspace's first campaign is among the first
+ * few of every tick however many campaigns another has. Both turns rotate by
+ * `turn`. Campaigns a tick ran out of budget for go first in their own
+ * workspace's turn, and their workspaces first, so nobody waits more than a
+ * tick past a cut. Pure.
+ */
+export function fairCampaignOrder<T extends { id: number; workspaceId: number }>(campaigns: T[], turn: number, deferredFirst: number[] = []): T[] {
+  const rotate = <U>(xs: U[], by: number) => (xs.length ? xs.slice(by % xs.length).concat(xs.slice(0, by % xs.length)) : xs);
+  const byId = new Map(campaigns.map((c) => [c.id, c]));
+  const deferred = deferredFirst.map((id) => byId.get(id)).filter((c): c is T => !!c);
+  const deferredIds = new Set(deferred.map((c) => c.id));
+  const rest = new Map<number, T[]>();
+  for (const c of campaigns.slice().sort((a, b) => a.id - b.id)) {
+    if (deferredIds.has(c.id)) continue;
+    const g = rest.get(c.workspaceId);
+    if (g) g.push(c); else rest.set(c.workspaceId, [c]);
+  }
+  const allWs = Array.from(new Set(campaigns.map((c) => c.workspaceId))).sort((a, b) => a - b);
+  const cutWs = Array.from(new Set(deferred.map((c) => c.workspaceId)));
+  const wsOrder = [...cutWs, ...rotate(allWs.filter((w) => !cutWs.includes(w)), turn)];
+  const queues = wsOrder.map((ws) => [...deferred.filter((c) => c.workspaceId === ws), ...rotate(rest.get(ws) ?? [], turn)]);
+  const out: T[] = [];
+  for (let more = true; more;) {
+    more = false;
+    for (const q of queues) {
+      const c = q.shift();
+      if (!c) continue;
+      out.push(c);
+      more = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Tick campaigns in fair order until the budget is spent (F13). Returns which
+ * ran and which were left for next time; the cursor remembers both.
+ */
+export async function runCampaignsFairly<T extends { id: number; workspaceId: number }>(
+  campaigns: T[],
+  tick: (c: T) => Promise<void>,
+  opts: { budgetMs?: number; now?: () => number; remember?: boolean } = {},
+): Promise<{ ran: number[]; deferred: number[] }> {
+  const now = opts.now ?? Date.now;
+  const until = now() + (opts.budgetMs ?? ENGINE_TICK_BUDGET_MS);
+  const remember = opts.remember !== false;
+  const order = fairCampaignOrder(campaigns, fairCursor.turn, fairCursor.deferred);
+  if (remember) fairCursor.turn++;
+  const ran: number[] = [];
+  let i = 0;
+  for (; i < order.length; i++) {
+    // The first always runs, so a tick never does nothing.
+    if (i > 0 && now() >= until) break;
+    await tick(order[i]);
+    ran.push(order[i].id);
+  }
+  const deferred = order.slice(i).map((c) => c.id);
+  if (remember) fairCursor.deferred = deferred;
+  return { ran, deferred };
+}
+
+/**
  * Up to `n` rows, one workspace at a time in turn (audit A7). `rows` is the
  * selector's page, best first; each workspace keeps that order among its own,
  * and the workspace with the best row goes first.
@@ -669,7 +763,7 @@ export async function rejectExhaustedEnrichment(
   for (const r of exhausted) {
     const why = String(r.error ?? "").trim().slice(0, 300) || "no reason recorded";
     await db.update(prospectQueue)
-      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
+      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "enrichment_failed", rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
       .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
     n++;
   }
@@ -1174,6 +1268,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "suppression",
             rejectionReason: `On suppression list — not enrolled (${describeSuppression(suppression)})`.slice(0, 500),
           })
           .where(eq(prospectQueue.id, row.id));
@@ -1188,6 +1283,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "dedupe",
             rejectionReason: `Already in a sequence as prospect #${twin} (same email or LinkedIn profile) — not enrolled twice`,
           })
           .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, wsId)));
@@ -1208,6 +1304,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "no_steps",
             rejectionReason: "Generated sequence has no usable steps",
           })
           .where(eq(prospectQueue.id, row.id));
@@ -1345,6 +1442,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
           \`rejectedAt\` = NOW(),
+          \`rejectionKind\` = 'screen',
           \`rejectionReason\` = CONCAT('Auto-screened: ICP match ', \`icpMatchScore\`,
             '/100 is below this campaign''s enrichment gate of ', ${gate},
             ' — never eligible for enrichment, so never screenable')
@@ -1354,7 +1452,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`enrichmentStatus\` IN ('pending', 'enriching')
         AND \`icpMatchScore\` > 0
         AND \`icpMatchScore\` < ${gate}`);
-    const gateRejected = (gateReject as { affectedRows?: number })?.affectedRows ?? 0;
+    const gateRejected = affectedRowsOf(gateReject);
     if (gateRejected > 0) {
       result.rejected += gateRejected;
       await emitLog(wsId, campId, "screen", "info",
@@ -1379,7 +1477,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`workspaceId\` = ${wsId}
         AND \`sequenceStatus\` = 'sourcing'
         AND \`email\` IS NOT NULL AND \`email\` <> ''`);
-    const admitted = (admit as { affectedRows?: number })?.affectedRows ?? 0;
+    const admitted = affectedRowsOf(admit);
     if (admitted > 0) {
       await emitLog(wsId, campId, "screen", "info",
         `${admitted} prospect${admitted === 1 ? "" : "s"} admitted to the queue — an email address was found.`);
@@ -1391,6 +1489,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
           \`rejectedAt\` = NOW(),
+          \`rejectionKind\` = 'no_email',
           \`rejectionReason\` = 'No verifiable email address found — enrichment exhausted every source'
       WHERE \`campaignId\` = ${campId}
         AND \`workspaceId\` = ${wsId}
@@ -1398,7 +1497,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND (\`email\` IS NULL OR \`email\` = '')
         AND \`enrichmentStatus\` IN ('complete', 'failed')
         AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS} OR \`enrichRetryAt\` IS NULL)`);
-    const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
+    const gaveUp = affectedRowsOf(giveUp);
     if (gaveUp > 0) {
       result.rejected += gaveUp;
       await emitLog(wsId, campId, "screen", "info",
@@ -1470,7 +1569,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         if (ds?.fit?.flags?.includes("financial-distress")) {
           await db
             .update(prospectQueue)
-            .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: "Downstream: the organization is in financial distress — do not contact now" })
+            .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "distress", rejectionReason: "Downstream: the organization is in financial distress — do not contact now" })
             .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
           result.rejected++;
           continue;
@@ -1480,7 +1579,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       if (offTarget) {
         await db
           .update(prospectQueue)
-          .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: neverTargetReason(offTarget) })
+          .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "never_target", rejectionReason: neverTargetReason(offTarget) })
           .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
         result.rejected++;
         neverTargeted++;
@@ -1508,7 +1607,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         if (score < AUTO_REJECT_FLOOR) rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`);
       }
     }
-    const affected = (res: unknown) => Number((res as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+    const affected = affectedRowsOf;
     if (approveIds.length > 0) {
       const [res] = await db
         .update(prospectQueue)
@@ -1521,7 +1620,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     for (const [reason, ids] of Array.from(rejectIds.entries())) {
       const [res] = await db
         .update(prospectQueue)
-        .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: reason })
+        .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "screen", rejectionReason: reason })
         .where(and(inArray(prospectQueue.id, ids), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
       result.rejected += affected(res);
     }
@@ -1592,7 +1691,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND pq.\`sequenceStatus\` = 'approved'
         AND pq.\`enrichmentStatus\` = 'complete'
         AND pi.\`id\` IS NULL`);
-    const reQueued = (reQueue as { affectedRows?: number })?.affectedRows ?? 0;
+    const reQueued = affectedRowsOf(reQueue);
     if (reQueued > 0) {
       await emitLog(wsId, campId, "sequence", "warn",
         `${reQueued} approved prospect${reQueued === 1 ? "" : "s"} said enrichment was complete but had no stored intelligence — re-queued for enrichment so sequence generation can proceed`);
@@ -1866,6 +1965,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(areExecutionQueue.workspaceId, wsId),
           eq(areExecutionQueue.status, "scheduled"),
           lte(areExecutionQueue.scheduledAt, new Date()),
+          // A step put back for lack of capacity waits its turn (F13) instead
+          // of heading the page again on the next tick.
+          or(isNull(areExecutionQueue.nextAttemptAt), lte(areExecutionQueue.nextAttemptAt, new Date())),
           email ? eq(areExecutionQueue.channel, "email") : ne(areExecutionQueue.channel, "email"),
         ))
         .orderBy(areExecutionQueue.scheduledAt)
@@ -2328,9 +2430,16 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
            * prospect's cadence simply stopped the first day the mailboxes ran
            * out. Capacity comes back tomorrow, or within the hour.
            */
+          // Back on the calendar at the same due time, but not asked again
+          // until its wait ends, longer each time (F13): it headed the page
+          // on every tick while capacity was gone. Nothing was sent.
           await db
             .update(areExecutionQueue)
-            .set({ status: "scheduled", failureReason: null, executedAt: null })
+            .set({
+              status: "scheduled", failureReason: null, executedAt: null,
+              attempts: sql`${areExecutionQueue.attempts} + 1`,
+              nextAttemptAt: new Date(Date.now() + dispatchRetryMs(Number(step.attempts ?? 0) + 1)),
+            })
             .where(eq(areExecutionQueue.id, step.id));
           poolHeld = sendRes.reason ?? "sending capacity exhausted";
           stepsThisTick.delete(step.prospectQueueId);
@@ -2518,6 +2627,10 @@ type DiscoveryState = {
   src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
   /** When each source last returned people and they were saved, by source id (audit F12: "true last success"). */
   ok?: Record<string, number>;
+  /** The per-sector group the vendor searches took last run (F37 remainder), by sliceGroupKey. */
+  vg?: string | null;
+  /** Each group's own vendor page cursors, by sliceGroupKey: a cursor belongs to the search that made it. */
+  vgc?: Record<string, { qe?: QuickenrichPageState | null; ap?: ApolloPageState | null; ws?: string | null }>;
 };
 
 /**
@@ -2610,8 +2723,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // covers the full ICP grid without increasing per-tick API spend.
   // F37 (audit 2026-10-20): when blank fields fall back to the researched
   // sectors, each sector's titles are searched with its own industries and
-  // places, not with every other sector's. Only the rotating queries change;
-  // the vendor searches below still take the combined lists.
+  // places, not with every other sector's. The vendor searches below take
+  // one sector a run, in turn (vendorGroupFor, batch ARES).
   const sectorGroups = perSectorSliceGroups({
     mode: fallback,
     own: {
@@ -2689,6 +2802,26 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   const query = slice.q;
   const sourceState: Record<string, { empty: number; nextAt: number | null; held?: boolean }> = { ...(persistedState.src ?? {}) };
 
+  /**
+   * F37 remainder (audit 2026-10-20): the paid vendor searches pair a sector's
+   * titles with only its own industries and places too. One group per run,
+   * taken in turn, so each vendor is still asked once a run and its daily cap
+   * is spent no faster; each group keeps its own page cursors. With no
+   * per-sector groups the vendors take the combined lists, as before.
+   */
+  const vendorGroup = vendorGroupFor(sectorGroups, persistedState.vg ?? null);
+  const vendorTargeting = vendorGroup
+    ? { titles: vendorGroup.group.titles, industries: vendorGroup.group.industries, geos: vendorGroup.group.geos, keywords: vendorGroup.group.keywords }
+    : { titles, industries, geos, keywords };
+  const vendorCursors = vendorGroup
+    ? (persistedState.vgc?.[vendorGroup.key] ?? {})
+    : { qe: persistedState.qe ?? null, ap: persistedState.ap ?? null, ws: persistedState.ws ?? null };
+  if (vendorGroup) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `Vendor searches this run use researched group ${vendorGroup.index + 1} of ${vendorGroup.count} (titles: ${vendorTargeting.titles.slice(0, 3).join(", ") || "—"}; industries: ${vendorTargeting.industries.slice(0, 3).join(", ") || "—"}; places: ${vendorTargeting.geos.slice(0, 3).join(", ") || "—"}); the next run takes the next group.`,
+      { vendorGroup: vendorGroup.index + 1, groups: vendorGroup.count });
+  }
+
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
     `Titles: ${titles.join(", ")}; ` +
@@ -2714,25 +2847,21 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // same people — the original behavior) and CAMPAIGN EXCLUSIVITY (owner
   // directive 2026-08-12: a prospect may belong to only one ARE campaign, so
   // a person already claimed by a sibling campaign is never added here).
-  const existing = await db
-    .select({
-      campaignId: prospectQueue.campaignId,
-      email: prospectQueue.email,
-      linkedinUrl: prospectQueue.linkedinUrl,
-      firstName: prospectQueue.firstName,
-      lastName: prospectQueue.lastName,
-      companyDomain: prospectQueue.companyDomain,
-      companyName: prospectQueue.companyName,
-    })
-    .from(prospectQueue)
-    .where(eq(prospectQueue.workspaceId, campaign.workspaceId))
-    .orderBy(prospectQueue.id);
+  //
+  // Read per source's finds, through the identity indexes (audit A34): this
+  // read the workspace's whole queue on every run. A batch's queue claims are
+  // loaded before the batch is checked, so a person already queued anywhere in
+  // the workspace still wins over this run's own claim, as before. Every queue
+  // row counts, whatever its campaign, as it always did here.
   const claimed = new Map<string, number | null>();
-  for (const e of existing) {
-    for (const k of queueIdentityKeys(e)) {
-      if (!claimed.has(k)) claimed.set(k, e.campaignId);
-    }
-  }
+  const looked = new Set<string>();
+  const loadClaims = async (batch: Array<Record<string, unknown>>) => {
+    const fresh = batch.filter((p) => queueIdentityKeys(p).some((k) => !claimed.has(k) && !looked.has(k)));
+    if (fresh.length === 0) return;
+    for (const p of fresh) for (const k of queueIdentityKeys(p)) looked.add(k);
+    const found = await queueIdentityIndexFor(campaign.workspaceId, fresh, { liveCampaignsOnly: false });
+    found.forEach((v, k) => { if (!claimed.has(k)) claimed.set(k, v.campaignId); });
+  };
   let excludedOtherCampaign = 0;
   // Research phase 4: never-target words rule people out before they are queued.
   const neverTarget = await campaignNeverTarget(campaign);
@@ -2779,7 +2908,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // scraper sources ignore it and stay bounded per call as before.
   const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>> = {
     warmysender: (remaining) =>
-      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining, persistedState.ws ?? null, neverTarget).then(({ raw, nextCursor }) => {
+      discoverViaRegistrySource(campaign, "warmysender", vendorTargeting, remaining, vendorCursors.ws ?? null, neverTarget).then(({ raw, nextCursor }) => {
         warmysenderNextCursor = nextCursor;
         return {
           sourceType: "warmysender" as const,
@@ -2790,7 +2919,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // No cursor in, none kept: LeadOcean says a cursor is a place in one walk and
     // must not be stored. Its per-workspace viewed list moves the search forward.
     leadocean: (remaining) =>
-      discoverViaRegistrySource(campaign, "leadocean", { titles, industries, geos, keywords, size }, remaining, null, neverTarget).then(({ raw, refused, restUntil }) => ({
+      discoverViaRegistrySource(campaign, "leadocean", { ...vendorTargeting, size }, remaining, null, neverTarget).then(({ raw, refused, restUntil }) => ({
         sourceType: "leadocean" as const,
         query,
         raw,
@@ -2804,7 +2933,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         raw,
       })),
     quickenrich: (remaining) =>
-      discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null, remaining).then(({ raw, nextQe }) => {
+      discoverViaQuickenrich(campaign, { titles: vendorTargeting.titles, industries: vendorTargeting.industries, geos: vendorTargeting.geos }, vendorCursors.qe ?? null, remaining).then(({ raw, nextQe }) => {
         quickenrichNextPage = nextQe;
         return {
           sourceType: "quickenrich" as const,
@@ -2822,7 +2951,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         };
       }),
     apollo: (remaining) =>
-      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining).then(({ raw, nextAp }) => {
+      discoverViaApollo(campaign, { ...vendorTargeting, overrides: size }, vendorCursors.ap ?? null, remaining).then(({ raw, nextAp }) => {
         apolloNextPage = nextAp;
         return {
           sourceType: "apollo" as const,
@@ -2933,6 +3062,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
     // Within-tick + cross-tick dedup AND cross-campaign exclusivity, one
     // vocabulary (services/are/queueIdentity).
+    await loadClaims(raw);
     const unique = raw.filter((p) => {
       const keys = queueIdentityKeys(p);
       for (const k of keys) {
@@ -3043,12 +3173,25 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // The QuickEnrich page cursor rides the same JSON: the advanced state
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).
-    qe: quickenrichNextPage ?? persistedState.qe ?? null,
+    qe: vendorGroup ? (persistedState.qe ?? null) : (quickenrichNextPage ?? persistedState.qe ?? null),
     // Apollo's page cursor, kept the same way.
-    ap: apolloNextPage ?? persistedState.ap ?? null,
+    ap: vendorGroup ? (persistedState.ap ?? null) : (apolloNextPage ?? persistedState.ap ?? null),
     // null is an answer here (the walk wrapped): only "did not search" keeps the old one.
-    ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null),
+    ws: vendorGroup ? (persistedState.ws ?? null) : (warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null)),
     li: linkedinNextPage !== undefined ? linkedinNextPage : (persistedState.li ?? null),
+    // F37 remainder: the group the vendors took, and each live group's own
+    // cursors (a group no longer in the research is dropped).
+    ...(vendorGroup ? {
+      vg: vendorGroup.key,
+      vgc: {
+        ...Object.fromEntries(Object.entries(persistedState.vgc ?? {}).filter(([k]) => (sectorGroups ?? []).some((g) => sliceGroupKey(g) === k))),
+        [vendorGroup.key]: {
+          qe: quickenrichNextPage ?? vendorCursors.qe ?? null,
+          ap: apolloNextPage ?? vendorCursors.ap ?? null,
+          ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (vendorCursors.ws ?? null),
+        },
+      },
+    } : {}),
   };
   try {
     await db.update(areCampaigns).set({ discoveryQueryState: newState as any })

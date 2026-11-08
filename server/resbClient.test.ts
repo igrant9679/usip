@@ -116,15 +116,22 @@ describe("spend is said before it happens (F8, U16)", () => {
     expect(ret).toContain('opts.confirmed ? runMut.mutate({ prospectIds, triggerType }) : askThen(prospectIds.length, () => runMut.mutate({ prospectIds, triggerType }))');
     expect(ret).toContain("askThen(opts.enrichAll ? null : (opts.prospectIds?.length ?? null), () => runListMut.mutate({ listId, ...opts }))");
     expect(ret).toContain('unit: "profile lookup"');
-    const st = read("client/src/components/usip/people/SelectionToolbar.tsx");
-    expect(st).toContain('enrichJob.enrich(Array.from(needsLinkedIn), "people_bulk_action", { confirmed: true });');
+    // 2026-11-07 (CRMP, R66): Enrich fully is a server job now, and the job
+    // itself queues the one LinkedIn follow-up when it ends, for the people
+    // still without a profile; that lookup is already in the confirmation's
+    // count (enrichFullyText counts one LinkedIn lookup a person).
+    const svc = read("server/services/bulkByFilter.ts");
+    expect(svc).toContain('await caller.linkedinEnrichment.run({ prospectIds: need.slice(i, i + 500), triggerType: "people_bulk_action" });');
   });
 
   it("Enrich fully, in bulk and in the drawer, states the most it can spend and asks", () => {
     const st = read("client/src/components/usip/people/SelectionToolbar.tsx");
-    const item = block(st, "<DropdownMenuItem disabled={busy} onClick={() => confirmAction({", "Enrich fully (all sources)</DropdownMenuItem>");
-    expect(item).toContain("description: enrichFullyText(selectedIds.length, budgets.data)");
-    expect(item).toContain("() => { void startFull(); }");
+    // 2026-11-07 (CRMP, F30/R66): the count is the selection or all matching
+    // (n), and the confirmation also says it runs on the server; Confirm
+    // still starts it, and only Confirm.
+    const item = block(st, "<DropdownMenuItem disabled={busy || n > 5000} onClick={() => confirmAction({", "\"Enrich fully (all sources)\"}</DropdownMenuItem>");
+    expect(item).toContain("description: `${enrichFullyText(n, budgets.data)} It runs on the server in the background; you can leave this page.`,");
+    expect(item).toContain("}, startFull)}");
     expect(st).not.toContain("onClick={startFull}");
     const people = read("client/src/pages/usip/People.tsx");
     expect(people).toContain("description: enrichFullyText(1, enrichBudgets.data), confirmLabel: \"Spend and enrich\" }, () => enrichFull.mutate({ prospectId: p.id }))");
@@ -175,8 +182,11 @@ describe("verify People from the screen (F39) and the credits card (F10)", () =>
     const menu = block(st, "function EnrichMenu(", "function MoreMenu(");
     const ask = block(menu, "const askVerify = () => confirmPaidLookup({", "const verifying =");
     expect(ask).toContain('vendor: "Reoon"');
-    expect(ask).toContain("count: selectedIds.length");
-    expect(ask).toContain("() => verifyBulk.mutate({ ids: selectedIds })");
+    // 2026-11-07 (CRMP, F30): the count is the selection or all matching; all
+    // matching goes through bulkByFilter's verify, which keeps the same checks.
+    expect(ask).toContain("count: n,");
+    expect(ask).toContain(": verifyBulk.mutate({ ids: selectedIds })));");
+    expect(ask).toContain(`enrichByFilter.mutate({ action: "verify", filter: matching.filter as any, expectedTotal: matching.total })`);
     expect(menu).toContain("trpc.prospects.verifyEmailBulk.useMutation({");
     expect(menu).toContain("trpc.prospects.verifyJob.useQuery({ jobId: verifyJobId ?? 0 }");
     expect(menu).toContain("utils.dataHealth.getMetrics.invalidate();");

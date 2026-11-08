@@ -8,7 +8,10 @@
  * only the page's rows are read, with the columns the list shows.
  *
  * A People list shows its prospects, a Companies list its accounts; members
- * of another kind (a contact added by an old client) were never shown.
+ * of another kind (a contact added by an old client) were never shown. Those
+ * contact members are resolved to People by services/listContactMembers.ts
+ * (audit A55); the ones it can't resolve stay, and the page reports how many
+ * (`unmatchedContacts`).
  *
  * Who counts as a member is one rule, `memberConds`, read by the page, the
  * people ids and the Lists index alike (audit 2026-10-20, P46, P50): the
@@ -18,7 +21,7 @@
  * is never shown or counted, so a person restored from the audit trail comes
  * back onto their lists.
  */
-import { and, asc, desc, eq, inArray, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
 import { accounts, prospects, recordListMembers, recordLists } from "../../drizzle/schema";
 import { getDb } from "../db";
 
@@ -59,14 +62,14 @@ export const COMPANY_COLUMNS = {
 /** "Add all to…" acts on at most this many of a list's people. */
 export const MAX_LIST_PROSPECT_IDS = 5000;
 
-export type MemberPageInput = { id: number; page?: number; perPage?: number; search?: string; sort?: "added" | "name" };
+export type MemberPageInput = { id: number; page?: number; perPage?: number; search?: string; sort?: "added" | "name"; ownerUserId?: number };
 
 const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 export async function listMemberPage(ws: number, input: MemberPageInput) {
   const page = Math.max(1, input.page ?? 1);
   const perPage = Math.min(500, Math.max(10, input.perPage ?? 100));
-  const empty = { rows: [] as { memberId: number; recordType: string; recordId: number; addedAt: Date; record: Record<string, unknown> }[], total: 0, page, perPage, prospectIds: [] as number[] };
+  const empty = { rows: [] as { memberId: number; recordType: string; recordId: number; addedAt: Date; record: Record<string, unknown> }[], total: 0, page, perPage, prospectIds: [] as number[], unmatchedContacts: 0 };
   const db = await getDb();
   if (!db) return empty;
   const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
@@ -83,6 +86,17 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
       ? or(like(accounts.name, s), like(accounts.domain, s), like(accounts.industry, s))!
       : or(like(prospects.firstName, s), like(prospects.lastName, s), like(prospects.title, s), like(prospects.company, s), like(prospects.email, s))!);
   }
+  /**
+   * The owner filter (audit 2026-10-20, U31): a company's owner on a
+   * Companies list; on a People list, the owner of the company the person is
+   * filed under (People rows carry no owner of their own). Members in another
+   * workspace's company never match.
+   */
+  if (input.ownerUserId) {
+    if (companies) conds.push(eq(accounts.ownerUserId, input.ownerUserId));
+    else conds.push(exists(db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.id, prospects.accountId), eq(accounts.workspaceId, ws), eq(accounts.ownerUserId, input.ownerUserId)))));
+  }
   const where = and(...conds);
   const order = input.sort === "name"
     ? (companies ? [asc(accounts.name), asc(recordListMembers.id)] : [asc(prospects.firstName), asc(prospects.lastName), asc(recordListMembers.id)])
@@ -90,7 +104,7 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
   const joined = () => db.select({ id: recordListMembers.id }).from(recordListMembers)
     .innerJoin(rec, eq(rec.id, recordListMembers.recordId));
 
-  const [pageIds, [{ total }], people] = await Promise.all([
+  const [pageIds, [{ total }], people, [{ unmatched }]] = await Promise.all([
     joined().where(where).orderBy(...order).limit(perPage).offset((page - 1) * perPage),
     db.select({ total: sql<number>`count(*)` }).from(recordListMembers).innerJoin(rec, eq(rec.id, recordListMembers.recordId)).where(where),
     companies ? Promise.resolve([] as { id: number }[]) :
@@ -99,10 +113,15 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
         .innerJoin(prospects, eq(prospects.id, recordListMembers.recordId))
         .where(and(eq(recordListMembers.listId, input.id), ...memberConds(ws, false)))
         .orderBy(desc(recordListMembers.addedAt), desc(recordListMembers.id)).limit(MAX_LIST_PROSPECT_IDS),
+    // Old contact members not (yet) resolved to People: on the list, not shown (A55).
+    companies ? Promise.resolve([{ unmatched: 0 }]) :
+      db.select({ unmatched: sql<number>`count(*)` }).from(recordListMembers)
+        .where(and(eq(recordListMembers.listId, input.id), eq(recordListMembers.workspaceId, ws), eq(recordListMembers.recordType, "contact"))),
   ]);
   const ids = pageIds.map((r) => r.id);
   const prospectIds = people.map((r) => r.id);
-  if (!ids.length) return { ...empty, total: Number(total), prospectIds };
+  const unmatchedContacts = Number(unmatched ?? 0);
+  if (!ids.length) return { ...empty, total: Number(total), prospectIds, unmatchedContacts };
 
   const rows = await db.select({
     memberId: recordListMembers.id, recordType: recordListMembers.recordType, recordId: recordListMembers.recordId,
@@ -117,6 +136,6 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
       const { memberId, recordType: rt, recordId, addedAt, ...record } = r;
       return [{ memberId, recordType: String(rt), recordId, addedAt, record }];
     }),
-    total: Number(total), page, perPage, prospectIds,
+    total: Number(total), page, perPage, prospectIds, unmatchedContacts,
   };
 }

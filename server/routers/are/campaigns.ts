@@ -39,6 +39,9 @@ import { router } from "../../_core/trpc";
 import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { DISCOVERY_REST_MS, DISCOVERY_SOURCE_FEATURE, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { AI_CALLS_PER_SOURCE } from "@shared/spendPreview";
+// Loaded with the router so the rewrite job's kind is registered at boot, and a
+// job a restart cut off is picked up again (audit F14).
+import "../../services/are/rewriteNotStarted";
 import { listUsableAccounts } from "../../services/linkedinLookup";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
@@ -58,6 +61,7 @@ import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
 import { assertInWorkspace, requireInWorkspace } from "../../services/foreignIds";
 import { icpProfiles } from "../../../drizzle/schema";
+import { affectedRowsOf } from "../../_core/claim";
 
 /** The model-token meters (services/spend), summed per source for F12. */
 const TOKEN_METERS = ["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"];
@@ -593,7 +597,8 @@ export const campaignsRouter = router({
       const byCampaign: Record<number, number> = {};
       for (const t of targets) byCampaign[t.campaignId] = (byCampaign[t.campaignId] ?? 0) + 1;
       if (input?.dryRun !== false) return { dryRun: true, eligible: targets.length, byCampaign, started: false };
-      const started = startRewriteNotStarted(ctx.workspace.id, targets);
+      // A persisted job now (audit F14), so its progress survives a restart.
+      const started = await startRewriteNotStarted(ctx.workspace.id, ctx.user.id, targets);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_rewrite_not_started", entityId: ctx.workspace.id, after: { eligible: targets.length, byCampaign, started } });
       return { dryRun: false, eligible: targets.length, byCampaign, started };
     }),
@@ -615,8 +620,8 @@ export const campaignsRouter = router({
       await db.insert(workspaceSettings)
         .values({ workspaceId: ctx.workspace.id, areDefaultAutonomyMode: input.mode } as never)
         .onDuplicateKeyUpdate({ set: { areDefaultAutonomyMode: input.mode } as never });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_autonomy_all", entityId: ctx.workspace.id, after: { mode: input.mode, campaignsUpdated: Number((res as any)?.[0]?.affectedRows ?? 0) } });
-      return { ok: true as const, campaignsUpdated: Number((res as any)?.[0]?.affectedRows ?? 0) };
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_autonomy_all", entityId: ctx.workspace.id, after: { mode: input.mode, campaignsUpdated: affectedRowsOf(res) } });
+      return { ok: true as const, campaignsUpdated: affectedRowsOf(res) };
     }),
 
   update: workspaceProcedure
@@ -1010,7 +1015,7 @@ export const campaignsRouter = router({
         eq(prospectQueue.sequenceStatus, "pending"),
         eq(prospectQueue.enrichmentStatus, "complete"),
       ));
-      const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+      const approved = affectedRowsOf(r);
       // The one recount (A50) — "Approved" kept its meaning after Approve all.
       await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
@@ -1600,7 +1605,7 @@ export const campaignsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const ws = ctx.workspace.id;
       const reason = "Campaign deleted";
-      const affected = (res: unknown) => Number((res as Array<{ affectedRows?: number }> | undefined)?.[0]?.affectedRows ?? 0);
+      const affected = affectedRowsOf;
       const done = await db.transaction(async (tx) => {
         const [campaign] = await tx
           .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })

@@ -9,6 +9,7 @@
  *   5. Live signal feed — colour-coded by sentiment with action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { AreSubNav } from "@/components/usip/are/AreSubNav";
 import { areAutonomyLabel } from "@shared/areCampaignLabels";
 import { RoutingSuggestions } from "@/components/usip/RoutingSuggestions";
@@ -51,6 +52,7 @@ import { useState } from "react";
 import { groupHubCampaigns, refreshHub } from "./areHubModel";
 import { ProspectQualityCard } from "@/components/usip/are/ProspectQualityCard";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 function pct(num: number, den: number) {
@@ -343,7 +345,11 @@ export default function AREHub() {
           </Button>
         </Link>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <AreSubNav />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="are" />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
 

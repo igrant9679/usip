@@ -30,9 +30,10 @@
  * decision, not something to infer.
  */
 import { csvCell } from "@shared/csvCell";
+import { REJECTION_KINDS, REJECTION_KIND_LABEL, isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
+import { enqueueJob, findActiveJob, getJob, kickJobs, registerJobKind } from "../../services/jobs/runner";
 import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps, stopProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
@@ -73,6 +74,8 @@ import { resolveVerifiedEmail } from "../../services/scraper";
 import { suppressionBlockingNewEmail } from "../../services/suppression";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
+import { finderMissKey, isDefinitiveFinderMiss, quickenrichMissKey, recentMisses, recordMiss } from "../../services/are/lookupMisses";
+import { withIdentityRekey } from "../../services/are/queueIdentity";
 import { buildBrandContext } from "../../services/brandContext";
 import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 // The A/B metadata row must be keyed by the same step index + variant key the
@@ -183,6 +186,10 @@ Score each dimension 0-20 and provide a total score 0-100.
 // campaign router needs the same merge for every campaign at once.
 import { buildEffectiveIcp, scoringTargetsOf } from "../../services/are/effectiveIcp";
 import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/placeFit";
+import { affectedRowsOf } from "../../_core/claim";
+
+/** Reads and tries of one step edit before it gives up on a sequence that keeps changing (A75). */
+export const SEQUENCE_EDIT_ATTEMPTS = 3;
 
 /** How the Rejections tab names a rejection with no reason recorded. */
 const NO_REASON = "No reason given";
@@ -196,6 +203,21 @@ const NO_REASON = "No reason given";
 const DEFAULT_REEVAL_THRESHOLD = 70;
 /** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
 export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
+/**
+ * Only the engine's ICP-score rejections are re-scored (A11), named by their
+ * kind (F19). A row with no kind yet (before migration 0331's backfill ran)
+ * falls back to the text test it used to be.
+ */
+export function isScoreRejection(p: { rejectionKind?: string | null; rejectedByUserId?: number | null; rejectionReason?: string | null }): boolean {
+  if (p.rejectionKind != null) return p.rejectionKind === "screen";
+  return p.rejectedByUserId == null && String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION);
+}
+function scoreRejectionWhere() {
+  return or(
+    eq(prospectQueue.rejectionKind, "screen"),
+    and(isNull(prospectQueue.rejectionKind), isNull(prospectQueue.rejectedByUserId), like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`)),
+  )!;
+}
 /** Rejections one Re-evaluate All run re-scores, each one model call (A11). */
 export const REEVAL_ALL_MAX = 500;
 export const REEVAL_ALL_JOB = "are.reevaluateRejections";
@@ -246,7 +268,7 @@ export async function runEnrichAgent(
       eq(prospectQueue.workspaceId, workspaceId),
       or(ne(prospectQueue.enrichmentStatus, "enriching"), lt(prospectQueue.updatedAt, new Date(Date.now() - ENRICH_STALE_MS))),
     ));
-  if (Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0) !== 1) return false;
+  if (affectedRowsOf(claim) !== 1) return false;
 
   try {
     // Get active ICP
@@ -501,6 +523,9 @@ Produce:
       : await suppressionBlockingNewEmail(workspaceId, {
           linkedinUrl: prospect.linkedinUrl, companyDomain: prospect.companyDomain, personProspectId: prospect.personProspectId,
         }).catch(() => "unchecked");
+    // Lookups that came back empty for this person lately are not paid for
+    // again (audit A75, services/are/lookupMisses.ts).
+    const skippedLookups: string[] = [];
     if (!prospect.email && !emailBlocked) {
       try {
         // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
@@ -510,10 +535,16 @@ Produce:
         // the address itself. Same finder and the same Reoon gate as the
         // sweep's pass: a QuickEnrich address is never send-safe on their
         // word, and an invalid verdict means it is NOT written.
-        if (!effCompanyDomain && prospect.linkedinUrl) {
+        const qeMissKey = quickenrichMissKey(prospect.linkedinUrl);
+        const qeMissedAt = !effCompanyDomain && qeMissKey ? (await recentMisses(workspaceId, [qeMissKey])).get(qeMissKey) : undefined;
+        if (qeMissedAt) skippedLookups.push(`QuickEnrich (no record on ${qeMissedAt.toISOString().slice(0, 10)})`);
+        if (!effCompanyDomain && prospect.linkedinUrl && !qeMissedAt) {
           const qeKey = await getQuickEnrichKey(workspaceId);
           if (qeKey) {
             const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl, { workspaceId, feature: "are.enrichAgent" });
+            // Only "not in their database, and nothing about the employer
+            // either" is kept: a no-email record's domain is worth asking for.
+            if (qe.reason === "no_match" && !qe.email && !qe.companyDomain && !qe.companyName) await recordMiss(workspaceId, qeMissKey, "quickenrich:no_match");
             if (qe.companyDomain) {
               effCompanyDomain = qe.companyDomain;
               qeFilledDomain = true;
@@ -538,16 +569,24 @@ Produce:
           }
         }
         if (!resolvedEmail && effCompanyDomain) {
-          const found = await resolveVerifiedEmail({
-            firstName: prospect.firstName,
-            lastName: prospect.lastName,
-            companyDomain: effCompanyDomain,
-            companyWebsite: effCompanyDomain, // no separate website column on the queue
-            workspaceId,
-          });
-          if (found.email) {
-            resolvedEmail = found.email;
-            resolvedStatus = found.status;
+          const fMissKey = finderMissKey(prospect.firstName, prospect.lastName, effCompanyDomain);
+          const fMissedAt = fMissKey ? (await recentMisses(workspaceId, [fMissKey])).get(fMissKey) : undefined;
+          if (fMissedAt) {
+            skippedLookups.push(`the email finder (no address on ${fMissedAt.toISOString().slice(0, 10)})`);
+          } else {
+            const found = await resolveVerifiedEmail({
+              firstName: prospect.firstName,
+              lastName: prospect.lastName,
+              companyDomain: effCompanyDomain,
+              companyWebsite: effCompanyDomain, // no separate website column on the queue
+              workspaceId,
+            });
+            if (found.email) {
+              resolvedEmail = found.email;
+              resolvedStatus = found.status;
+            } else if (isDefinitiveFinderMiss(found.reason)) {
+              await recordMiss(workspaceId, fMissKey, `finder:${found.reason}`);
+            }
           }
         }
       } catch (e) {
@@ -556,7 +595,7 @@ Produce:
     }
 
     // Update prospect with ICP score + everything the chain recovered.
-    await db.update(prospectQueue).set({
+    await db.update(prospectQueue).set(withIdentityRekey({
       icpMatchScore,
       icpMatchBreakdown,
       enrichmentStatus: "complete",
@@ -567,10 +606,13 @@ Produce:
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
       ...(qeFilledDomain && effCompanyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
-    }).where(eq(prospectQueue.id, prospectId));
+    })).where(eq(prospectQueue.id, prospectId));
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
         `Found email for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} → ${resolvedEmail} (${resolvedStatus ?? "unknown"})`.trim());
+    } else if (skippedLookups.length) {
+      await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
+        `Did not pay to look up ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}'s email again: ${skippedLookups.join(" and ")} found nothing within the last 30 days.`.replace(/\s+/g, " "));
     }
 
     // People-as-master: the agent's findings also land on the canonical
@@ -1224,6 +1266,8 @@ export async function runSequenceAgent(
         sequenceQualityScore: null,
         sequenceQualityBreakdown: { fixed: true, note: "Fixed-copy campaign: identical steps for every prospect; no quality pass" },
         sequenceRewriteCount: 0,
+        // Every write of the steps bumps the version a step edit checks (A75).
+        sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1`,
         // A person wrote this copy; the research avoid-rule hold is for AI copy.
         copyHoldReason: null,
         // Results still count who it went to (phase 6); there is no check to tag pains.
@@ -1291,6 +1335,8 @@ export async function runSequenceAgent(
       sequenceQualityScore: quality.score,
       sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback, ...(brief.violations.length ? { avoidViolations: brief.violations } : {}) },
       sequenceRewriteCount: 0,
+      // Every write of the steps bumps the version a step edit checks (A75).
+      sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1`,
       copyHoldReason,
       ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),
     }).where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId)));
@@ -1361,7 +1407,7 @@ async function reEvaluateOneRejection(
 ): Promise<boolean> {
   const [p] = await db.select().from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
-  if (!p || p.sequenceStatus !== "skipped" || p.rejectedByUserId != null || !String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION)) return false;
+  if (!p || p.sequenceStatus !== "skipped" || !isScoreRejection(p)) return false;
   const [icp] = await db.select().from(icpProfiles)
     .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true))).limit(1);
   const [camp] = await db.select({ icpOverrides: areCampaigns.icpOverrides }).from(areCampaigns)
@@ -1507,15 +1553,16 @@ async function takeOutOfCampaign(
   }
   const reason = opts.reason?.trim() || undefined;
   const res = await db.update(prospectQueue).set(opts.reject
-    ? { sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: ctx.user.id, rejectionReason: reason ?? null }
-    : { sequenceStatus: "skipped" },
+    ? { sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: ctx.user.id, rejectionKind: "person", rejectionReason: reason ?? null }
+    // A person's Skip is a person's decision too (F19).
+    : { sequenceStatus: "skipped", rejectionKind: "person" },
   ).where(and(
     eq(prospectQueue.id, prospectId),
     eq(prospectQueue.workspaceId, ws),
     // Only from the state just read: a reply landing in between wins.
     eq(prospectQueue.sequenceStatus, row.status),
   ));
-  if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+  if (affectedRowsOf(res) !== 1) {
     throw new TRPCError({ code: "CONFLICT", message: "This prospect changed while you were looking at it. Refresh and try again." });
   }
   const stepsStopped = await stopProspectSteps(db, ws, prospectId, `${opts.reject ? "Rejected" : "Skipped"}${reason ? ` — ${reason}` : ""}`);
@@ -1928,7 +1975,7 @@ export const prospectsRouter = router({
         eq(prospectQueue.workspaceId, ctx.workspace.id),
         inArray(prospectQueue.sequenceStatus, ["pending", "sourcing", "paused", "canceled"]),
       ));
-      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(res) !== 1) {
         const [cur] = await db.select({ status: prospectQueue.sequenceStatus }).from(prospectQueue)
           .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id))).limit(1);
         if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
@@ -2242,49 +2289,71 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [intel] = await db
-        .select()
-        .from(prospectIntelligence)
-        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
+      /**
+       * Read, change one step, write back only if nobody wrote in between
+       * (audit 2026-10-20, A75 "edit races"). The steps are one JSON array, so
+       * two people editing different steps at once each wrote back the array
+       * they had read, and the second save silently undid the first; a
+       * regenerate landing mid-edit was overwritten the same way. Every write
+       * of the array bumps sequenceVersion; this one writes only on the version
+       * it read, and on a clash reads again and re-applies its one step.
+       */
+      let saved: { updatedStep: Record<string, unknown> & { subject: string; body: string }; resolvedStepIndex: number } | null = null;
+      for (let attempt = 0; attempt < SEQUENCE_EDIT_ATTEMPTS && !saved; attempt++) {
+        const [intel] = await db
+          .select()
+          .from(prospectIntelligence)
+          .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
 
-      const steps = intelArray<Record<string, unknown>>(intel.generatedSequence);
-      if (steps.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
-      }
+        const steps = intelArray<Record<string, unknown>>(intel.generatedSequence);
+        if (steps.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
+        }
 
-      // Resolve which row in the array to edit.
-      let targetIdx = -1;
-      if (typeof input.arrayIndex === "number" && input.arrayIndex >= 0 && input.arrayIndex < steps.length) {
-        targetIdx = input.arrayIndex;
-      } else if (typeof input.stepIndex === "number") {
-        targetIdx = steps.findIndex((s) =>
-          s.stepIndex === input.stepIndex || (s as { step?: number }).step === input.stepIndex,
-        );
-      }
-      if (targetIdx === -1) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Could not locate the step to edit" });
-      }
+        // Resolve which row in the array to edit.
+        let targetIdx = -1;
+        if (typeof input.arrayIndex === "number" && input.arrayIndex >= 0 && input.arrayIndex < steps.length) {
+          targetIdx = input.arrayIndex;
+        } else if (typeof input.stepIndex === "number") {
+          targetIdx = steps.findIndex((s) =>
+            s.stepIndex === input.stepIndex || (s as { step?: number }).step === input.stepIndex,
+          );
+        }
+        if (targetIdx === -1) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Could not locate the step to edit" });
+        }
 
-      // Update the targeted step. Normalize to the LLM shape (stepIndex+body)
-      // so future edits and the SequencesTab display work consistently.
-      const old = steps[targetIdx];
-      const resolvedStepIndex =
-        typeof old.stepIndex === "number"
-          ? (old.stepIndex as number)
-          : typeof (old as { step?: number }).step === "number"
-            ? ((old as { step?: number }).step as number)
-            : targetIdx;
-      const updatedStep = {
-        ...old,
-        stepIndex: resolvedStepIndex,
-        subject: input.subject ?? (old.subject as string | undefined) ?? "",
-        body: input.body,
-      };
-      const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
-      await db.update(prospectIntelligence).set({ generatedSequence: updated })
-        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
+        // Update the targeted step. Normalize to the LLM shape (stepIndex+body)
+        // so future edits and the SequencesTab display work consistently.
+        const old = steps[targetIdx];
+        const resolvedStepIndex =
+          typeof old.stepIndex === "number"
+            ? (old.stepIndex as number)
+            : typeof (old as { step?: number }).step === "number"
+              ? ((old as { step?: number }).step as number)
+              : targetIdx;
+        const updatedStep = {
+          ...old,
+          stepIndex: resolvedStepIndex,
+          subject: input.subject ?? (old.subject as string | undefined) ?? "",
+          body: input.body,
+        };
+        const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
+        const [res] = await db.update(prospectIntelligence)
+          .set({ generatedSequence: updated, sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1` })
+          .where(and(
+            eq(prospectIntelligence.prospectQueueId, input.prospectId),
+            eq(prospectIntelligence.workspaceId, ctx.workspace.id),
+            eq(prospectIntelligence.sequenceVersion, Number(intel.sequenceVersion ?? 0)),
+          ));
+        if (affectedRowsOf(res) === 1) saved = { updatedStep, resolvedStepIndex };
+      }
+      if (!saved) {
+        throw new TRPCError({ code: "CONFLICT", message: "This sequence kept changing while you saved. Reload it and make your edit again." });
+      }
+      const { updatedStep, resolvedStepIndex } = saved;
 
       // Push the edit into any not-yet-sent execution queue rows so the
       // dispatcher uses the edited content. Only `scheduled` rows are
@@ -2590,8 +2659,9 @@ export const prospectsRouter = router({
       // Campaign exclusivity: refuse loudly rather than silently creating the
       // workspace's second copy of a person — the message names where they
       // already live so the user can go act on THAT row.
-      const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
-      const claim = existingClaim(await workspaceQueueIdentityIndex(ctx.workspace.id), rest);
+      const { queueIdentityIndexFor, existingClaim, queueIdentityColumns } = await import("../../services/are/queueIdentity");
+      // An indexed lookup for this one person (A34), not the whole queue.
+      const claim = existingClaim(await queueIdentityIndexFor(ctx.workspace.id, [rest]), rest);
       if (claim) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -2605,6 +2675,7 @@ export const prospectsRouter = router({
         campaignId,
         sourceType: "ai_research",
         ...rest,
+        ...queueIdentityColumns(rest),
         icpMatchScore: 0,
         enrichmentStatus: "pending",
         // The no-email door (owner rule 2026-09-16): stage until an address
@@ -2659,8 +2730,13 @@ export const prospectsRouter = router({
       // Dedup against the WHOLE workspace queue, not just this campaign —
       // campaign exclusivity (2026-08-12) means a row claimed by a sibling
       // campaign is skipped too, and reported under its own counter.
-      const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
-      const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
+      const { queueIdentityIndexFor, existingClaim, queueIdentityKeys, queueIdentityColumns } = await import("../../services/are/queueIdentity");
+      // Only the rows sharing a key with this import, by index (A34).
+      const index = await queueIdentityIndexFor(ctx.workspace.id, input.rows.map((r) => ({
+        firstName: clamp(r.firstName, 80), lastName: clamp(r.lastName, 80), email: emailOf(r.email),
+        linkedinUrl: r.linkedinUrl ? String(r.linkedinUrl).trim() : undefined,
+        companyName: clamp(r.companyName, 200), companyDomain: clamp(r.companyDomain, 200),
+      })));
 
       const rows: Array<typeof prospectQueue.$inferInsert> = [];
       let skippedDup = 0, skippedEmpty = 0, skippedOtherCampaign = 0;
@@ -2695,6 +2771,7 @@ export const prospectsRouter = router({
           linkedinUrl,
           industry: clamp(r.industry, 80),
           geography: clamp(r.geography, 120),
+          ...queueIdentityColumns(shape),
           icpMatchScore: 0,
           enrichmentStatus: "pending",
           // The no-email door (owner rule 2026-09-16): imported rows without
@@ -2744,6 +2821,7 @@ export const prospectsRouter = router({
         sequenceStatus: "pending",
         rejectedAt: null,
         rejectedByUserId: null,
+        rejectionKind: null,
         rejectionReason: input.reason ? `Restored — ${input.reason}` : null,
       }).where(and(
         eq(prospectQueue.id, input.prospectId),
@@ -2806,13 +2884,14 @@ export const prospectsRouter = router({
           eq(areExecutionQueue.prospectQueueId, id),
           eq(areExecutionQueue.status, "scheduled"),
         ));
-        stepsSkipped += Number((skipRes[0] as any)?.affectedRows ?? 0);
+        stepsSkipped += affectedRowsOf(skipRes);
         await db.update(prospectQueue).set({
           sequenceStatus: "pending",
           approvedAt: null,
           approvedByUserId: null,
           rejectedAt: null,
           rejectedByUserId: null,
+          rejectionKind: null,
           rejectionReason: null,
         }).where(and(eq(prospectQueue.id, id), eq(prospectQueue.workspaceId, ctx.workspace.id)));
         await db.insert(areEngineLogs).values({
@@ -2899,7 +2978,7 @@ export const prospectsRouter = router({
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "pending"),
         ));
-        if ((result[0] as any).affectedRows > 0) approved++;
+        if (affectedRowsOf(result) > 0) approved++;
       }
       // Companies for the newly-approved people — same hook as approve above.
       void promoteApprovedProspects(ctx.workspace.id, { queueIds: input.prospectIds });
@@ -3076,12 +3155,14 @@ export const prospectsRouter = router({
     .input(z.object({
       campaignId: z.number(),
       reason: z.string().max(2000).nullish(),
+      /** Who or what rejected them (F19); "other" also takes rows with no kind recorded. */
+      kind: z.enum(REJECTION_KINDS).nullish(),
       page: z.number().int().min(1).default(1),
       perPage: z.number().int().min(10).max(500).default(100),
     }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return { total: 0, byReason: [], items: [], itemsTotal: 0, page: input.page, perPage: input.perPage };
+      if (!db) return { total: 0, byReason: [], byKind: [] as Array<{ kind: RejectionKind; label: string; count: number }>, items: [], itemsTotal: 0, page: input.page, perPage: input.perPage };
       const rejected = and(
         eq(prospectQueue.campaignId, input.campaignId),
         eq(prospectQueue.workspaceId, ctx.workspace.id),
@@ -3100,9 +3181,23 @@ export const prospectsRouter = router({
         .map(([reason, count]) => ({ reason, count }))
         .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
         .slice(0, 10);
-      const where = input.reason == null ? rejected
+      // Who or what rejected them, counted in SQL (F19). No kind reads as "other".
+      const kindGroups = await db.select({ kind: prospectQueue.rejectionKind, n: sql<number>`count(*)` })
+        .from(prospectQueue).where(rejected).groupBy(prospectQueue.rejectionKind);
+      const kindMap = new Map<RejectionKind, number>();
+      for (const g of kindGroups) {
+        const k: RejectionKind = isRejectionKind(g.kind) ? g.kind : "other";
+        kindMap.set(k, (kindMap.get(k) ?? 0) + Number(g.n));
+      }
+      const byKind = Array.from(kindMap.entries())
+        .map(([kind, count]) => ({ kind, label: REJECTION_KIND_LABEL[kind], count }))
+        .sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind));
+      const byReasonText = input.reason == null ? rejected
         : input.reason === NO_REASON ? and(rejected, or(isNull(prospectQueue.rejectionReason), eq(prospectQueue.rejectionReason, "")))
         : and(rejected, eq(prospectQueue.rejectionReason, input.reason));
+      const where = input.kind == null ? byReasonText
+        : input.kind === "other" ? and(byReasonText, or(eq(prospectQueue.rejectionKind, "other"), isNull(prospectQueue.rejectionKind)))
+        : and(byReasonText, eq(prospectQueue.rejectionKind, input.kind));
       const [items, [{ n: itemsTotal }]] = await Promise.all([
         db.select({
           // prospectQueue has firstName/lastName/title — NOT contactName/
@@ -3114,6 +3209,7 @@ export const prospectsRouter = router({
           lastName: prospectQueue.lastName,
           title: prospectQueue.title,
           rejectionReason: prospectQueue.rejectionReason,
+          rejectionKind: prospectQueue.rejectionKind,
           rejectedAt: prospectQueue.rejectedAt,
         })
           .from(prospectQueue).where(where)
@@ -3121,7 +3217,7 @@ export const prospectsRouter = router({
           .limit(input.perPage).offset((input.page - 1) * input.perPage),
         db.select({ n: sql<number>`count(*)` }).from(prospectQueue).where(where),
       ]);
-      return { total, byReason, items, itemsTotal: Number(itemsTotal), page: input.page, perPage: input.perPage };
+      return { total, byReason, byKind, items, itemsTotal: Number(itemsTotal), page: input.page, perPage: input.perPage };
     }),
 
   exportRejections: workspaceProcedure
@@ -3153,6 +3249,7 @@ export const prospectsRouter = router({
         linkedinUrl: prospectQueue.linkedinUrl,
         icpMatchScore: prospectQueue.icpMatchScore,
         rejectionReason: prospectQueue.rejectionReason,
+        rejectionKind: prospectQueue.rejectionKind,
         rejectedAt: prospectQueue.rejectedAt,
         sourceType: prospectQueue.sourceType,
       })
@@ -3167,12 +3264,12 @@ export const prospectsRouter = router({
       const escape = csvCell;
       const headers = [
         "ID","First Name","Last Name","Title","Company","Industry","Geography",
-        "Company Size","Email","LinkedIn URL","ICP Match Score","Rejection Reason","Rejected At","Source",
+        "Company Size","Email","LinkedIn URL","ICP Match Score","Rejected By","Rejection Reason","Rejected At","Source",
       ];
       const rows = rejected.map((r) => [
         r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
         r.geography, r.companySize, r.email, r.linkedinUrl, r.icpMatchScore,
-        r.rejectionReason, r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "", r.sourceType,
+        rejectionKindLabel(r.rejectionKind), r.rejectionReason, r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "", r.sourceType,
       ].map(escape).join(","));
       return { csv: [headers.join(","), ...rows].join("\n"), count: rejected.length };
     }),
@@ -3222,6 +3319,7 @@ export const prospectsRouter = router({
         icpMatchBreakdown: JSON.stringify(match.breakdown),
         sequenceStatus: newStatus,
         rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
+        rejectionKind: newStatus === "pending" ? null : prospect.rejectionKind,
         rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
       }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { newScore: match.score, newStatus, breakdown: match.breakdown };
@@ -3288,8 +3386,7 @@ export const prospectsRouter = router({
           eq(prospectQueue.campaignId, input.campaignId),
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "skipped"),
-          isNull(prospectQueue.rejectedByUserId),
-          like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`),
+          scoreRejectionWhere(),
         ))
         .orderBy(prospectQueue.id)
         .limit(REEVAL_ALL_MAX);
@@ -3305,6 +3402,8 @@ export const prospectsRouter = router({
       }).$returningId();
       const payload: ReevalAllPayload = { campaignId: input.campaignId, prospectIds: rejected.map((r) => r.id), threshold: autoApproveThreshold, runId: run.id };
       const { job } = await enqueueJob({ workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: REEVAL_ALL_JOB, payload, total: rejected.length });
+      // Started now through the runner's kick, not at its next 15-second tick (F14).
+      kickJobs();
       return { jobId: job.id, total: rejected.length, threshold: autoApproveThreshold, alreadyRunning: false };
     }),
 

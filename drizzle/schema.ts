@@ -6,6 +6,7 @@ import {
   index,
   int,
   json,
+  longtext,
   mediumtext,
   mysqlEnum,
   mysqlTable,
@@ -44,7 +45,8 @@ export const users = mysqlTable("users", {
   elsieEnabled: boolean("elsie_enabled"),
   /** TOTP MFA (migration 0116): base32 secret + activation time. A secret
    *  with NULL enabled-at = enrollment started but not yet confirmed. */
-  mfaTotpSecret: varchar("mfa_totp_secret", { length: 64 }),
+  // Encrypted at rest (services/totpSecret.ts, migration 0350): iv:tag:ciphertext hex.
+  mfaTotpSecret: varchar("mfa_totp_secret", { length: 255 }),
   mfaTotpEnabledAt: timestamp("mfa_totp_enabled_at"),
   /**
    * Forgot-password (migration 0142). The SHA-256 HASH of the reset token, not
@@ -1365,6 +1367,8 @@ export const qbrs = mysqlTable(
     scheduledAt: timestamp("scheduledAt"),
     completedAt: timestamp("completedAt"),
     status: mysqlEnum("status", ["scheduled", "completed", "cancelled"]).default("scheduled").notNull(),
+    /** Set when scheduled at a time; null for a day-only QBR (migration 0370, audit U27). */
+    durationMinutes: int("durationMinutes"),
     aiPrep: json("aiPrep"), // {wins, risks, asks, agenda}
     notes: text("notes"),
     nextActions: json("nextActions"),
@@ -3029,6 +3033,16 @@ export const contactImports = mysqlTable(
     postImportActions: json("postImportActions"),
     ownerId: int("ownerId").notNull(), // user who triggered the import
     completedAt: timestamp("completedAt"),
+    /** contacts | prospects (migration 0371, audit F32); null on older imports. */
+    destination: varchar("destination", { length: 16 }),
+    /** The mapping preset that read the file ("leadrocks"), if any (0371). */
+    preset: varchar("preset", { length: 32 }),
+    /** Companies this import created, for Undo (0371). */
+    createdAccountIds: json("createdAccountIds"),
+    /** Set when "Undo this import" removed what it made (0371). */
+    undoneAt: timestamp("undoneAt"),
+    undoneByUserId: int("undoneByUserId"),
+    undoSummary: json("undoSummary"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -3038,6 +3052,34 @@ export const contactImports = mysqlTable(
   }),
 );
 export type ContactImport = typeof contactImports.$inferSelect;
+
+/**
+ * An uploaded import file, kept under a token for a day (migration 0371,
+ * audit F32/R86): validation and commit read it here instead of the browser
+ * sending the whole file again. One pending file per person per workspace.
+ */
+export const importFiles = mysqlTable(
+  "import_files",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    token: varchar("token", { length: 64 }).notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    preset: varchar("preset", { length: 32 }),
+    content: longtext("content").notNull(),
+    byteSize: int("byteSize").default(0).notNull(),
+    rowCount: int("rowCount").default(0).notNull(),
+    /** The last validation's error rows ({rowIndex, reason}), for the full report. */
+    lastErrorRows: json("lastErrorRows"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+  },
+  (t) => ({
+    byToken: uniqueIndex("ux_import_files_token").on(t.token),
+    byOwner: index("ix_import_files_owner").on(t.workspaceId, t.userId),
+  }),
+);
 
 export const contactImportRows = mysqlTable(
   "contact_import_rows",
@@ -4244,6 +4286,8 @@ export const prospectQueue = mysqlTable(
     rejectedAt: timestamp("rejectedAt"),
     rejectedByUserId: int("rejectedByUserId"),
     rejectionReason: text("rejectionReason"),
+    /** Who or what rejected the row — @shared/rejectionKind (migration 0331, audit F19). Null on a row never rejected. */
+    rejectionKind: varchar("rejectionKind", { length: 24 }),
     // Linked CRM records (created after positive reply)
     linkedContactId: int("linkedContactId"),
     linkedOpportunityId: int("linkedOpportunityId"),
@@ -4251,6 +4295,16 @@ export const prospectQueue = mysqlTable(
     // references ONE prospects row; the person columns above become a
     // display/engine mirror, never a second source of truth.
     personProspectId: int("person_prospect_id"),
+    /**
+     * The row's identity keys, stored so a duplicate check reads only rows
+     * that share one (migration 0333, audit A34). Made by queueIdentityColumns
+     * (services/are/queueIdentity.ts) from queueIdentityKeys; identityVersion
+     * 0 = not keyed yet (read by every lookup until keyed).
+     */
+    identityEmail: varchar("identityEmail", { length: 320 }),
+    identityLinkedin: varchar("identityLinkedin", { length: 255 }),
+    identityNameOrg: varchar("identityNameOrg", { length: 400 }),
+    identityVersion: int("identityVersion").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -4260,6 +4314,11 @@ export const prospectQueue = mysqlTable(
     byEmail: index("ix_pq_email").on(t.email),
     byStatus: index("ix_pq_status").on(t.campaignId, t.enrichmentStatus),
     byPerson: index("ix_pq_person").on(t.personProspectId),
+    byRejectionKind: index("ix_pq_rejkind").on(t.campaignId, t.rejectionKind),
+    byIdentityEmail: index("ix_pq_id_email").on(t.workspaceId, t.identityEmail),
+    byIdentityLinkedin: index("ix_pq_id_li").on(t.workspaceId, t.identityLinkedin),
+    byIdentityNameOrg: index("ix_pq_id_nameorg").on(t.workspaceId, t.identityNameOrg),
+    byIdentityVersion: index("ix_pq_id_version").on(t.workspaceId, t.identityVersion),
   }),
 );
 export type ProspectQueue = typeof prospectQueue.$inferSelect;
@@ -4298,6 +4357,8 @@ export const prospectIntelligence = mysqlTable(
     sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
     sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
+    /** Bumped on every write of generatedSequence; a step edit writes only on the version it read (migration 0330, audit A75). */
+    sequenceVersion: int("sequenceVersion").default(0).notNull(),
     /** Research avoid-rule hold (migration 0203): set when the generated copy breaks one; enrollment skips the prospect until a person releases or regenerates. */
     copyHoldReason: varchar("copyHoldReason", { length: 500 }),
     /** Research phase 6 (migration 0206): the research this prospect's copy was written from, for results. */
@@ -4362,6 +4423,9 @@ export const areExecutionQueue = mysqlTable(
     sendingAccountId: int("sendingAccountId"),
     fromEmail: varchar("fromEmail", { length: 320 }),
     failureReason: text("failureReason"),
+    /** Times this step was put back unsent (no sending capacity), and when it may be asked again (migration 0334, audit F13). */
+    attempts: int("attempts").default(0).notNull(),
+    nextAttemptAt: timestamp("nextAttemptAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -4838,6 +4902,9 @@ export const discoveryRuns = mysqlTable(
     /** Migration 0360 (audit F38): finds kept unsaved for review, and how many were already in People. */
     heldForReview: boolean("heldForReview").default(false).notNull(),
     alreadyInPeople: int("alreadyInPeople").default(0).notNull(),
+    /** Migration 0332 (audit A56): a campaign launch's saved people added to that campaign, and those it refused. Null: not a campaign launch. */
+    addedToCampaign: int("addedToCampaign"),
+    notAddedToCampaign: int("notAddedToCampaign"),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     completedAt: timestamp("completedAt"),
   },
@@ -4884,6 +4951,24 @@ export const domainScrapeCache = mysqlTable(
   }),
 );
 export type DomainScrapeCache = typeof domainScrapeCache.$inferSelect;
+
+/**
+ * A paid email lookup that came back empty, so the same lookup is not paid
+ * for again for LOOKUP_MISS_TTL_DAYS (migration 0330, audit A75). Keys:
+ * "qe:li:<linkedin slug>" and "finder:<first>|<last>|<domain>".
+ * services/are/lookupMisses.ts is the only reader and writer.
+ */
+export const vendorLookupMisses = mysqlTable(
+  "vendor_lookup_misses",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    lookupKey: varchar("lookupKey", { length: 400 }).notNull(),
+    reason: varchar("reason", { length: 64 }).notNull(),
+    missedAt: timestamp("missedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byKey: uniqueIndex("ux_vlm_key").on(t.workspaceId, t.lookupKey) }),
+);
 
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -6392,6 +6477,12 @@ export const savedReports = mysqlTable(
     scheduleFreq: mysqlEnum("scheduleFreq", ["none", "daily", "weekly", "monthly"]).default("none").notNull(),
     scheduleRecipients: text("scheduleRecipients"), // comma-separated emails
     scheduleLastSentAt: timestamp("scheduleLastSentAt"),
+    /* The last send attempt and how it went (migration 0410, audit 2026-10-20 F45). */
+    scheduleLastAttemptAt: timestamp("scheduleLastAttemptAt"),
+    /** "sent" | "failed" */
+    scheduleLastResult: varchar("scheduleLastResult", { length: 16 }),
+    scheduleLastError: varchar("scheduleLastError", { length: 500 }),
+    scheduleLastSentTo: int("scheduleLastSentTo"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

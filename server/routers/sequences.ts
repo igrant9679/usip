@@ -11,7 +11,7 @@ import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { researchUseFor } from "../services/research/recipient";
-import { sequencePerformance } from "../services/sequenceAnalytics";
+import { enrollmentStepCounts, sequencePerformance, stepAnalytics } from "../services/sequenceAnalytics";
 import { buildBrandContext } from "../services/brandContext";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
 import { describeSuppression, findSuppression } from "../services/suppression";
@@ -53,6 +53,7 @@ import { autoSendGroups, sequenceAutoSend } from "@shared/sequenceAutoSend";
 import { nextSendAt } from "@shared/recipientTime";
 import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services/recipientZone";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { isValidTimezone } from "@shared/availability";
 import { addVisitorIdsToEmail } from "../services/visitorLinks";
 import { affectedRowsOf } from "../_core/claim";
 
@@ -907,7 +908,7 @@ export const sequencesRouter = router({
     exitConditions: z.array(z.object({ type: z.enum(["reply","bounce","unsubscribe","goal_met","manual"]), enabled: z.boolean() })).optional(),
     settings: z.object({
       /** null = use the workspace's time zone. */
-      timezone: z.string().max(64).nullable().optional(),
+      timezone: z.string().max(64).refine(isValidTimezone, { message: "That isn't a time zone this server knows." }).nullable().optional(),
       sendWindowStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       sendWindowEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       skipWeekends: z.boolean().optional(),
@@ -1552,13 +1553,8 @@ export const sequencesRouter = router({
   getEnrollmentStepStats: workspaceProcedure.input(z.object({ sequenceId: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const rows = await db.select().from(enrollments).where(and(eq(enrollments.sequenceId, input.sequenceId), eq(enrollments.workspaceId, ctx.workspace.id)));
-    // Count by currentStep
-    const stepCounts: Record<number, number> = {};
-    for (const r of rows) {
-      stepCounts[r.currentStep] = (stepCounts[r.currentStep] ?? 0) + 1;
-    }
-    return Object.entries(stepCounts).map(([step, count]) => ({ step: Number(step), count }));
+    // Counted in SQL (O41): this read every enrolment row to count them.
+    return enrollmentStepCounts(db, ctx.workspace.id, input.sequenceId);
   }),
 
   /** Sequence performance analytics: open rate, click rate, reply rate, opt-out rate per sequence. */
@@ -1594,142 +1590,9 @@ export const sequencesRouter = router({
         .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!seq) throw new TRPCError({ code: "NOT_FOUND" });
-      const steps = (seq.steps as Array<{ type: string; subject?: string }>) ?? [];
-
-      const drafts = await db
-        .select({
-          stepIndex: emailDrafts.stepIndex,
-          status: emailDrafts.status,
-          openCount: emailDrafts.openCount,
-          clickCount: emailDrafts.clickCount,
-          bouncedAt: emailDrafts.bouncedAt,
-          toEmail: emailDrafts.toEmail,
-        })
-        .from(emailDrafts)
-        .where(
-          and(
-            eq(emailDrafts.workspaceId, ctx.workspace.id),
-            eq(emailDrafts.sequenceId, seq.id),
-          ),
-        );
-
-      // Build per-step rollup. -1 sentinel = legacy drafts with no stepIndex.
-      const byStep = new Map<number, {
-        sent: number; uniqueOpens: number; uniqueClicks: number;
-        totalOpens: number; totalClicks: number; bounced: number; replied: number;
-      }>();
-
-      for (const d of drafts) {
-        const idx = d.stepIndex ?? -1;
-        const bucket = byStep.get(idx) ?? {
-          sent: 0, uniqueOpens: 0, uniqueClicks: 0,
-          totalOpens: 0, totalClicks: 0, bounced: 0, replied: 0,
-        };
-        if (d.status === "sent") bucket.sent += 1;
-        const oc = d.openCount ?? 0;
-        const cc = d.clickCount ?? 0;
-        bucket.totalOpens += oc;
-        bucket.totalClicks += cc;
-        if (oc > 0) bucket.uniqueOpens += 1;
-        if (cc > 0) bucket.uniqueClicks += 1;
-        if (d.bouncedAt) bucket.bounced += 1;
-        byStep.set(idx, bucket);
-      }
-
-      // Reply counts via email_replies — match by draftId via the matched
-      // drafts (rather than re-querying, just count rows whose draftId
-      // links to one of our drafts). Cheap one-shot query.
-      const draftIds = (await db
-        .select({ id: emailDrafts.id, stepIndex: emailDrafts.stepIndex })
-        .from(emailDrafts)
-        .where(
-          and(
-            eq(emailDrafts.workspaceId, ctx.workspace.id),
-            eq(emailDrafts.sequenceId, seq.id),
-          ),
-        ));
-      const idToStep = new Map(draftIds.map((d) => [d.id, d.stepIndex ?? -1]));
-      if (draftIds.length > 0) {
-        const replyRows = await db
-          .select({ draftId: emailReplies.draftId })
-          .from(emailReplies)
-          .where(
-            and(
-              eq(emailReplies.workspaceId, ctx.workspace.id),
-              inArray(
-                emailReplies.draftId,
-                draftIds.map((d) => d.id),
-              ),
-            ),
-          );
-        for (const r of replyRows) {
-          if (r.draftId == null) continue;
-          const step = idToStep.get(r.draftId);
-          if (step === undefined) continue;
-          const bucket = byStep.get(step);
-          if (bucket) bucket.replied += 1;
-        }
-      }
-
-      // Output: one row per defined step in the sequence + a row for
-      // legacy/unknown drafts when applicable. Always emit a row for
-      // each step (even with all zeros) so the UI can render the full
-      // ladder. AB variants are skipped in this pass — separate query.
-      const out: Array<{
-        stepIndex: number;
-        stepType: string;
-        stepLabel: string;
-        sent: number;
-        uniqueOpens: number;
-        uniqueClicks: number;
-        bounced: number;
-        replied: number;
-        openRate: number;
-        clickRate: number;
-        replyRate: number;
-        bounceRate: number;
-      }> = [];
-
-      for (let i = 0; i < steps.length; i++) {
-        const s = steps[i];
-        const b = byStep.get(i) ?? {
-          sent: 0, uniqueOpens: 0, uniqueClicks: 0,
-          totalOpens: 0, totalClicks: 0, bounced: 0, replied: 0,
-        };
-        out.push({
-          stepIndex: i,
-          stepType: s?.type ?? "unknown",
-          stepLabel: s?.type === "email" ? (s.subject ?? `Email step ${i + 1}`) : `${s?.type ?? "?"} step ${i + 1}`,
-          sent: b.sent,
-          uniqueOpens: b.uniqueOpens,
-          uniqueClicks: b.uniqueClicks,
-          bounced: b.bounced,
-          replied: b.replied,
-          openRate: b.sent > 0 ? Math.round((b.uniqueOpens / b.sent) * 100) : 0,
-          clickRate: b.sent > 0 ? Math.round((b.uniqueClicks / b.sent) * 100) : 0,
-          replyRate: b.sent > 0 ? Math.round((b.replied / b.sent) * 100) : 0,
-          bounceRate: b.sent > 0 ? Math.round((b.bounced / b.sent) * 100) : 0,
-        });
-      }
-
-      const legacy = byStep.get(-1);
-      if (legacy && legacy.sent > 0) {
-        out.push({
-          stepIndex: -1,
-          stepType: "unknown",
-          stepLabel: "(legacy / pre-0063 drafts)",
-          sent: legacy.sent,
-          uniqueOpens: legacy.uniqueOpens,
-          uniqueClicks: legacy.uniqueClicks,
-          bounced: legacy.bounced,
-          replied: legacy.replied,
-          openRate: legacy.sent > 0 ? Math.round((legacy.uniqueOpens / legacy.sent) * 100) : 0,
-          clickRate: legacy.sent > 0 ? Math.round((legacy.uniqueClicks / legacy.sent) * 100) : 0,
-          replyRate: legacy.sent > 0 ? Math.round((legacy.replied / legacy.sent) * 100) : 0,
-          bounceRate: legacy.sent > 0 ? Math.round((legacy.bounced / legacy.sent) * 100) : 0,
-        });
-      }
-
+      // Counted in SQL, grouped by step (audit 2026-10-20, O41): this read
+      // every draft of the sequence and every draft id again to count them here.
+      const out = await stepAnalytics(db, ctx.workspace.id, seq);
       return { sequenceId: seq.id, sequenceName: seq.name, steps: out };
     }),
 });

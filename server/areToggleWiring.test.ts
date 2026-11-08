@@ -196,26 +196,30 @@ describe("Max Concurrent Campaigns is a start gate, and only a start gate", () =
     expect(read("server/areEngine.ts")).not.toContain("campaignHeadroom");
   });
 
-  it("the proposal path HOLDS at the cap instead of throwing", () => {
+  it("the proposal path never throws at the cap: it creates a draft, and the cap is checked at activation", () => {
     /**
      * The Auto cron loops proposals inside one try/catch, so a throw here
      * abandons the workspace's remaining proposals; and the manual accept
      * converts any throw into NOT_FOUND "Proposal not found", which is a lie
      * about a proposal the user is looking at.
+     *
+     * 2026-11-07 (audit A31): accept used to create an ACTIVE campaign and so
+     * held at the cap. It now creates a DRAFT, which the limit does not count
+     * (the limit is on what runs; see create's "a DRAFT is never refused"
+     * above), so there is no cap to hold at here — and setStatus, which a
+     * person uses to activate the draft, checks it. Still guarded: no throw
+     * at the cap, and no active campaign born on this path.
      */
     const fn = proposals.slice(
       proposals.indexOf("export async function acceptProposal"),
       proposals.indexOf("export async function dismissProposal"),
     );
-    const gate = fn.indexOf("campaignHeadroom(workspaceId)");
-    const insert = fn.indexOf("db.insert(areCampaigns)");
-    expect(gate).toBeGreaterThan(-1);
-    expect(insert).toBeGreaterThan(gate);
-    expect(fn).toContain("return { campaignId: null");
-    expect(
-      fn.slice(gate, insert).includes("throw"),
-      "acceptProposal throws at the cap — the Auto cron would drop the workspace's other proposals",
-    ).toBe(false);
+    expect(fn).toContain("db.insert(areCampaigns)");
+    expect(fn).toContain('status: "draft"');
+    expect(fn).not.toContain('status: "active"');
+    expect(fn).not.toContain("campaignHeadroom");
+    const setStatus = campaigns.slice(campaigns.indexOf("setStatus: workspaceProcedure"));
+    expect(setStatus).toContain("campaignHeadroom(ctx.workspace.id)");
   });
 });
 

@@ -103,15 +103,12 @@ describe("a crash in a page's own body renders that page's error, inside the she
  */
 const ERROR_BRANCH = /<QueryError\b|<QueryState\b|<FailedLoadsBanner\b|<NotFoundState\b|\bisError\b|[A-Za-z_\])]\.error\s*(\?|&&|\)|\|\||!|;|,)|\berror\s*(\?\s|&&)|\{[^}]*\berror\b[^}]*\}\s*=\s*trpc\./;
 
-/** Pages in areas other batches had in flight on 2026-11-07, left for the merge. */
-const LEFT_FOR_MERGE: Record<string, string> = {
-  "client/src/pages/usip/AREHub.tsx": "Revenue Engine (batch ARES)",
-  "client/src/pages/usip/AREIcpAgent.tsx": "Revenue Engine (batch ARES)",
-  "client/src/pages/usip/CompanyProfile.tsx": "companies (batch CRMP)",
-  "client/src/pages/usip/ProspectDetail.tsx": "People (batch CRMP)",
-  "client/src/pages/usip/Pipeline.tsx": "the opportunities board (batch CRMP)",
-  "client/src/pages/usip/ImportContacts.tsx": "import (batch CRMP)",
-};
+/**
+ * Pages left for the merge while other batches had them in flight. ARES and
+ * CRMP landed before this batch's final merge (2026-11-07) and their pages got
+ * their error branch then, so the list is empty; it stays for the next time.
+ */
+const LEFT_FOR_MERGE: Record<string, string> = {};
 
 describe("every page that reads data says when the read failed (X1.6)", () => {
   const pages = walk("client/src/pages").filter((f) => f.endsWith(".tsx")).map((f) => [f, read(f)] as const);

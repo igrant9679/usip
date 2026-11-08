@@ -5168,6 +5168,99 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── Batch ARES (audit 2026-10-20 final pass), migrations 0330–0339 ──
+
+  // A75: a step edit writes only on the sequence version it read, and a paid
+  // email lookup that came back empty is remembered. Additive: every existing
+  // dossier starts at version 0, and the miss table starts empty.
+  {
+    name: "0330_sequence_version_and_lookup_misses.sql",
+    statements: [
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `sequenceVersion` int NOT NULL DEFAULT 0",
+      "CREATE TABLE IF NOT EXISTS `vendor_lookup_misses` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `lookupKey` varchar(400) NOT NULL, `reason` varchar(64) NOT NULL, `missedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_vlm_key` (`workspaceId`, `lookupKey`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+  // F19: who or what rejected each campaign prospect, as a kind beside the
+  // free-text reason. Older rejected rows are backfilled from their reason
+  // only where the text names exactly one writer (@shared/rejectionKind,
+  // REJECTION_REASON_PATTERNS, in the same order); every other rejected row
+  // is 'other'. Each UPDATE touches only rows still without a kind, so a
+  // re-run finds nothing twice.
+  {
+    name: "0331_rejection_kind.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` ADD COLUMN `rejectionKind` varchar(24) NULL",
+      "CREATE INDEX `ix_pq_rejkind` ON `prospect_queue` (`campaignId`, `rejectionKind`)",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'dedupe' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Audit & fix: the same person as row %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'unidentifiable' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Audit & fix: no name, email or LinkedIn profile%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'person' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectedByUserId` IS NOT NULL",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'screen' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Auto-screened: ICP match %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'suppression' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'On suppression list%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'dedupe' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Already in a sequence as prospect #%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'no_email' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'No verifiable email address found%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'distress' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Downstream: the organization is in financial distress%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'never_target' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Never-target word %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'territory' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` = 'Outside target geography'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'enrichment_failed' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Enrichment failed %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'no_steps' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` = 'Generated sequence has no usable steps'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'other' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL",
+    ],
+  },
+
+  // A56: a discovery run launched from a campaign's Scraper tab adds its saved
+  // people to that campaign; the run records how many were added and how many
+  // the campaign refused. Nullable: every other run is not a campaign launch.
+  {
+    name: "0332_discovery_run_campaign_add.sql",
+    statements: [
+      "ALTER TABLE `discovery_runs` ADD COLUMN `addedToCampaign` int NULL",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `notAddedToCampaign` int NULL",
+    ],
+  },
+
+  // A34: each campaign prospect's identity keys, stored and indexed, so the
+  // duplicate check reads only the rows sharing a key instead of the whole
+  // queue. Every existing row starts at identityVersion 0 ("not keyed yet"),
+  // which every lookup still reads; the keys are made in code (the one
+  // definition, queueIdentityKeys), by the boot backfill and on read, never
+  // here, so this is additive and safe on a live table.
+  {
+    name: "0333_queue_identity_columns.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityEmail` varchar(320) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityLinkedin` varchar(255) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityNameOrg` varchar(400) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityVersion` int NOT NULL DEFAULT 0",
+      "CREATE INDEX `ix_pq_id_email` ON `prospect_queue` (`workspaceId`, `identityEmail`)",
+      "CREATE INDEX `ix_pq_id_li` ON `prospect_queue` (`workspaceId`, `identityLinkedin`)",
+      "CREATE INDEX `ix_pq_id_nameorg` ON `prospect_queue` (`workspaceId`, `identityNameOrg`)",
+      "CREATE INDEX `ix_pq_id_version` ON `prospect_queue` (`workspaceId`, `identityVersion`)",
+    ],
+  },
+
+  // F13: a campaign step put back unsent for lack of sending capacity counts
+  // its tries and waits before it is asked again. Defaulted and nullable:
+  // every existing step reads as never put back.
+  {
+    name: "0334_execution_queue_attempts.sql",
+    statements: [
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `attempts` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `nextAttemptAt` timestamp NULL",
+    ],
+  },
+
+  // The authenticator secret is stored encrypted (services/totpSecret.ts,
+  // follow-up to the final pass, 2026-11-07): iv:tag:ciphertext in hex is
+  // about 122 characters, so the column widens from 64. Widening a varchar
+  // keeps every value; the boot pass in secretBackfill.ts encrypts the old
+  // plaintext rows and checks each write read back whole.
+  {
+    name: "0350_totp_secret_encrypted.sql",
+    statements: [
+      "ALTER TABLE `users` MODIFY COLUMN `mfa_totp_secret` varchar(255) NULL",
+    ],
+  },
+
   // A booking's own reschedule-or-cancel page (audit 2026-10-20, F47). Nullable
   // and unset on every existing meeting: only new bookings get a token, and a
   // UNIQUE index allows any number of NULLs.
@@ -5206,6 +5299,50 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
         "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
         "PRIMARY KEY (`id`), " +
         "KEY `ix_ce_ws_created` (`workspaceId`, `createdAt`))",
+    ],
+  },
+
+  // A scheduled report's last send, and how it went (audit 2026-10-20, F45):
+  // only scheduleLastSentAt was kept, and only on success, so a schedule that
+  // kept failing showed nothing. Additive, nullable, nothing backfilled; when a
+  // report is due is unchanged (it still reads scheduleLastSentAt).
+  {
+    name: "0410_saved_report_send_outcome.sql",
+    statements: [
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastAttemptAt` timestamp NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastResult` varchar(16) NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastError` varchar(500) NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastSentTo` int NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, U27: a QBR can be scheduled at a time, for a length.
+  // Nullable: every existing QBR stays a day-only one, as it was scheduled.
+  {
+    name: "0370_qbr_time.sql",
+    statements: [
+      "ALTER TABLE `qbrs` ADD COLUMN `durationMinutes` int NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, F32 and R86: one import pipeline. The uploaded file is
+  // kept here under a token for a day, so validation and commit read it
+  // instead of the browser sending it again; the last validation's error rows
+  // ride with it for the full error report. An import records where it went,
+  // which preset read it and the companies it created, so "Undo this import"
+  // can remove what that import made and nothing else. All additive and
+  // nullable: existing imports read as before (and cannot be undone, having
+  // recorded no companies).
+  {
+    name: "0371_import_files.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `import_files` (`id` int AUTO_INCREMENT PRIMARY KEY, `token` varchar(64) NOT NULL, `workspaceId` int NOT NULL, `userId` int NOT NULL, `filename` varchar(255) NOT NULL, `preset` varchar(32) NULL, `content` longtext NOT NULL, `byteSize` int NOT NULL DEFAULT 0, `rowCount` int NOT NULL DEFAULT 0, `lastErrorRows` json NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `expiresAt` timestamp NOT NULL, UNIQUE KEY `ux_import_files_token` (`token`), KEY `ix_import_files_owner` (`workspaceId`, `userId`))",
+      "ALTER TABLE `contact_imports` ADD COLUMN `destination` varchar(16) NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `preset` varchar(32) NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `createdAccountIds` json NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoneAt` timestamp NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoneByUserId` int NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoSummary` json NULL",
     ],
   },
 

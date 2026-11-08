@@ -9,10 +9,15 @@
  *
  * Objects: deals (opportunities) · leads · prospects · contacts · activities.
  * Owner/actor user-id columns are resolved to names post-query.
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F45): a date column groups by day, week
+ * or month in the workspace's zone (@shared/reportBuckets); every result says
+ * how many rows or groups there are in all, with totals over all of them, and
+ * pages through them; and a scheduled report records each send's outcome.
  */
 import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
-import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sum, type SQL } from "drizzle-orm";
+import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sql, sum, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { activities, contacts, emailLog, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
@@ -22,11 +27,19 @@ import { stageIndexFor } from "../_core/stageSemantics";
 import type { StageIndex } from "@shared/stageSemantics";
 import { router } from "../_core/trpc";
 import { assertOwnerOrManager, workspaceProcedure } from "../_core/workspace";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { foldSlots, REPORT_BUCKETS, slotSecondsFor, type ReportBucket } from "@shared/reportBuckets";
 
 /* ─── Object registry (the whitelist) ────────────────────────────────────── */
 
 type ColKind = "text" | "number" | "date" | "user";
-type ColDef = { col: MySqlColumn; label: string; kind: ColKind };
+/**
+ * total: how a totals row reads this number column — a sum (value, duration),
+ * an average (a probability, a score, days), or nothing (an id). Default sum.
+ * calendar: a date stored as a calendar day (noon UTC, @shared/calendarDate),
+ * bucketed by its own day rather than shifted into the workspace's zone.
+ */
+type ColDef = { col: MySqlColumn; label: string; kind: ColKind; total?: "sum" | "avg" | "none"; calendar?: boolean };
 type ObjectDef = {
   table: typeof opportunities | typeof leads | typeof prospects | typeof contacts | typeof activities | typeof emailLog;
   wsCol: MySqlColumn;
@@ -43,9 +56,9 @@ const OBJECTS: Record<string, ObjectDef> = {
       name: { col: opportunities.name, label: "Deal name", kind: "text" },
       stage: { col: opportunities.stage, label: "Stage", kind: "text" },
       value: { col: opportunities.value, label: "Value", kind: "number" },
-      winProb: { col: opportunities.winProb, label: "Win probability", kind: "number" },
-      closeDate: { col: opportunities.closeDate, label: "Close date", kind: "date" },
-      daysInStage: { col: opportunities.daysInStage, label: "Days in stage", kind: "number" },
+      winProb: { col: opportunities.winProb, label: "Win probability", kind: "number", total: "avg" },
+      closeDate: { col: opportunities.closeDate, label: "Close date", kind: "date", calendar: true },
+      daysInStage: { col: opportunities.daysInStage, label: "Days in stage", kind: "number", total: "avg" },
       nextStep: { col: opportunities.nextStep, label: "Next step", kind: "text" },
       winReason: { col: opportunities.winReason, label: "Win reason", kind: "text" },
       lostReason: { col: opportunities.lostReason, label: "Lost reason", kind: "text" },
@@ -67,7 +80,7 @@ const OBJECTS: Record<string, ObjectDef> = {
       title: { col: leads.title, label: "Title", kind: "text" },
       source: { col: leads.source, label: "Source", kind: "text" },
       status: { col: leads.status, label: "Status", kind: "text" },
-      score: { col: leads.score, label: "Score", kind: "number" },
+      score: { col: leads.score, label: "Score", kind: "number", total: "avg" },
       grade: { col: leads.grade, label: "Grade", kind: "text" },
       owner: { col: leads.ownerUserId, label: "Owner", kind: "user" },
       createdAt: { col: leads.createdAt, label: "Created", kind: "date" },
@@ -119,7 +132,7 @@ const OBJECTS: Record<string, ObjectDef> = {
       type: { col: activities.type, label: "Type", kind: "text" },
       subject: { col: activities.subject, label: "Subject", kind: "text" },
       relatedType: { col: activities.relatedType, label: "Related to", kind: "text" },
-      relatedId: { col: activities.relatedId, label: "Related id", kind: "number" },
+      relatedId: { col: activities.relatedId, label: "Related id", kind: "number", total: "none" },
       callDisposition: { col: activities.callDisposition, label: "Call disposition", kind: "text" },
       callDurationSec: { col: activities.callDurationSec, label: "Call duration (s)", kind: "number" },
       actor: { col: activities.actorUserId, label: "By", kind: "user" },
@@ -144,7 +157,7 @@ const OBJECTS: Record<string, ObjectDef> = {
       sourceLabel: { col: emailLog.sourceLabel, label: "Source detail", kind: "text" },
       status: { col: emailLog.status, label: "Status", kind: "text" },
       failureReason: { col: emailLog.failureReason, label: "Failure reason", kind: "text" },
-      campaignId: { col: emailLog.campaignId, label: "Campaign id", kind: "number" },
+      campaignId: { col: emailLog.campaignId, label: "Campaign id", kind: "number", total: "none" },
       user: { col: emailLog.userId, label: "Sent by", kind: "user" },
       sentAt: { col: emailLog.sentAt, label: "Sent", kind: "date" },
     },
@@ -171,10 +184,14 @@ const specSchema = z.object({
   columns: z.array(z.string().max(64)).min(1).max(20),
   filters: z.array(filterSchema).max(12).default([]),
   groupBy: z.string().max(64).optional(),
+  /** For a date groupBy: day, week or month in the workspace's zone (F45). */
+  groupBucket: z.enum(REPORT_BUCKETS as unknown as [ReportBucket, ...ReportBucket[]]).optional(),
   aggregate: z.enum(["count", "sum_value", "avg_value"]).optional(), // sum/avg use aggregateField
   aggregateField: z.string().max(64).optional(),
   sort: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
   limit: z.number().int().min(1).max(1000).default(200),
+  /** Where this page starts, in rows or groups (F45). A saved report keeps 0. */
+  offset: z.number().int().min(0).max(1_000_000).optional(),
   /** client-side chart preference — persisted with saved reports */
   viz: z.string().max(20).optional(),
 });
@@ -242,7 +259,24 @@ function aggregateColumn(def: ObjectDef, spec: ReportSpec): ColDef | null {
   return c;
 }
 
-export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean; truncated: boolean }> {
+export type ReportResult = {
+  columns: { key: string; label: string; kind: ColKind }[];
+  rows: Record<string, unknown>[];
+  grouped: boolean;
+  /** More rows or groups exist after this page. */
+  truncated: boolean;
+  /** Rows (flat) or groups (grouped) in all, not just this page (F45). */
+  total: number;
+  offset: number;
+  /** Totals over ALL matching rows, by column key: a number, read as the column's total says. */
+  totals: Record<string, number | null>;
+  /** For each total, whether it is a sum or an average. */
+  totalKinds: Record<string, "sum" | "avg">;
+  /** A date grouping's bucket, when there is one. */
+  bucket: ReportBucket | null;
+};
+
+export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<ReportResult> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const def = OBJECTS[spec.object];
@@ -253,12 +287,70 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   const idx = spec.object === "deals" && wantsStageFlags ? await stageIndexFor(db, workspaceId) : null;
   const where = and(eq(def.wsCol, workspaceId), ...spec.filters.map((f) => filterToSql(def, f, idx)));
 
+  const offset = spec.offset ?? 0;
+
   /* grouped mode: one row per group value + aggregate */
   if (spec.groupBy) {
     const g = colOrThrow(def, spec.groupBy);
-    // A date is an instant, so each row was its own group (G54).
-    if (g.kind === "date") throw new TRPCError({ code: "BAD_REQUEST", message: `"${g.label}" is a date, and grouping on it makes a group per row. Filter on it instead.` });
+    // A date is an instant, so each row was its own group (G54) — unless it is
+    // bucketed by day, week or month (F45).
+    if (g.kind === "date" && !spec.groupBucket) throw new TRPCError({ code: "BAD_REQUEST", message: `"${g.label}" is a date. Group it by day, week or month, or filter on it instead.` });
     const aggField = aggregateColumn(def, spec);
+    const aggLabel =
+      spec.aggregate === "sum_value" && aggField ? `Sum of ${aggField.label}`
+      : spec.aggregate === "avg_value" && aggField ? `Avg ${aggField.label}`
+      : "Count";
+    // Totals over every matching row, not the page's groups: rows, and the
+    // aggregate taken over all of them (an average of all rows, not of averages).
+    const [grand] = await db.select({
+      n: count(),
+      s: aggField ? sum(aggField.col) : sql<number>`0`,
+      a: aggField ? avg(aggField.col) : sql<number>`0`,
+    }).from(def.table).where(where);
+    const grandAgg = !aggField ? Number(grand?.n ?? 0)
+      : spec.aggregate === "avg_value" ? (grand?.a == null ? null : Number(grand.a)) : Number(grand?.s ?? 0);
+    const columns: ReportResult["columns"] = [
+      { key: "group", label: g.label, kind: g.kind === "user" || g.kind === "date" ? "text" : g.kind },
+      { key: "agg", label: aggLabel, kind: "number" },
+      { key: "n", label: "Rows", kind: "number" },
+    ];
+    const totals = { agg: grandAgg, n: Number(grand?.n ?? 0) };
+    const totalKinds: ReportResult["totalKinds"] = { agg: spec.aggregate === "avg_value" ? "avg" : "sum", n: "sum" };
+
+    if (g.kind === "date" && spec.groupBucket) {
+      // Pre-aggregated in SQL by short UTC slots, then folded into the
+      // workspace's days, weeks or months (@shared/reportBuckets).
+      const tz = await getWorkspaceTimezone(workspaceId);
+      const slotSec = slotSecondsFor(tz);
+      const slotExpr = sql<number>`floor(unix_timestamp(${g.col}) / ${slotSec})`;
+      const slots = await db.select({
+        slot: slotExpr,
+        n: count(),
+        s: aggField ? sum(aggField.col) : sql<number>`0`,
+        c: aggField ? count(aggField.col) : sql<number>`0`,
+      }).from(def.table).where(where).groupBy(slotExpr);
+      const buckets = foldSlots(
+        slots.map((r) => ({ slot: r.slot == null ? null : Number(r.slot), n: Number(r.n), sum: r.s == null ? null : Number(r.s), valued: Number(r.c ?? 0) })),
+        spec.groupBucket, tz, slotSec, !!g.calendar,
+      );
+      const page = buckets.slice(offset, offset + spec.limit);
+      return {
+        grouped: true,
+        truncated: buckets.length > offset + spec.limit,
+        total: buckets.length,
+        offset,
+        bucket: spec.groupBucket,
+        columns,
+        totals,
+        totalKinds,
+        rows: page.map((b) => ({
+          group: b.label,
+          agg: !aggField ? b.n : spec.aggregate === "avg_value" ? (b.valued ? b.sum / b.valued : null) : b.sum,
+          n: b.n,
+        })),
+      };
+    }
+
     const aggExpr =
       spec.aggregate === "sum_value" && aggField ? sum(aggField.col)
       : spec.aggregate === "avg_value" && aggField ? avg(aggField.col)
@@ -270,23 +362,24 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
       .where(where)
       .groupBy(g.col)
       .orderBy(desc(count()))
-      .limit(spec.limit + 1);
+      .limit(spec.limit + 1)
+      .offset(offset);
+    // How many groups in all: the distinct values, and one more for the rows with none.
+    const [distinct] = await db.select({ d: sql<number>`count(distinct ${g.col})` }).from(def.table).where(where);
+    const [blank] = await db.select({ n: count() }).from(def.table).where(and(where, isNull(g.col)));
     const truncated = fetched.length > spec.limit;
     const rows = fetched.slice(0, spec.limit);
-    const aggLabel =
-      spec.aggregate === "sum_value" && aggField ? `Sum of ${aggField.label}`
-      : spec.aggregate === "avg_value" && aggField ? `Avg ${aggField.label}`
-      : "Count";
     let out = rows.map((r) => ({ group: r.group ?? "(empty)", agg: aggField ? Number(r.agg ?? 0) : Number(r.n), n: Number(r.n) }));
     if (g.kind === "user") out = await resolveUserNames(out, "group");
     return {
       grouped: true,
       truncated,
-      columns: [
-        { key: "group", label: g.label, kind: g.kind === "user" ? "text" : g.kind },
-        { key: "agg", label: aggLabel, kind: "number" },
-        { key: "n", label: "Rows", kind: "number" },
-      ],
+      total: Number(distinct?.d ?? 0) + (Number(blank?.n ?? 0) > 0 ? 1 : 0),
+      offset,
+      bucket: null,
+      columns,
+      totals,
+      totalKinds,
       rows: out,
     };
   }
@@ -295,10 +388,23 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   const sel: Record<string, MySqlColumn> = {};
   for (const key of spec.columns) sel[key] = colOrThrow(def, key).col;
   const sortCol = spec.sort ? colOrThrow(def, spec.sort.field).col : null;
-  const base = db.select(sel).from(def.table).where(where).limit(spec.limit + 1);
+  const base = db.select(sel).from(def.table).where(where).limit(spec.limit + 1).offset(offset);
   const fetched = (sortCol ? await base.orderBy(spec.sort!.dir === "asc" ? asc(sortCol) : desc(sortCol)) : await base) as Record<string, unknown>[];
   const truncated = fetched.length > spec.limit;
   const rows = fetched.slice(0, spec.limit);
+
+  // How many rows in all, and each number column's total over all of them (F45).
+  const totalSel: Record<string, SQL | ReturnType<typeof count>> = { n: count() };
+  const totalKinds: ReportResult["totalKinds"] = {};
+  for (const key of spec.columns) {
+    const c = def.columns[key];
+    if (c.kind !== "number" || c.total === "none") continue;
+    totalKinds[key] = c.total === "avg" ? "avg" : "sum";
+    totalSel[key] = (c.total === "avg" ? avg(c.col) : sum(c.col)) as unknown as SQL;
+  }
+  const [grand] = await db.select(totalSel as never).from(def.table).where(where) as Array<Record<string, unknown>>;
+  const totals: Record<string, number | null> = {};
+  for (const key of Object.keys(totalKinds)) totals[key] = grand?.[key] == null ? null : Number(grand[key]);
 
   // resolve user-id columns to names
   let out = rows;
@@ -308,6 +414,11 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   return {
     grouped: false,
     truncated,
+    total: Number(grand?.n ?? 0),
+    offset,
+    bucket: null,
+    totals,
+    totalKinds,
     columns: spec.columns.map((key) => ({ key, label: def.columns[key].label, kind: def.columns[key].kind === "user" ? "text" : def.columns[key].kind })),
     rows: out,
   };
@@ -417,7 +528,7 @@ export const reportsRouter = router({
      * wrong numbers on screen, which is worse than a CSV somebody re-types.
      */
     await checkPermission(ctx, "export_data");
-    const result = await runSpec(ctx.workspace.id, { ...input, limit: 1000 });
+    const result = await runSpec(ctx.workspace.id, { ...input, limit: 1000, offset: 0 });
     return { csv: toCsv(result.columns, result.rows), rows: result.rows.length };
   }),
 

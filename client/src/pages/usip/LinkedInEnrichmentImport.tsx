@@ -31,7 +31,7 @@ import {
   RefreshCw, Clock, Plug, ChevronLeft, Users,
 } from "lucide-react";
 import {
-  LINKEDIN_IMPORT_FIELDS, MAX_BATCH_ROWS, columnNames, findHeaderRow, guessMapping, parseCsvRecords, rowsFromMapping,
+  LINKEDIN_IMPORT_FIELDS, MAX_BATCH_ROWS, columnNames, columnSamples, findHeaderRow, guessMapping, mappingPreview, parseCsvRecords, rowsFromMapping,
   type LinkedInImportField, type LinkedInImportRow as ParsedRow,
 } from "@/lib/linkedinCsv";
 
@@ -261,6 +261,11 @@ export default function LinkedInEnrichmentImport() {
   );
   const chunks = Math.max(1, Math.ceil(allRows.length / MAX_BATCH_ROWS));
   const rows = allRows.slice(chunk * MAX_BATCH_ROWS, (chunk + 1) * MAX_BATCH_ROWS);
+  // The mapping step's preview (audit 2026-10-20, U31): what each column
+  // holds, and the first rows as the chosen mapping reads them, before import.
+  const samples = useMemo(() => (file ? columnSamples(file.records, file.headerRow) : []), [file]);
+  const preview = useMemo(() => (file ? mappingPreview(file.records, file.headerRow, file.mapping) : null), [file]);
+  const fieldLabel = (k: LinkedInImportField) => LINKEDIN_IMPORT_FIELDS.find((f) => f.key === k)?.label ?? k;
 
   const createMut = trpc.linkedinEnrichment.createBatch.useMutation({
     onSuccess: (s) => { setBatchId(s.batchId); toast.success(`Batch created — ${s.validRows}/${s.totalRows} valid`); },
@@ -390,13 +395,51 @@ export default function LinkedInEnrichmentImport() {
                         onChange={(e) => setMapping(f.key, e.target.value === "" ? undefined : Number(e.target.value))}
                       >
                         <option value="">— not in this file —</option>
-                        {columnNames(file.records, file.headerRow).map((c, i) => <option key={i} value={i}>{c}</option>)}
+                        {columnNames(file.records, file.headerRow).map((c, i) => (
+                          <option key={i} value={i}>{c}{samples[i]?.length ? ` — e.g. ${samples[i].join(", ")}` : " — empty"}</option>
+                        ))}
                       </select>
                     </label>
                   ))}
                 </div>
                 {file.mapping.linkedinUrl === undefined && (
                   <p className="text-[12px] text-amber-700">Choose the column that holds the LinkedIn profile URLs.</p>
+                )}
+                {preview && preview.fields.length > 0 && (
+                  <div className="space-y-1" data-testid="linkedin-mapping-preview">
+                    <div className="text-[12px] font-medium">Preview: the first rows as these columns read them</div>
+                    <div className="overflow-x-auto rounded border">
+                      <table className="w-full text-[11.5px]">
+                        <thead className="bg-muted/50 text-left">
+                          <tr>
+                            <th className="px-2 py-1 font-medium">Line</th>
+                            {preview.fields.map((k) => <th key={k} className="px-2 py-1 font-medium whitespace-nowrap">{fieldLabel(k)}</th>)}
+                            <th className="px-2 py-1 font-medium">Import</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.rows.map((r) => (
+                            <tr key={r.line} className={cn("border-t", r.status !== "ok" && "bg-amber-50/60 dark:bg-amber-950/20")}>
+                              <td className="px-2 py-1 tabular-nums text-muted-foreground">{r.line}</td>
+                              {preview.fields.map((k) => (
+                                <td key={k} className="px-2 py-1 max-w-[180px] truncate" title={r.values[k] ?? ""}>{r.values[k] || <span className="text-muted-foreground">—</span>}</td>
+                              ))}
+                              <td className="px-2 py-1 whitespace-nowrap">
+                                {r.status === "ok" ? "Yes" : r.status === "no_url" ? <span className="text-amber-700">No URL, left out</span> : <span className="text-amber-700">Not a profile URL</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {(preview.noUrl > 0 || preview.notProfile > 0) && (
+                      <p className="text-[11.5px] text-amber-700">
+                        {preview.noUrl > 0 ? `${preview.noUrl.toLocaleString()} row${preview.noUrl === 1 ? " has" : "s have"} no URL in this column and will be left out. ` : ""}
+                        {preview.notProfile > 0 ? `${preview.notProfile.toLocaleString()} ${preview.notProfile === 1 ? "is" : "are"} not a LinkedIn profile URL and will be marked invalid. ` : ""}
+                        If that is a lot, check the URL column above.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}

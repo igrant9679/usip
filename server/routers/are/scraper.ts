@@ -22,6 +22,7 @@ import { router } from "../../_core/trpc";
 import { managerProcedure, workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
+import { queueIdentityColumns } from "../../services/are/queueIdentity";
 import { safeFetch } from "../../services/scraper/ssrfGuard";
 import { findSuppression } from "../../services/suppression";
 
@@ -447,8 +448,9 @@ export async function saveScrapeJobAndQueue(
   // The engine pre-filters its own discovery; this is the choke point that
   // covers every other caller, so a new ingest path cannot skip the rule.
   if (campaignId && prospects.length > 0 && !opts.identityChecked) {
-    const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
-    const index = await workspaceQueueIdentityIndex(workspaceId);
+    const { queueIdentityIndexFor, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
+    // Only the rows sharing a key with this batch, by index (A34).
+    const index = await queueIdentityIndexFor(workspaceId, prospects);
     const before = prospects.length;
     // Claimed as each row is kept (audit A12): the same person twice in one
     // batch — two spellings of a profile URL, an address in two cases — both
@@ -564,6 +566,8 @@ export async function saveScrapeJobAndQueue(
         companySize: cleanScrapedField(p.companySize, 40),
         industry: cleanScrapedField(p.industry, 80),
         geography: cleanScrapedField(p.geography, 120),
+        // Its stored keys, so the next check finds it by index (A34).
+        ...queueIdentityColumns({ email, linkedinUrl: p.linkedinUrl && !isPlaceholderToken(p.linkedinUrl) ? String(p.linkedinUrl) : undefined, firstName: cleanName(p.firstName, 80), lastName: cleanName(p.lastName, 80), companyName: cleanScrapedField(p.companyName, 200), companyDomain: usableDomainOrNull(p.companyDomain) ?? undefined }),
         // int column 0-100 — round and clamp (scores can arrive as floats)
         icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
         enrichmentStatus: "pending" as const,
@@ -576,6 +580,7 @@ export async function saveScrapeJobAndQueue(
         ...((p as { __territoryReject?: string }).__territoryReject
           ? {
               rejectedAt: new Date(),
+              rejectionKind: "territory" as const,
               rejectionReason: String((p as { __territoryReject?: string }).__territoryReject),
             }
           : {}),

@@ -57,10 +57,9 @@ const KEPT_MODULES: Record<string, string> = {
   "client/src/components/ui/": "the vendored shadcn kit: an unused piece costs nothing (tree-shaken) and its CLI adds pieces back by name",
   "client/src/components/usip/enrichment/EnrichmentJobDrawer.tsx":
     "unmounted on purpose (audit P89, 2026-11-06) until a job backend can save what it builds; enrichmentJobDrawer.test.ts pins its flow rules",
-  "client/src/pages/usip/ProspectImportDialog.tsx":
-    "mounted nowhere since the Prospects list was retired, and the only caller of prospectImports.*; People and import belong to batch CRMP, in flight on 2026-11-07, so it is left for the merge",
+  // ProspectImportDialog was listed here until batch CRMP deleted it with its router (merged 2026-11-07).
   "server/routers/are/signalEnhancement.ts":
-    "only a test imports it (its output is not read: researchCoverage.test.ts); the Revenue Engine belongs to batch ARES, in flight on 2026-11-07, so it is left for the merge",
+    "only a test imports it (its output is not read: researchCoverage.test.ts); batch ARES kept it when it landed on 2026-11-07, so it is recorded rather than deleted over that batch's decision",
 };
 
 function unimportedModules(): string[] {
@@ -123,8 +122,8 @@ const OPERATOR = "operator API, documented in .claude/skills/velocity-operator/r
 const OWNER_TOOL = (what: string) => `owner clean-up run over the API: ${what}`;
 const NO_SCREEN = (what: string) => `back end of ${what}, whose screen is not built; kept to be wired, not rebuilt`;
 const WIRE = (gap: string) => `wire candidate: ${gap}`;
-const ARES = "Revenue Engine area (batch ARES, in flight on 2026-11-07): left for the merge";
-const CRMP = "People, companies, leads and import area (batch CRMP, in flight on 2026-11-07; crm.ts is its router): left for the merge";
+const ARES = "Revenue Engine area (batch ARES, which landed while this sweep ran on 2026-11-07): not swept here, left to that area";
+const CRMP = "People, companies, leads and import area (batch CRMP, which landed while this sweep ran on 2026-11-07; crm.ts is its router): not swept here, left to that area";
 const THIS_WEEK = (sha: string, why: string) => `changed this week (${sha}); ${why}`;
 
 const NO_CLIENT_CALLER: Record<string, string> = {
@@ -139,7 +138,7 @@ const NO_CLIENT_CALLER: Record<string, string> = {
     "companies.inferFirmographics", "companies.firmographicStatus", "companies.normalizeNames", "companies.runLogoBackfill", "companies.runNameVerification",
     "companies.undoAssociation", "companies.repairBrandVerification", "accounts.hierarchy", "accounts.create", "accounts.update", "accounts.bulkDelete",
     "contacts.create", "contacts.update", "contacts.bulkDelete", "contacts.bulkAddToSequence", "opportunities.get", "opportunities.listRoles",
-    "territories.update", "crmTerritoryRules.update", "imports.getImport", "prospects.normalizeNames", "prospects.normalizeCompanyNames",
+    "territories.update", "crmTerritoryRules.update", "prospects.normalizeNames", "prospects.normalizeCompanyNames",
     "prospects.delete", "prospects.promoteToContact", "prospects.promoteToLead", "prospects.findContactInfo", "prospects.backfillCompanies",
     "prospects.reoonBalance",
   ].map((p) => [p, CRMP])),
@@ -151,6 +150,9 @@ const NO_CLIENT_CALLER: Record<string, string> = {
     "scraper.scrapeNews", "scraper.scrapeIndustryEvents", "scraper.runFullScrape", "engine.enrollOnly", "metrics.abVariants", "metrics.thresholds",
   ].map((p) => [`are.${p}`, ARES])),
   "tasks.update": WIRE("TasksV2's row menu has Complete, Snooze and Delete but no Edit"),
+  // Batch CRMP's, merged 2026-11-07.
+  "imports.discard": THIS_WEEK("f504f4dd", "batch CRMP added it to throw away a pending upload; its control is that pipeline's to wire"),
+  "prospects.findContactInfoBatch": "called slice by slice by the bulk job, as the person who started it (services/bulkByFilter.ts runChunk)",
   "meetings.propose": ASSISTANT,
   "meetings.reschedule": ASSISTANT,
   "meetings.cancelSentInvites": OWNER_TOOL("admin only, dry run by default (2026-10-06)"),

@@ -317,6 +317,26 @@ export const companiesRouter = router({
       return bulkEnrichCompanies(ctx.workspace.id, input.accountIds, ctx.user.id);
     }),
 
+  /**
+   * Enrich every company matching the search (audit 2026-10-20, F30), as a
+   * job through bulkEnrich a slice at a time. `expectedTotal` is the count
+   * the confirmation stated; a different count now refuses. No vendor is
+   * called: enrichment reads the evidence already on file.
+   */
+  bulkByFilter: workspaceProcedure
+    .input(z.object({ action: z.enum(["enrich"]), filters, expectedTotal: z.number().int().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      const { matchingCompanyIds } = await import("../services/company/searchService");
+      const { ids, total } = await matchingCompanyIds(ctx.workspace.id, input.filters ?? {});
+      if (total !== input.expectedTotal) {
+        throw new TRPCError({ code: "CONFLICT", message: `${total.toLocaleString()} companies match these filters now, not ${input.expectedTotal.toLocaleString()}. Check the count and confirm again.` });
+      }
+      if (total > ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: `This acts on at most ${ids.length.toLocaleString()} companies at a time; ${total.toLocaleString()} match. Narrow the filters.` });
+      const { queueBulk } = await import("../services/bulkByFilter");
+      return queueBulk({ workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "companies", action: "enrich", ids, scope: { filter: input.filters ?? {}, matched: total } });
+    }),
+
   /* ── merge ── */
   duplicates: workspaceProcedure.query(async ({ ctx }) => findDuplicateAccounts(ctx.workspace.id)),
 

@@ -190,8 +190,12 @@ describe("preview and import cannot disagree about what is required", () => {
   const src = read("server/routers/imports.ts");
 
   it("both procedures derive the set from the same destination-keyed helper", () => {
-    const calls = src.match(/requiredFieldKeysFor\(input\.destination\)/g) ?? [];
+    // 2026-11-07 (CRMP, F32): both go through requiredFieldsOf, which is the
+    // destination's set plus the preset's own (LeadRocks needs a profile URL),
+    // so the two still derive it from one helper and agree.
+    const calls = src.match(/requiredFieldsOf\(input\.destination, read\)/g) ?? [];
     expect(calls.length).toBe(2); // validateRows + commit, and nothing hardcoded
+    expect(src).toContain("return Array.from(new Set([...requiredFieldKeysFor(destination), ...r.presetRequired]));");
   });
 
   it("both procedures check the mapping, not just the preview", () => {

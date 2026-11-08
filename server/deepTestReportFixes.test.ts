@@ -66,8 +66,14 @@ describe("reply counts mean replies (report #2)", () => {
   const src = read("server/routers/conversations.ts");
 
   it("stats scopes to replies to something we sent", () => {
+    // 2026-11-07 (audit 2026-10-20, F44): the count is the metrics module's
+    // replySummary, over genuineRepliesWhere — the shared scope.
     const { text } = slice(src, "stats: workspaceProcedure", "\n  detail");
-    expect(text).toContain("genuineReplyScope()");
+    expect(text).toContain("replySummary(db, ctx.workspace.id)");
+    const m = read("server/services/activityMetrics.ts");
+    const fn = m.slice(m.indexOf("export async function replySummary("), m.indexOf("/* ── Daily series"));
+    expect(fn).toContain(".where(genuineRepliesWhere(ws))");
+    expect(m.slice(m.indexOf("export function genuineRepliesWhere("), m.indexOf("export async function countReplies("))).toContain("genuineReplyScope()");
   });
 
   it("list scopes the same way, so header and rows agree", () => {

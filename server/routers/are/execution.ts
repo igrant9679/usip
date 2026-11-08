@@ -51,6 +51,7 @@ import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
 import { normaliseAreSuppression, suppressionPersonId } from "../../services/suppression";
+import { affectedRowsOf } from "../../_core/claim";
 
 /* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
 
@@ -454,7 +455,8 @@ export async function processSignal(
                 // The person, not only this address (F7).
                 prospectId: prospect.personProspectId ?? null,
               }) as never);
-              await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
+              // A kind and a reason, so the Rejections tab says why (F19).
+              await db.update(prospectQueue).set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "suppression", rejectionReason: "On suppression list — added after their reply asked to stop" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
               actionTaken = "added_suppression";
             }
             break;
@@ -533,7 +535,11 @@ export async function processSignal(
         // An unsubscribe is the person's; a bounce is only the address's (F7).
         prospectId: signalType === "email_bounce" ? null : prospect.personProspectId ?? null,
       }) as never);
-      await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
+      // A kind and a reason, so the Rejections tab says why (F19).
+      await db.update(prospectQueue).set({
+        sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "suppression",
+        rejectionReason: signalType === "email_bounce" ? "On suppression list — their email bounced" : "On suppression list — they unsubscribed",
+      }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
       actionTaken = "added_suppression";
     }
   }
@@ -764,7 +770,7 @@ export const executionRouter = router({
       // any row back to scheduled — a SENT one included, which then went again.
       const res = await db.update(areExecutionQueue).set({ status: "scheduled", failureReason: null })
         .where(and(eq(areExecutionQueue.id, input.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "paused")));
-      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(res) !== 1) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only a paused step can be resumed." });
       }
       return { success: true };

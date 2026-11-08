@@ -8,7 +8,8 @@
  */
 import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { QueryError, Shell, useAccentColor } from "@/components/usip/Shell";
+import { isNotFoundError } from "@/components/usip/QueryState";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 // AccountDetail (the legacy second company page over the same row) retired
 // in phase 5: its opportunities, custom fields, tasks, activities, notes and
@@ -55,11 +56,12 @@ export default function CompanyProfile() {
   const id = Number(params?.id);
   const utils = trpc.useUtils();
 
-  const { data: c, isLoading } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
+  const { data: c, isLoading, error, refetch } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   // This company's deals, asked of the server; it loaded every deal in the
   // workspace and filtered here (audit 2026-10-20, R66).
-  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id }, { enabled: Number.isFinite(id) && id > 0 });
+  // The list is capped at 200 unless asked (X4.1); a company page asks for up to 1,000 of its own deals.
+  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id, limit: 1000 }, { enabled: Number.isFinite(id) && id > 0 });
   const opps = (companyOpps ?? []) as any[];
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
@@ -81,6 +83,8 @@ export default function CompanyProfile() {
 
   const hq = useMemo(() => c ? [c.hqCity, c.hqState, c.hqCountry].filter(Boolean).join(", ") || c.region || null : null, [c]);
 
+  // A failed load and a missing company are different facts (audit X1.6).
+  if (error && !c && !isNotFoundError(error)) return <Shell title="Company"><QueryError what="this company" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
   if (isLoading) return <Shell title="Company"><div className="p-6 space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-lg bg-muted/50 animate-pulse" />)}</div></Shell>;
   if (!c) return <Shell title="Company"><div className="p-10 text-center text-sm text-muted-foreground">Company not found. <button className="text-blue-600 hover:underline" onClick={() => setLocation("/v2/companies")}>Back to companies</button></div></Shell>;
 
@@ -159,6 +163,8 @@ export default function CompanyProfile() {
           <section className="rounded-lg border border-border">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">People at this company ({contacts?.length ?? 0})</div>
+              {/* People filtered to this company, with every People filter and bulk action (audit 2026-10-20, F36). */}
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setLocation(`/v2/people?companyId=${id}`)}>Open in People</Button>
             </div>
             {contacts && contacts.length > 0 ? (
               <div className="overflow-x-auto"><table className="w-full text-sm">

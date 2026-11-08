@@ -95,7 +95,6 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   attention: { group: "Daily", description: "What needs a human" },
   mindmaps: { group: "Analytics", description: "Planning canvases" },
   discovery: { group: "Prospecting", description: "Find Prospects searches" },
-  prospectImports: { group: "Prospecting", description: "CSV import jobs" },
   dataHealth: { group: "Prospecting", description: "Duplicates, gaps and import audits" },
   emailVerification: { group: "Prospecting", description: "Email verification jobs" },
   helpCenter: { group: "Help", description: "Help articles (read)" },
@@ -110,7 +109,10 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
 // send the name does not say; like proposals.sendToClient, it stays a human's.
 export const DENY_LEAF = /(send|dispatch|message|reply(?!Class)|delete|remove|purge|wipe|destroy|reset|password|invite|apiKey|secret|token|credential|transfer|archiveWorkspace|acceptByToken|submit$|book$|byToken|import|approveExtension|denyExtension)/i;
 /** Whole paths that are read-only public surfaces or otherwise out of scope. */
-export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume))/;
+// Bulk actions on "all matching" and People's bulk enrich (2026-11-07, F30,
+// R66) are a person's click with a stated count: one can delete thousands of
+// records or spend vendor credits on thousands of people.
+export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume)|(prospects|leads|companies)\.bulkByFilter|prospects\.enrichFullBulk)/;
 
 /**
  * The approval-queue sends (owner decision 2026-09-09: "open the

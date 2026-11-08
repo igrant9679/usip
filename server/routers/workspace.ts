@@ -229,33 +229,28 @@ export const workspaceRouter = router({
   }),
 
   /**
-   * Honest 7-day daily series for the Home hero sparklines: activities
-   * logged, meetings scheduled, and inbound replies received per UTC day.
+   * Honest 7-day daily series for the Home hero sparklines: activities logged,
+   * meetings with a time, and genuine replies received, per WORKSPACE day
+   * (audit 2026-10-20, F44). They were UTC days, so an Eastern evening's
+   * replies sat on tomorrow's bar and "Meetings today" read the UTC day.
+   * The definitions are the metrics module's (activitiesPerDay,
+   * meetingsPerDay, repliesPerDay).
    */
   trend7d: workspaceProcedure.query(async ({ ctx }) => {
     const { getDb } = await import("../db");
-    const { sql } = await import("drizzle-orm");
+    const { dailyCounts } = await import("../services/activityMetrics");
+    const { getWorkspaceTimezone } = await import("../services/workspaceTimezone");
     const db = await getDb();
     const empty = Array.from({ length: 7 }, () => 0);
     if (!db) return { activities: empty, meetings: empty, replies: empty };
-    const since = new Date(Date.now() - 6 * 86_400_000);
-    since.setUTCHours(0, 0, 0, 0);
-    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
-    const days = Array.from({ length: 7 }, (_, i) => dayKey(new Date(since.getTime() + i * 86_400_000)));
-    const bucket = async (table: string, dateCol: string, extraWhere = ""): Promise<number[]> => {
-      const rows = (await db.execute(
-        sql.raw(`SELECT DATE(${dateCol}) d, COUNT(*) n FROM \`${table}\` WHERE workspaceId = ${Number(ctx.workspace.id)} AND ${dateCol} >= '${since.toISOString().slice(0, 19).replace("T", " ")}'${extraWhere ? ` AND ${extraWhere}` : ""} GROUP BY DATE(${dateCol})`),
-      )) as unknown as [Array<{ d: string | Date; n: number }>];
-      const byDay = new Map((rows[0] ?? []).map((r) => [dayKey(new Date(r.d)), Number(r.n)]));
-      return days.map((d) => byDay.get(d) ?? 0);
-    };
-    const { GENUINE_REPLY_SQL } = await import("../services/replyScope");
+    const nowMs = Date.now();
+    const tz = await getWorkspaceTimezone(ctx.workspace.id, nowMs);
     const [activities, meetings, replies] = await Promise.all([
-      bucket("activities", "occurredAt"),
-      bucket("meetings", "scheduledAt"),
+      dailyCounts(db, ctx.workspace.id, "activities", 7, tz, nowMs),
+      dailyCounts(db, ctx.workspace.id, "meetings", 7, tz, nowMs),
       // Genuine replies only — unscoped, this sparkline counted every synced
       // inbound message (the owner's private mail) as a "reply".
-      bucket("email_replies", "receivedAt", GENUINE_REPLY_SQL),
+      dailyCounts(db, ctx.workspace.id, "replies", 7, tz, nowMs),
     ]);
     return { activities, meetings, replies };
   }),

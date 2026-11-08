@@ -62,6 +62,8 @@ export type ViewFilters = {
   hasLinkedin?: boolean;
   tiers?: TierValue[];
   seniorities?: string[];
+  /** One company's people (?companyId=, audit 2026-10-20, F36). */
+  companyId?: number;
 };
 
 export type ViewConfig = {
@@ -160,6 +162,7 @@ export function normalizeViewConfig(raw: unknown): ViewConfig {
   if (tiers.length) filters.tiers = tiers;
   const seniorities = stringsOf(rawF.seniorities, 40, 12);
   if (seniorities.length) filters.seniorities = seniorities;
+  if (Number.isInteger(rawF.companyId) && rawF.companyId > 0) filters.companyId = rawF.companyId;
 
   return {
     // .slice() so a restored view never hands the shared DEFAULT_COLUMNS array
