@@ -23,6 +23,7 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { Link, useSearch } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -396,6 +397,8 @@ export default function EmailsV2() {
   return (
     <Shell title="Emails">
       <div data-tour-id="emails-list" className="flex flex-col h-full min-h-0">
+        {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+        <SendingStatusBar surface="emails" className="shrink-0" />
         <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Mail className="size-4" style={{ color: accent }} />

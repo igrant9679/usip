@@ -9,6 +9,7 @@
  *   5. Live signal feed — colour-coded by sentiment with action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { AreSubNav } from "@/components/usip/are/AreSubNav";
 import { areAutonomyLabel } from "@shared/areCampaignLabels";
 import { RoutingSuggestions } from "@/components/usip/RoutingSuggestions";
@@ -344,6 +345,8 @@ export default function AREHub() {
         </Link>
       </PageHeader>
       <AreSubNav />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="are" />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
 

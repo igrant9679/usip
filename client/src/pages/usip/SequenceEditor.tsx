@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -225,6 +226,8 @@ export default function SequenceEditor() {
   return (
     <Shell title={seq.name}>
       <div className="flex flex-col h-full min-h-0">
+        {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+        <SendingStatusBar surface="sequences" className="shrink-0" />
         {/* header */}
         <div className="relative shrink-0 px-4 pt-2.5 pb-0 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />

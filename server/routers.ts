@@ -39,6 +39,7 @@ import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { emailActivityRouter } from "./routers/emailActivity";
 import { sequenceTimelineRouter } from "./routers/sequenceTimeline";
+import { sendingStatusRouter } from "./routers/sendingStatus";
 import { linkedinLimitsRouter } from "./routers/linkedinLimits";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
@@ -130,6 +131,8 @@ export const appRouter = router({
   sequences: sequencesRouter,
   // A sequence's real send dates, projected with the engine's rules (audit 2026-10-20, U4).
   sequenceTimeline: sequenceTimelineRouter,
+  // What is stopping sends right now, for the status bar (audit 2026-10-20, U1).
+  sendingStatus: sendingStatusRouter,
   emailDrafts: emailDraftsRouter,
   emailActivity: emailActivityRouter,
   linkedinLimits: linkedinLimitsRouter,
