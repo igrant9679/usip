@@ -19,7 +19,7 @@
  * proposal yet — and run once per boot. A draft is never sent by anything.
  */
 import { and, asc, desc, eq, inArray, isNull, ne } from "drizzle-orm";
-import { accounts, opportunities, proposals, quoteLineItems, quotes, workspaces } from "../../drizzle/schema";
+import { accounts, opportunities, proposals, quoteLineItems, quotes } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { centsToDecimal, computeQuoteTotals } from "@shared/quoteTotals";
 import { insertIdOf } from "../_core/insertId";
@@ -71,11 +71,13 @@ export async function foldQuotesIntoProposals(db: Db, opts: { workspaceId?: numb
       const [acct] = opp.accountId
         ? await db.select({ name: accounts.name }).from(accounts).where(and(eq(accounts.id, opp.accountId), eq(accounts.workspaceId, workspaceId))).limit(1)
         : [];
-      const [ws] = await db.select({ ownerUserId: workspaces.ownerUserId }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
       const newest = group[group.length - 1];
+      // The author is whoever priced it, else the deal's owner. (Never the
+      // workspace's raw owner: an unattended path does not read that.)
+      const author = newest.createdByUserId ?? group.find((q) => q.createdByUserId != null)?.createdByUserId ?? opp.ownerUserId ?? 0;
       const res = await db.insert(proposals).values({
         workspaceId,
-        createdBy: newest.createdByUserId ?? opp.ownerUserId ?? ws?.ownerUserId ?? 0,
+        createdBy: author,
         title: `${opp.name} — pricing`.slice(0, 255),
         clientName: (acct?.name ?? opp.name).slice(0, 255),
         accountId: opp.accountId ?? null,
