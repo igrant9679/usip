@@ -56,6 +56,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { usePageVisible } from "@/hooks/usePageVisible";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { RejectProspectDialog, type RejectTarget } from "@/components/usip/are/RejectProspectDialog";
 import { ENRICHMENT_STATES, PROSPECT_VIEW_KEYS, PROSPECT_VIEW_LABEL, type EnrichmentState, type ProspectView } from "@shared/areProspectViews";
@@ -276,6 +277,8 @@ const REJECTION_PAGE = 100;
 const PROSPECT_PAGE = 100;
 /** Sequences per page on the Sequences tab (A44): each row carries its whole sequence. */
 const SEQUENCE_PAGE = 50;
+/** How often "Approve all (N)" re-counts while the Prospects tab is in view (U24). */
+const APPROVAL_POLL_MS = 15_000;
 
 const REJECT_TEMPLATES = [
   "Wrong industry",
@@ -411,17 +414,30 @@ function useCampaignSync(campaignId: number) {
       // Per-prospect data
       utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
       utils.are.prospects.listSequences.invalidate({ campaignId });
+      // Rows read by id: the dossier of someone off this page, the funnel's list.
+      utils.are.prospects.byIds.invalidate({ campaignId });
       // Inline sequence-progress timelines (per-step representative rows)
       utils.are.execution.getStepStates.invalidate({ campaignId });
       // Step-performance tab (was never being invalidated — root cause of
       // the "A/B tab out of sync" report)
       utils.are.prospects.getAbVariants.invalidate({ campaignId });
+      utils.are.prospects.getDispatches.invalidate({ campaignId });
+      utils.are.metrics.stepFunnel.invalidate({ campaignId });
       // Logs tab
       utils.are.engine.getLogs.invalidate({ campaignId });
       // Campaign-level (header counters)
       utils.are.campaigns.get.invalidate({ id: campaignId });
       // Rejection stats (used by Rejections tab)
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+      // "Approve all (N)", the stall panel's gates and the dossier: each
+      // changes with an approve, a reject, an enrich or a generate, and none
+      // was refreshed after one (audit 2026-10-20, A74).
+      utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
+      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+      utils.are.prospects.getIntelligence.invalidate();
+      utils.are.execution.getSignalLog.invalidate({ campaignId });
+      utils.are.execution.getSignalCounts.invalidate({ campaignId });
+      utils.attention.summary.invalidate();
     },
   };
 }
@@ -1400,7 +1416,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
       {/* Side drawer — full sequence details, edit, evidence */}
       <Sheet open={drawerRow != null} onOpenChange={(o) => !o && setDrawerProspectId(null)}>
         <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
-          {drawerRow && <SequenceDrawer row={drawerRow} campaignGapDays={(campaign?.stepGapDays as number | undefined) ?? 7} onClose={() => setDrawerProspectId(null)} refetch={refetch} />}
+          {drawerRow && <SequenceDrawer row={drawerRow} campaignGapDays={(campaign?.stepGapDays as number | undefined) ?? 7} onClose={() => setDrawerProspectId(null)} refetch={async () => { invalidateAll(); await refetch(); }} />}
         </SheetContent>
       </Sheet>
 
@@ -2155,6 +2171,27 @@ function ARECampaignDetailPage() {
   const validId = Number.isInteger(campaignId) && campaignId > 0;
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
+  // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
+  const [tab, setTab] = useState("prospects");
+  /**
+   * Each tab's queries start the first time it is opened (audit 2026-10-20,
+   * U24). The page used to read the signal feed, the step table, every
+   * dispatch, the scrape jobs, the rejections and their history on load,
+   * whichever tab was showing. A tab once opened keeps its data (and keeps
+   * refreshing after changes); the badges on the tab strip come from counts
+   * the page already reads.
+   */
+  const [openedTabs, setOpenedTabs] = useState<ReadonlySet<string>>(() => new Set(["prospects"]));
+  useEffect(() => {
+    setOpenedTabs((s) => {
+      if (s.has(tab)) return s;
+      const next = new Set(s);
+      next.add(tab);
+      return next;
+    });
+  }, [tab]);
+  const opened = (t: string) => validId && (tab === t || openedTabs.has(t));
+  const pageVisible = usePageVisible();
   // A page of the review queue, and the counts for all of it (A45). The tab
   // opens on the rows that still need a decision, so an approved prospect
   // leaves the list instead of riding along with the next batch (tracker
@@ -2173,26 +2210,37 @@ function ARECampaignDetailPage() {
   useClearOnChange(prospectFilter, () => setProspectPage(1));
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
     { campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
-    { placeholderData: (prev) => prev },
+    { placeholderData: (prev) => prev, enabled: opened("prospects") },
   );
-  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter });
+  // Read on load whatever tab is open: the strip's Prospects and Rejections
+  // badges and the staged count come from it (U24, A26).
+  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter }, { enabled: validId });
   const prospectPages = Math.max(1, Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE));
   const [rejectTarget, setRejectTarget] = useState<RejectTarget | null>(null);
   const { invalidateAll: invalidateCampaign } = useCampaignSync(campaignId);
   // The no-email door (2026-09-16): staged candidates the email-finder is
   // still working. Hidden from the list above by the server; surfaced only
-  // as a count so the funnel stays legible.
-  const { data: sourcingRows } = trpc.are.prospects.list.useQuery({ campaignId, sequenceStatus: "sourcing", limit: 100 });
+  // as a count so the funnel stays legible. The count is statusCounts' own
+  // tally of every staged row (audit 2026-10-20, A26): it was the length of a
+  // 100-row list, so a campaign with 400 staged said "100 finding email" and
+  // "queue full" read as a lie.
+  const stagedCount = queueCounts?.byStatus?.sourcing ?? 0;
   // "Approve all" is server-scoped: this tab loads 100 rows and the bulk bar
   // caps at 200 ids, so neither could honestly say "all" on a big campaign.
-  const approvable = trpc.are.campaigns.pendingApprovalCount.useQuery({ campaignId }, { refetchInterval: 15000 });
+  // It polls only while someone can see the button (U24): on the Prospects
+  // tab, in a browser tab that is showing. Hidden, it stops — by design here,
+  // not by the library's default — and refreshes on return.
+  const approvable = trpc.are.campaigns.pendingApprovalCount.useQuery({ campaignId }, {
+    enabled: opened("prospects"),
+    refetchInterval: tab === "prospects" && pageVisible ? APPROVAL_POLL_MS : false,
+    refetchIntervalInBackground: false,
+  });
   const approveAllPending = trpc.are.campaigns.approveAllPending.useMutation({
     onSuccess: (r) => {
       toast.success(`${r.approved} ${r.approved === 1 ? "person" : "people"} approved — the engine writes their sequences on its next tick`);
-      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
-      utils.attention.summary.invalidate();
+      // Everything an approval moves: the list, its counts, "Approve all",
+      // the header, the stall panel and the attention badge (A74).
+      invalidateCampaign();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2213,12 +2261,13 @@ function ARECampaignDetailPage() {
     limit: 200,
     ...(signalType !== "all" ? { signalType } : {}),
     ...(signalSearchDebounced ? { search: signalSearchDebounced } : {}),
-  });
+  }, { enabled: opened("signals") });
   // Signals are events; the selection is of the PEOPLE behind them (one person may have several signals).
   const signalPersonIds = useMemo(() => Array.from(new Set(((signals ?? []) as Array<{ prospectQueueId: number }>).map((x) => x.prospectQueueId))), [signals]);
   const sigSel = useRowSelection(signalPersonIds);
-  const { data: signalCounts } = trpc.are.execution.getSignalCounts.useQuery({ campaignId });
-  const { data: stepFunnel } = trpc.are.metrics.stepFunnel.useQuery({ campaignId });
+  // The Signals tab's badge: one grouped count, read on load like the other badges.
+  const { data: signalCounts } = trpc.are.execution.getSignalCounts.useQuery({ campaignId }, { enabled: validId });
+  const { data: stepFunnel } = trpc.are.metrics.stepFunnel.useQuery({ campaignId }, { enabled: opened("ab") });
   /**
    * The message preview modal, opened from the Signals feed and from the
    * Step performance cards and Sankey. Both used to be dead ends: they
@@ -2251,12 +2300,12 @@ function ARECampaignDetailPage() {
     () => (signalCounts ?? []).reduce((n, c) => n + c.count, 0),
     [signalCounts],
   );
-  const { data: abVariants } = trpc.are.prospects.getAbVariants.useQuery({ campaignId });
+  const { data: abVariants, isLoading: loadingAb } = trpc.are.prospects.getAbVariants.useQuery({ campaignId }, { enabled: opened("ab") });
   // One row per SENT message. The per-step aggregate above still feeds the
   // Sankey; the cards below are the individual dispatches it rolls up.
-  const { data: dispatches } = trpc.are.prospects.getDispatches.useQuery({ campaignId });
-  const { data: scrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 });
-  const { data: reevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId });
+  const { data: dispatches } = trpc.are.prospects.getDispatches.useQuery({ campaignId }, { enabled: opened("ab") });
+  const { data: scrapeJobs, isLoading: loadingScrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 }, { enabled: opened("scraper") });
+  const { data: reevalHistory, isLoading: loadingReevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId }, { enabled: opened("rejections") });
   const { data: csvData, refetch: fetchCsv } = trpc.are.prospects.exportRejections.useQuery(
     { campaignId },
     { enabled: false }
@@ -2268,8 +2317,9 @@ function ARECampaignDetailPage() {
           ? `Re-qualified! New ICP score: ${d.newScore}`
           : `Still below threshold. New score: ${d.newScore}`
       );
-      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
+      // A re-qualified prospect moves from Rejections to review, which moves
+      // the counts, "Approve all" and the header too (A74).
+      invalidateCampaign();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2331,9 +2381,8 @@ function ARECampaignDetailPage() {
         : `Re-evaluated ${done} prospects — none met the threshold (${reEvalJob.threshold}).`,
     );
     if (j.status === "done" && done > 0 && j.requalified === 0) setShowIcpSuggestion(true);
-    utils.are.prospects.getRejectionStats.invalidate({ campaignId });
     utils.are.prospects.getReevalHistory.invalidate({ campaignId });
-    utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
+    invalidateCampaign();
   }, [reEvalJobState]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hiding the button is UX; the boundary is the gate on the query itself.
   // This CSV is rendered SERVER-side (are.prospects.exportRejections), so
@@ -2370,8 +2419,6 @@ function ARECampaignDetailPage() {
     { campaignId, prospectIds: [selectedProspectId ?? 1] },
     { enabled: validId && selectedProspectId !== null && !selectedOnPage },
   );
-  // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
-  const [tab, setTab] = useState("prospects");
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
   // undefined is "not edited": null is a real value, Off (A16). With null as
@@ -2418,7 +2465,7 @@ function ARECampaignDetailPage() {
   useClearOnChange({ reasonFilter, kindFilter }, () => setRejPage(1));
   const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
     { campaignId, reason: reasonFilter, kind: kindFilter, page: rejPage, perPage: REJECTION_PAGE },
-    { placeholderData: (prev) => prev },
+    { placeholderData: (prev) => prev, enabled: opened("rejections") },
   );
   const rejectionStats = rejectionQ.data;
   const rejPages = Math.max(1, Math.ceil((rejectionStats?.itemsTotal ?? 0) / REJECTION_PAGE));
@@ -2489,6 +2536,11 @@ function ARECampaignDetailPage() {
     onSuccess: () => {
       toast.success("Campaign settings saved");
       utils.are.campaigns.get.invalidate({ id: campaignId });
+      // The cap, the target and the sources are what the stall panel and the
+      // source health read (A74).
+      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
+      utils.are.campaigns.list.invalidate();
       setThresholdDraft(undefined);
       setMinConfDraft(null);
       setS2oEnabled(null);
@@ -2506,6 +2558,9 @@ function ARECampaignDetailPage() {
         toast.success(`Moved ${plan.rowsMoved} pending step${plan.rowsMoved === 1 ? "" : "s"} across ${plan.prospectsTouched} prospect${plan.prospectsTouched === 1 ? "" : "s"} onto the ${plan.gapDays}-day cadence`);
         utils.are.campaigns.get.invalidate({ id: campaignId });
         utils.are.execution.getQueue.invalidate();
+        // Moved steps are what the Sequences tab's timelines draw (A74).
+        utils.are.execution.getStepStates.invalidate({ campaignId });
+        utils.are.campaigns.stallReasons.invalidate({ campaignId });
       }
     },
     onError: (e) => toast.error(e.message),
@@ -2518,6 +2573,9 @@ function ARECampaignDetailPage() {
       toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
       utils.are.campaigns.get.invalidate({ id: campaignId });
       utils.are.campaigns.list.invalidate();
+      // "Campaign not active" is the stall panel's first answer (A74).
+      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+      utils.attention.summary.invalidate();
     },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
@@ -2531,7 +2589,8 @@ function ARECampaignDetailPage() {
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
       toast.success(`Enrichment started for ${d.started} prospects`);
-      setTimeout(() => { utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate(); }, 3000);
+      // Enriched rows move into "Approve all" and the stall panel too (A74).
+      setTimeout(invalidateCampaign, 3000);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2571,16 +2630,17 @@ function ARECampaignDetailPage() {
       toast.error(`${(e as Error).message}${totals.imported > 0 || totals.skippedDuplicates > 0 ? `. Before it stopped: ${importSummary(totals)}` : ""}`, { duration: 10000 });
     } finally {
       setImporting(false);
-      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
-      utils.are.campaigns.get.invalidate({ id: campaignId });
+      invalidateCampaign();
     }
   };
 
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
       toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-      utils.are.campaigns.get.invalidate({ id: campaignId });
+      invalidateCampaign();
+      // The job it ran is the first row of "Recent scrape jobs" (A74).
+      utils.are.scraper.listJobs.invalidate({ campaignId });
+      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2743,9 +2803,11 @@ function ARECampaignDetailPage() {
             </TabsTrigger>
             <TabsTrigger value="rejections" className="text-xs gap-1.5">
               <XCircle className="size-3.5" /> Rejections
-              {(rejectionStats?.total ?? 0) > 0 && (
+              {/* Every rejected row, from the counts the page reads anyway (U24):
+                  the tab's own query waits for the tab to open. */}
+              {(queueCounts?.byStatus?.skipped ?? 0) > 0 && (
                 <span className="ml-1 text-[10px] bg-destructive/15 text-red-800 dark:text-red-300 rounded-full px-1.5 py-0.5 font-medium">
-                  {rejectionStats?.total}
+                  {queueCounts!.byStatus.skipped.toLocaleString()}
                 </span>
               )}
             </TabsTrigger>
@@ -2771,13 +2833,13 @@ function ARECampaignDetailPage() {
                     {awaitingApproval} awaiting approval
                   </span>
                 )}
-                {(sourcingRows?.length ?? 0) > 0 && (
+                {stagedCount > 0 && (
                   <span
                     className="flex items-center gap-1"
-                    title="Discovered without an email address. They stay out of the queue while the AI hunts one — admitted the moment an address is found, rejected if every source is exhausted."
+                    title="Discovered without an email address. They stay out of the queue while the AI hunts one — admitted the moment an address is found, rejected if every source is exhausted. They count toward the campaign's target, which is why the queue can be full while this list is short."
                   >
                     <div className="size-1.5 rounded-full bg-sky-400" />
-                    {sourcingRows!.length} finding email
+                    {stagedCount.toLocaleString()} staged, finding email
                   </span>
                 )}
               </div>
@@ -3039,7 +3101,11 @@ function ARECampaignDetailPage() {
                   <span className="text-xs text-muted-foreground">({scrapeJobs.length})</span>
                 )}
               </div>
-              {!scrapeJobs || scrapeJobs.length === 0 ? (
+              {loadingScrapeJobs ? (
+                <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center text-sm">
+                  <Loader2 className="size-4 animate-spin" /> Loading scrape jobs…
+                </div>
+              ) : !scrapeJobs || scrapeJobs.length === 0 ? (
                 <EmptyState
                   icon={Search}
                   title="No scrape jobs yet"
@@ -3093,7 +3159,12 @@ function ARECampaignDetailPage() {
 
           {/* ── Step performance tab (tab id stays "ab") ── */}
           <TabsContent value="ab" className="mt-4">
-            {!abVariants || abVariants.length === 0 ? (
+            {/* Loading is not "no step performance yet" (A74). */}
+            {loadingAb ? (
+              <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center text-sm">
+                <Loader2 className="size-4 animate-spin" /> Loading step performance…
+              </div>
+            ) : !abVariants || abVariants.length === 0 ? (
               <EmptyState
                 icon={Sparkles}
                 title="No step performance yet"
@@ -3861,7 +3932,9 @@ function ARECampaignDetailPage() {
                           <p className="text-[10px] text-muted-foreground">Last {reevalHistory?.length ?? 0} runs for this campaign</p>
                         </div>
                         <div className="max-h-64 overflow-y-auto divide-y">
-                          {(reevalHistory?.length ?? 0) === 0 ? (
+                          {loadingReevalHistory ? (
+                            <p className="text-[11px] text-muted-foreground text-center py-4">Loading runs…</p>
+                          ) : (reevalHistory?.length ?? 0) === 0 ? (
                             <p className="text-[11px] text-muted-foreground text-center py-4">No runs yet</p>
                           ) : reevalHistory!.map((run) => (
                             <div key={run.id} className="px-3 py-2 text-[11px] flex items-start justify-between gap-2">
@@ -4111,7 +4184,7 @@ function ARECampaignDetailPage() {
         onOpenChange={setAddExistingOpen}
         campaignId={campaignId}
         campaignName={campaign.name}
-        onPushed={() => { utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate(); utils.are.campaigns.get.invalidate(); }}
+        onPushed={invalidateCampaign}
       />
 
       {/* ── Import CSV Dialog ── */}

@@ -168,6 +168,15 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
     utils.are.engine.getLogs.invalidate();
     utils.are.campaigns.get.invalidate({ id: campaignId });
     utils.recordLists.list.invalidate();
+    // What a mass approve, reject or enrich also moves, and nothing refreshed
+    // (audit 2026-10-20, A74): "Approve all (N)", the stall panel, the step
+    // table, the signal badge, rows read by id, and the attention badge.
+    utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
+    utils.are.campaigns.stallReasons.invalidate({ campaignId });
+    utils.are.prospects.byIds.invalidate({ campaignId });
+    utils.are.prospects.getAbVariants.invalidate({ campaignId });
+    utils.are.execution.getSignalCounts.invalidate({ campaignId });
+    utils.attention.summary.invalidate();
   };
   // A background run (LLM-backed actions above a small batch) finishes rows
   // one by one after the call returns; keep the tab fresh for a few minutes.
