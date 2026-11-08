@@ -5,7 +5,7 @@
  * tab, plus a manual run trigger.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, like, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
@@ -13,31 +13,63 @@ import { router } from "../../_core/trpc";
 import { managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { enrollApprovedForCampaign, runAreEngine } from "../../areEngine";
 import type { AreEngineResult } from "../../areEngine";
+import { likeContains, logCursor, olderThan } from "../../services/logPaging";
 
 export const engineRouter = router({
-  /** Per-campaign back-end activity log (newest first). */
+  /**
+   * Per-campaign back-end activity log (newest first). `search` matches the
+   * message, and `before` reads the page older than a row already shown
+   * (audit 2026-10-20, U22): the Logs tab stopped at 300 lines, so anything
+   * older scrolled away for good even though 30 days are kept.
+   */
   getLogs: workspaceProcedure
     .input(z.object({
       campaignId: z.number().optional(),
       limit: z.number().min(1).max(500).default(200),
       phase: z.string().optional(),
       level: z.enum(["info", "warn", "error"]).optional(),
+      search: z.string().trim().max(200).optional(),
+      before: logCursor.optional(),
     }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const where = [eq(areEngineLogs.workspaceId, ctx.workspace.id)];
+      const where: SQL[] = [eq(areEngineLogs.workspaceId, ctx.workspace.id)];
       if (input.campaignId !== undefined) {
         where.push(eq(areEngineLogs.campaignId, input.campaignId));
       }
       if (input.phase) where.push(eq(areEngineLogs.phase, input.phase));
       if (input.level) where.push(eq(areEngineLogs.level, input.level));
+      if (input.search) where.push(like(areEngineLogs.message, likeContains(input.search)));
+      if (input.before) where.push(olderThan(areEngineLogs.createdAt, areEngineLogs.id, input.before));
       return db
         .select()
         .from(areEngineLogs)
         .where(and(...where))
-        .orderBy(desc(areEngineLogs.createdAt))
+        // The id breaks createdAt ties, so a page boundary never skips a row.
+        .orderBy(desc(areEngineLogs.createdAt), desc(areEngineLogs.id))
         .limit(input.limit);
+    }),
+
+  /**
+   * When the engine last worked this campaign (U22's last-tick badge): the
+   * latest engine line for it, by when it was last seen — a repeated line
+   * keeps its first createdAt and moves lastSeenAt (migration 0217). Every
+   * tick of an active campaign writes at least its discovery line.
+   */
+  lastTick: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const scope = and(eq(areEngineLogs.workspaceId, ctx.workspace.id), eq(areEngineLogs.campaignId, input.campaignId));
+      const pick = { phase: areEngineLogs.phase, level: areEngineLogs.level, message: areEngineLogs.message, createdAt: areEngineLogs.createdAt, lastSeenAt: areEngineLogs.lastSeenAt };
+      const [newest] = await db.select(pick).from(areEngineLogs).where(scope).orderBy(desc(areEngineLogs.createdAt), desc(areEngineLogs.id)).limit(1);
+      const [repeated] = await db.select(pick).from(areEngineLogs).where(and(scope, isNotNull(areEngineLogs.lastSeenAt))).orderBy(desc(areEngineLogs.lastSeenAt)).limit(1);
+      const seen = (r: typeof newest | undefined) => (r ? new Date(r.lastSeenAt ?? r.createdAt).getTime() : -1);
+      const last = seen(repeated) > seen(newest) ? repeated : newest;
+      if (!last) return { at: null, phase: null, level: null, message: null };
+      return { at: new Date(seen(last)), phase: last.phase, level: last.level, message: last.message };
     }),
 
   /**

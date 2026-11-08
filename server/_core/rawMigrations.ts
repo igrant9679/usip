@@ -5358,6 +5358,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── Batch AREUI (audit 2026-10-20 final pass), migrations 0390–0399 ──
+  // F15: a Revenue Engine campaign can be archived instead of deleted. Nullable
+  // and unset on every existing campaign, so every one reads as not archived;
+  // archiving pauses an active campaign, so it only ever sends less.
+  {
+    name: "0390_are_campaign_archived.sql",
+    statements: [
+      "ALTER TABLE `are_campaigns` ADD COLUMN `archivedAt` timestamp NULL",
+    ],
+  },
+  // F15: when the campaign-finished notices were sent, so each is sent once
+  // (and again only after the campaign has started working again). Nullable,
+  // nothing backfilled: a campaign already finished gets its notice on its
+  // next tick, once.
+  {
+    name: "0391_are_campaign_finished_notices.sql",
+    statements: [
+      "ALTER TABLE `are_campaigns` ADD COLUMN `targetReachedNoticeAt` timestamp NULL",
+      "ALTER TABLE `are_campaigns` ADD COLUMN `sequencesEndedNoticeAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

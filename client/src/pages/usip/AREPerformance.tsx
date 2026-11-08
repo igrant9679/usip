@@ -28,6 +28,12 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { BarChart3, Check, History, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, Undo2, X } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
 import { QueryError } from "@/components/usip/Shell";
+import { useState } from "react";
+import { Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { RANGE_PRESETS, performanceCsv, presetRange, type RangePreset } from "./arePerformanceModel";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -141,12 +147,32 @@ export default function AREPerformance() {
   const appliedRows = (history.data as any[]) ?? [];
   const mode = (optSettings.data as any)?.mode ?? "approval";
 
+  /**
+   * Date and campaign filters (audit 2026-10-20, F20): the server reads them,
+   * in the workspace's own days. The CRM Sequence table takes the dates only —
+   * a sequence is not a campaign — and says so.
+   */
+  const { timezone } = useWorkspaceTimezone();
+  const [preset, setPreset] = useState<RangePreset>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [campaignId, setCampaignId] = useState<number | null>(null);
+  const range = preset === "custom"
+    ? { ...(customFrom ? { from: customFrom } : {}), ...(customTo ? { to: customTo } : {}) }
+    : presetRange(preset, timezone);
+  const scope = { ...range, ...(campaignId ? { campaignId } : {}) };
+  const filtered = Object.keys(scope).length > 0;
+  // Every campaign, archived ones too: a finished campaign's results still count.
+  const liveCampaigns = trpc.are.campaigns.list.useQuery({ limit: 200 }, { retry: false });
+  const archivedCampaigns = trpc.are.campaigns.list.useQuery({ limit: 200, archived: true }, { retry: false });
+  const campaignOptions = [...(liveCampaigns.data ?? []), ...(archivedCampaigns.data ?? [])];
+
   // The Revenue Engine's own steps (audit 2026-10-20, A22). The CRM Sequence
   // table below is a different product and is labelled as one.
-  const areSteps = trpc.are.metrics.areSteps.useQuery(undefined as any, { retry: false });
-  const steps = trpc.are.metrics.sequenceSteps.useQuery(undefined as any, { retry: false });
-  const sources = trpc.are.metrics.sourceYield.useQuery(undefined as any, { retry: false });
-  const replies = trpc.are.metrics.replyMix.useQuery(undefined as any, { retry: false });
+  const areSteps = trpc.are.metrics.areSteps.useQuery(scope, { retry: false, placeholderData: (prev) => prev });
+  const steps = trpc.are.metrics.sequenceSteps.useQuery(range, { retry: false, placeholderData: (prev) => prev });
+  const sources = trpc.are.metrics.sourceYield.useQuery(scope, { retry: false, placeholderData: (prev) => prev });
+  const replies = trpc.are.metrics.replyMix.useQuery(scope, { retry: false, placeholderData: (prev) => prev });
 
   const areStepRows = areSteps.data ?? [];
   const stepRows = steps.data ?? [];
@@ -178,8 +204,30 @@ export default function AREPerformance() {
   // Recommendations count as content: with metrics empty but a proposal pending,
   // the full-page empty state would hide the only actionable thing here.
   const nothingYet =
-    !loading && !metricsError && areStepRows.length === 0 && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
+    !filtered && !loading && !metricsError && areStepRows.length === 0 && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
     && recRows.length === 0 && appliedRows.length === 0;
+
+  /** The filters in words, for the CSV and the empty state. */
+  const scopeLabel = [
+    campaignId ? (campaignOptions.find((c) => c.id === campaignId)?.name ?? `Campaign ${campaignId}`) : "All campaigns",
+    range.from || range.to ? `${range.from ?? "the start"} to ${range.to ?? "today"} (${timezone})` : "all time",
+  ].join(" · ");
+  /** CSV of the four tables as they stand (F20), every cell made spreadsheet-safe. */
+  const exportCsv = () => {
+    const csv = performanceCsv({
+      scopeLabel,
+      areSteps: areStepRows, sources: sourceRows, replies: replyRows, sequenceSteps: stepRows,
+      sourceLabel: (x) => label(SOURCE_LABEL, x), replyLabel: (x) => label(REPLY_LABEL, x),
+    });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `whats-working${campaignId ? `-campaign-${campaignId}` : ""}${range.from ? `-${range.from}` : ""}${range.to ? `-to-${range.to}` : ""}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("What's Working exported");
+  };
 
   return (
     <Shell title="What's Working">
@@ -192,6 +240,40 @@ export default function AREPerformance() {
       <AreSubNav />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+        {/* Filters and export (F20). */}
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="perf-campaign" className="text-xs">Campaign</Label>
+            <select id="perf-campaign" className="h-8 rounded-md border border-input bg-background px-2 text-xs max-w-[240px]"
+              value={campaignId ?? ""} onChange={(e) => setCampaignId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">All campaigns</option>
+              {campaignOptions.map((c) => <option key={c.id} value={c.id}>{c.name}{c.archivedAt ? " (archived)" : ""}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="perf-range" className="text-xs">Dates</Label>
+            <select id="perf-range" className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              value={preset} onChange={(e) => setPreset(e.target.value as RangePreset)}>
+              {RANGE_PRESETS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+            </select>
+          </div>
+          {preset === "custom" && (
+            <>
+              <div className="space-y-1">
+                <Label htmlFor="perf-from" className="text-xs">From</Label>
+                <Input id="perf-from" type="date" className="h-8 text-xs w-36" value={customFrom} max={customTo || undefined} onChange={(e) => setCustomFrom(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="perf-to" className="text-xs">To</Label>
+                <Input id="perf-to" type="date" className="h-8 text-xs w-36" value={customTo} min={customFrom || undefined} onChange={(e) => setCustomTo(e.target.value)} />
+              </div>
+            </>
+          )}
+          <span className="text-[11px] text-muted-foreground pb-2">Days are {timezone}'s.</span>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs ml-auto" disabled={loading || !!metricsError} onClick={exportCsv}>
+            <Download className="size-3.5" /> Export CSV
+          </Button>
+        </div>
         {metricsError && !loading && (
           <QueryError
             compact
@@ -454,7 +536,7 @@ export default function AREPerformance() {
                 <CardTitle className="text-sm flex items-center gap-2">
                   <BarChart3 className="size-4 text-muted-foreground" /> CRM Sequences (not the Revenue Engine)
                   <span className="ml-auto text-[11px] font-normal text-muted-foreground">
-                    Emails sent from the Sequences page; not included in the numbers above
+                    Emails sent from the Sequences page; not included in the numbers above{campaignId ? " — the campaign filter does not apply here, the dates do" : ""}
                   </span>
                 </CardTitle>
               </CardHeader>

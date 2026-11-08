@@ -43,6 +43,26 @@ export const REJECTION_KIND_LABEL: Record<RejectionKind, string> = {
   other: "Other",
 };
 
+/**
+ * The reasons a person picks from when they reject a prospect — one list for
+ * a campaign's Prospects tab, its dossier and the cross-campaign approval
+ * queue (audit 2026-10-20, F16), so the Rejections tab buckets one fact once.
+ * "Outside target geography" is also the engine's territory auto-reject
+ * reason (TERRITORY_REJECT_REASON), on purpose.
+ */
+export const PERSON_REJECT_PRESETS = [
+  "Wrong industry",
+  "Company too small",
+  "Company too large",
+  "Already a customer",
+  "Competitor",
+  "No decision-making authority",
+  "Outside target geography",
+  "Budget constraints",
+  "Not the right timing",
+  "Duplicate prospect",
+] as const;
+
 export function isRejectionKind(v: unknown): v is RejectionKind {
   return typeof v === "string" && (REJECTION_KINDS as readonly string[]).includes(v);
 }

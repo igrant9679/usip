@@ -400,7 +400,8 @@ export default function AREHub() {
                 </div>
                 {(attention?.areApprovals.count ?? 0) > 0 && (
                   <Link
-                    href={`/are/campaigns/${attention!.areApprovals.byCampaign[0]?.campaignId ?? ""}`}
+                    // Every campaign's waiting prospects in one queue (F16), not the first campaign's.
+                    href="/are/approvals"
                     className="flex items-center gap-1.5 rounded-full border border-amber-400/50 bg-amber-500/10 px-2.5 py-0.5 hover:bg-amber-500/20 transition-colors"
                     title="Prospects enriched and waiting for your approval before sequencing"
                   >

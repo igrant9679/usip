@@ -97,7 +97,7 @@ const HANDLED_ELSEWHERE = new Set<string>([
   "pages/usip/MindmapCanvas.tsx::mindmaps.saveCanvas",
   "pages/usip/ARECampaignDetail.tsx::are.campaigns.update",
   "pages/usip/ARECampaignDetail.tsx::are.prospects.editSequenceStep",
-  "pages/usip/ARECampaignDetail.tsx::are.engine.runOnce",
+  // 2026-11-07 (audit U22): the Logs tab's runOnce now has its own onError.
   "pages/usip/ConnectedAccounts.tsx::unipile.generateConnectLink",
   "pages/usip/EmailBuilder.tsx::emailTemplates.save",
   "pages/usip/ImportContacts.tsx::imports.parseCSV",
