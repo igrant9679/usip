@@ -48,11 +48,18 @@ describe("the shared scope and its plumbing exist", () => {
 });
 
 describe("every reply surface uses the shared scope", () => {
+  // 2026-11-07 (audit 2026-10-20, F44): the COUNTS moved into the one metrics
+  // module, services/activityMetrics.ts — conversations' header (replySummary),
+  // attention's 24h digest and the Emails page's inbound total (countReplies),
+  // Home's sparkline (dailyCounts). Each surface keeps its own listing scope
+  // and must call the module for the count; the module carries the scope, and
+  // is pinned below like any other surface.
   const surfaces: Array<[string, string[], number]> = [
     // [file, path segments, minimum genuineReplyScope() call-sites]
-    ["conversations list+stats", ["routers", "conversations.ts"], 2],
-    ["attention unhandled+digest", ["routers", "attention.ts"], 3],
-    ["emailActivity feed+stats", ["routers", "emailActivity.ts"], 2],
+    ["conversations list", ["routers", "conversations.ts"], 1],
+    ["attention unhandled", ["routers", "attention.ts"], 2],
+    ["emailActivity feed", ["routers", "emailActivity.ts"], 1],
+    ["activityMetrics counts (replies, reply rates)", ["services", "activityMetrics.ts"], 3],
     ["replyClassifier sweep", ["services", "replyClassifier.ts"], 1],
     ["leadScoring engagement", ["routers", "leadScoring.ts"], 1],
     ["performanceMetrics attribution", ["services", "performanceMetrics.ts"], 1],
@@ -66,10 +73,22 @@ describe("every reply surface uses the shared scope", () => {
     });
   }
 
-  it("trend7d's replies bucket carries the raw-SQL fragment", () => {
+  // 2026-11-07 (F44): trend7d buckets workspace days through the metrics
+  // module; its replies read genuineRepliesWhere, the shared scope.
+  it("trend7d's replies series reads the shared scope", () => {
     const ws = read("routers", "workspace.ts");
-    expect(ws).toContain("GENUINE_REPLY_SQL");
-    expect(ws).toMatch(/bucket\("email_replies", "receivedAt", GENUINE_REPLY_SQL\)/);
+    expect(ws).toContain('dailyCounts(db, ctx.workspace.id, "replies", 7, tz, nowMs)');
+    const m = read("services", "activityMetrics.ts");
+    const fn = m.slice(m.indexOf("export async function dailyCounts("), m.indexOf("/* ── Leads"));
+    expect(fn).toContain("genuineRepliesWhere(ws, { start: since })");
+    const where = m.slice(m.indexOf("export function genuineRepliesWhere("), m.indexOf("export async function countReplies("));
+    expect(where).toContain("genuineReplyScope()");
+  });
+
+  it("the reply counts on those surfaces are the module's", () => {
+    expect(read("routers", "conversations.ts")).toContain("return replySummary(db, ctx.workspace.id);");
+    expect(read("routers", "attention.ts")).toContain("countReplies(db, ws, { start: since })");
+    expect(read("routers", "emailActivity.ts")).toContain("countReplies(db, wsId),");
   });
 
   it("no surface file re-derives the scope inline against draftId alone", () => {

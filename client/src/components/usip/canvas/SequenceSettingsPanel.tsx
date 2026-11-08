@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FieldLabelContext } from "@/components/ui/field-label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Settings2, X } from "lucide-react";
+import { TimezonePicker } from "@/components/usip/TimezonePicker";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 export interface SequenceSettings {
@@ -30,6 +30,8 @@ interface Props {
   name: string;
   description?: string | null;
   settings: SequenceSettings;
+  /** The workspace's zone, named on the picker's default choice. */
+  workspaceZone?: string | null;
   onClose: () => void;
   onSave: (patch: {
     name: string;
@@ -51,23 +53,8 @@ export const WHAT_STOPS_SOMEONE = [
   "You can pause or exit anyone by hand from the sequence's contacts.",
 ];
 
-/* ─── Timezone list (abbreviated) ──────────────────────────────────────── */
-/** No zone of its own: the engine uses the workspace's (Settings). */
-const WORKSPACE_TZ = "__workspace__";
-const TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Toronto",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Asia/Tokyo",
-  "Asia/Singapore",
-  "Australia/Sydney",
-];
+/* Every IANA zone, through the shared picker (audit 2026-10-20, U15): this
+   listed twelve. No zone of its own means the workspace's (Settings). */
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -88,7 +75,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function SequenceSettingsPanel({ open, readOnly, name, description, settings, onClose, onSave }: Props) {
+export function SequenceSettingsPanel({ open, readOnly, name, description, settings, workspaceZone, onClose, onSave }: Props) {
   const [draftName, setDraftName] = React.useState(name);
   const [draftDesc, setDraftDesc] = React.useState(description ?? "");
   const [draftSettings, setDraftSettings] = React.useState<SequenceSettings>(settings);
@@ -161,21 +148,13 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, setti
 
         <Section title="Sending window">
           <Field label="Timezone">
-            <Select
-              value={draftSettings.timezone || WORKSPACE_TZ}
+            <TimezonePicker
+              label="Timezone"
+              value={draftSettings.timezone}
+              workspaceZone={workspaceZone}
               disabled={readOnly}
-              onValueChange={(v) => patchSettings({ timezone: v === WORKSPACE_TZ ? undefined : v })}
-            >
-              <SelectTrigger className="text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={WORKSPACE_TZ} className="text-xs">Workspace time zone</SelectItem>
-                {TIMEZONES.map((tz) => (
-                  <SelectItem key={tz} value={tz} className="text-xs">{tz}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              onChange={(zone) => patchSettings({ timezone: zone ?? undefined })}
+            />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Send from">

@@ -465,6 +465,9 @@ function CanvasInner({
     setSettingsOpen(false);
   };
 
+  // Named on the time zone picker's default choice (U15).
+  const { timezone: workspaceZone } = useWorkspaceTimezone();
+
   const handleSettingsSave = (patch: {
     name: string;
     description: string;
@@ -601,6 +604,7 @@ function CanvasInner({
           settings={seqSettings}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSettingsSave}
+          workspaceZone={workspaceZone}
         />
       </div>
     </div>
@@ -609,6 +613,8 @@ function CanvasInner({
 
 /* ─── Page wrapper ──────────────────────────────────────────────────────── */
 import { ReactFlowProvider } from "@xyflow/react";
+import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 
 export default function SequenceCanvas() {
   const params = useParams<{ id: string }>();
@@ -666,6 +672,9 @@ export default function SequenceCanvas() {
           )}
         </div>
       </div>
+
+      {/* This sequence's drafts that wait, linked to exactly those (U15). */}
+      <SequenceReviewBanner sequenceId={sequenceId} className="mx-4 mt-2 shrink-0" />
 
       {/* Canvas */}
       <div className="flex-1 overflow-hidden">

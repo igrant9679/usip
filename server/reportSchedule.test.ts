@@ -256,7 +256,9 @@ describe("the filter is actually wired into the send path", () => {
   it("emailSavedReport filters before it sends", () => {
     const at = src.indexOf("export async function emailSavedReport");
     expect(at, "emailSavedReport not found").toBeGreaterThan(0);
-    const fn = src.slice(at, at + 1800);
+    // 2026-11-07 (audit 2026-10-20, F45): the function records each attempt's
+    // outcome now, so it is read to its end rather than a fixed 1800 characters.
+    const fn = src.slice(at, src.indexOf("export async function runReportScheduler"));
     expect(fn).toMatch(/const recipients = activeRecipients\(configured, await revokedMemberEmails\(/);
     // Ordering: the filter must precede the send, or it decides nothing.
     const filtered = fn.indexOf("activeRecipients(");
@@ -268,8 +270,10 @@ describe("the filter is actually wired into the send path", () => {
 
   it("refuses to send when the filter empties the list", () => {
     const at = src.indexOf("export async function emailSavedReport");
-    const fn = src.slice(at, at + 1800);
-    expect(fn).toMatch(/if \(recipients\.length === 0\)[\s\S]{0,120}?return \{ ok: false/);
+    expect(at).toBeGreaterThan(0);
+    const fn = src.slice(at, src.indexOf("export async function runReportScheduler"));
+    // 2026-11-07 (F45): the refusal is recorded as the last attempt's outcome.
+    expect(fn).toMatch(/if \(recipients\.length === 0\)[\s\S]{0,120}?return outcome\(\{ ok: false/);
   });
 
   it("scopes the revoked lookup to the workspace AND to deactivated rows", () => {
