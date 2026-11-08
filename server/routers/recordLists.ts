@@ -193,6 +193,29 @@ export const recordListsRouter = router({
       });
     }),
 
+  /**
+   * Resolve this People list's old contact members to People (audit A55):
+   * each becomes the person it maps to; one that can't be resolved stays on
+   * the list and is reported with why. Also runs once after every boot.
+   */
+  resolveContactMembers: workspaceProcedure
+    .input(z.object({ listId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
+      const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
+        .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id))).limit(1);
+      if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+      if (list.entityType === "companies") return { converted: 0, duplicates: 0, unresolved: [] as Array<{ contactId: number; reason: string }> };
+      const { resolveContactListMembers, UNRESOLVED_REASON_LABEL } = await import("../services/listContactMembers");
+      const r = await resolveContactListMembers({ workspaceId: ctx.workspace.id, listId: input.listId });
+      return {
+        converted: r.converted,
+        duplicates: r.duplicates,
+        unresolved: r.unresolved.map((u) => ({ contactId: u.contactId, reason: UNRESOLVED_REASON_LABEL[u.reason] })),
+      };
+    }),
+
   /** Returns what it removed, so the page can offer Undo (audit 2026-10-20, P139). */
   removeMember: workspaceProcedure.input(z.object({ memberId: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();

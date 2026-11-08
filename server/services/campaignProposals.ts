@@ -17,10 +17,11 @@
  *      against) and a copy mode; a deterministic draft stands in when the
  *      model is unavailable.
  *   4. Under the Campaign Routing dial: approval records a pending proposal
- *      for the Revenue Engine hub; auto creates the campaign at once —
- *      ACTIVE with batch approval, so the engine enriches and writes but a
- *      human still approves the first batch — and pushes the cluster in
- *      through the one write path (pushPeopleIntoCampaign).
+ *      for the Revenue Engine hub; auto creates the campaign at once — as a
+ *      DRAFT with batch approval, so a person activates it (and is asked for
+ *      the workspace's time zone on that first launch) and still approves its
+ *      first batch — and pushes the cluster in through the one write path
+ *      (pushPeopleIntoCampaign).
  *
  * Guards: a dismissed proposal's people are not re-clustered for
  * DISMISS_COOLDOWN_DAYS; a pending proposal's people are not re-proposed; a
@@ -32,7 +33,6 @@ import { areCampaigns, campaignProposals, prospects, workspaceSettings } from ".
 import { invokeLLM } from "../_core/llm";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { routeProspects } from "./campaignRouter";
-import { campaignHeadroom } from "./are/campaignConcurrency";
 import { DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
 
 export const MIN_CLUSTER_SIZE = 8;
@@ -379,10 +379,17 @@ export async function countPendingProposals(workspaceId: number): Promise<number
 }
 
 /**
- * Accept: create the campaign — ACTIVE with batch approval, no discovery
+ * Accept: create the campaign — a DRAFT with batch approval, no discovery
  * sources (it exists to absorb the people it was proposed for; the owner
  * can add sources later) — and push the cluster in through the one write
  * path. Returns what happened, per person, the way the wizard does.
+ *
+ * A draft, never active (audit 2026-10-20, A31): accepting a proposal, or the
+ * Auto sweep accepting one, is not the moment a campaign starts. Activation
+ * is a person's click on the campaign, through campaigns.setStatus, which
+ * asks for the workspace's time zone on a first launch and checks Max
+ * Concurrent Campaigns. Drafts don't count against that limit (the limit is
+ * on what runs), so accepting never waits on it either.
  */
 export async function acceptProposal(workspaceId: number, proposalId: number, actorUserId: number | null): Promise<{ campaignId: number | null; added: number; skipped: number }> {
   const db = await getDb();
@@ -396,22 +403,6 @@ export async function acceptProposal(workspaceId: number, proposalId: number, ac
   // (departed-owner cascade: nothing new may be filed under someone gone).
   const ownerUserId = actorUserId ?? (await workspaceNotifyUserId(workspaceId));
   if (!ownerUserId) throw new Error("No active workspace owner to own the new campaign");
-
-  // The campaign this creates is born ACTIVE, so it is subject to Max
-  // Concurrent Campaigns like any other activation (2026-09-20). RETURN rather
-  // than throw: the Auto cron would abort the workspace's remaining proposals
-  // in its outer catch, and the manual accept at routers/are/campaigns.ts
-  // converts any throw here into NOT_FOUND "Proposal not found" — a lie about
-  // a proposal that is sitting right there. Autonomy convention: Auto acts and
-  // reports; at the cap it reports and leaves the decision to the human. The
-  // proposal stays pending and is retried each tick, which costs one COUNT(*)
-  // because the check short-circuits before any write. console.log, not
-  // console.error, for the same reason — this is a held proposal, not a fault.
-  const h = await campaignHeadroom(workspaceId);
-  if (!h.hasRoom) {
-    console.log(`[CampaignProposals] ws ${workspaceId}: proposal ${proposalId} held — ${h.active}/${h.max} active campaigns`);
-    return { campaignId: null, added: 0, skipped: 0 };
-  }
 
   const [row] = await db.insert(areCampaigns).values({
     workspaceId,
@@ -433,8 +424,9 @@ export async function acceptProposal(workspaceId: number, proposalId: number, ac
     signalToOpportunityEnabled: false,
     copyMode: p.copyMode,
     ownerUserId,
-    status: "active",
-    startedAt: new Date(),
+    // Draft, with no startedAt: the first activation is a launch, so
+    // setStatus asks for the time zone then (A31).
+    status: "draft",
   } as never).$returningId();
   const campaignId = row.id;
 

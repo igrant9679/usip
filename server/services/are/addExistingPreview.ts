@@ -24,7 +24,7 @@
 import { and, eq, inArray, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { areCampaigns, prospects } from "../../../drizzle/schema";
-import { queueIdentityKeys, workspaceQueueIdentityIndex } from "./queueIdentity";
+import { queueIdentityIndexFor, queueIdentityKeys } from "./queueIdentity";
 import { classifyPushCandidate, identityShapeOfPerson, type PushVerdictKind } from "./pushPeople";
 import {
   ACTIVE_ENROLLMENT_STATUSES, ACTIVE_QUEUE_STATUSES,
@@ -124,7 +124,8 @@ export async function previewAddExisting(
 
   // The push's own inputs (same index, same active lookup) + the history.
   const [index, activeSeq, allSeq, allCamp] = await Promise.all([
-    workspaceQueueIdentityIndex(workspaceId),
+    // The push's own lookup (A34): only rows sharing a key with these people.
+    queueIdentityIndexFor(workspaceId, people.map(identityShapeOfPerson)),
     activeSequencesForProspects(workspaceId, peopleIds),
     sequenceMembershipsForProspects(workspaceId, peopleIds),
     campaignMembershipsForProspects(workspaceId, peopleIds),

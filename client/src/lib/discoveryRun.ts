@@ -29,6 +29,9 @@ export type FinishedRun = {
   lowConfidenceCount: number;
   heldForReview?: boolean | null;
   alreadyInPeople?: number | null;
+  /** A campaign launch (A56): how many saved people the campaign took, and refused. */
+  addedToCampaign?: number | null;
+  notAddedToCampaign?: number | null;
 };
 
 export function runSummary(r: FinishedRun): { ok: boolean; text: string } {
@@ -40,9 +43,12 @@ export function runSummary(r: FinishedRun): { ok: boolean; text: string } {
   const saved = `${r.prospectsCreated} new + ${r.prospectsUpdated ?? 0} updated`
     + (r.prospectsSkipped ? ` · ${r.prospectsSkipped} not saved` : "")
     + (r.accountsCreated ? ` · ${r.accountsCreated} compan${r.accountsCreated === 1 ? "y" : "ies"} saved` : "");
+  const campaign = r.addedToCampaign != null
+    ? ` · ${r.addedToCampaign} added to this campaign${r.notAddedToCampaign ? ` (${r.notAddedToCampaign} not added: already in a campaign or sequence, or unidentifiable — see Logs)` : ""}`
+    : "";
   return {
     ok: true,
-    text: `Discovery complete — ${r.rawFindCount} raw / ${saved}${already} / ${r.highConfidenceCount} high · ${r.mediumConfidenceCount} medium · ${r.lowConfidenceCount} low`,
+    text: `Discovery complete — ${r.rawFindCount} raw / ${saved}${already}${campaign} / ${r.highConfidenceCount} high · ${r.mediumConfidenceCount} medium · ${r.lowConfidenceCount} low`,
   };
 }
 

@@ -408,7 +408,9 @@ describe("paging stays inside one search", () => {
 
   it("the engine gives it no cursor and keeps none", () => {
     const engine = read("server/areEngine.ts");
-    expect(engine).toContain('discoverViaRegistrySource(campaign, "leadocean", { titles, industries, geos, keywords, size }, remaining, null, neverTarget)');
+    // 2026-11-07 (audit F37 remainder, batch ARES): the targeting is one
+    // researched sector's or the combined lists (vendorTargeting); still no cursor in.
+    expect(engine).toContain('discoverViaRegistrySource(campaign, "leadocean", { ...vendorTargeting, size }, remaining, null, neverTarget)');
     const block = engine.slice(engine.indexOf("const newState: DiscoveryState = {"), engine.indexOf("try {\n    await db.update(areCampaigns).set({ discoveryQueryState"));
     expect(block).not.toMatch(/leadocean/i);
   });

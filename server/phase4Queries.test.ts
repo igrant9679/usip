@@ -414,7 +414,9 @@ describe("the campaign tabs count in SQL and page (A44, A45)", () => {
     expect(ui).toContain("trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter })");
     expect(ui).toContain("Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE)");
     expect(ui).not.toMatch(/prospects\?\.filter\(\(p\) => p\.enrichmentStatus === "pending"\)/);
-    expect(ui).toContain("{ campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE }");
+    // 2026-11-07 (audit F19): the Rejections query also carries the kind
+    // filter; still one server page per reason, as A44 asked.
+    expect(ui).toContain("{ campaignId, reason: reasonFilter, kind: kindFilter, page: rejPage, perPage: REJECTION_PAGE }");
   });
 
   it("scrape jobs leave out rawResults; dispatches and the queue order are bounded and stable", async () => {

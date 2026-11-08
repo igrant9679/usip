@@ -213,7 +213,10 @@ describe("the counts in a log line are what they say (A68, P63)", () => {
     expect(find).toMatch(/note \? "warn" : "info"/);
     expect(find).toMatch(/note: `today's Apollo record cap is used up/);
     expect(find).toMatch(/note: "no QuickEnrich key for this workspace/);
-    expect(find).toMatch(/if \(!res\.ok\) return \{ raw: \[\], note: res\.message \};/);
+    // 2026-11-07 (audit A56, batch ARES): LinkedIn makes one search per
+    // pair now; a refused one still says why, with how far it got.
+    expect(find).toMatch(/\? \{ raw, note: res\.message \}/);
+    expect(find).toContain("stopped after ${i} of ${queries.length} searches: ${res.message}");
   });
 });
 
