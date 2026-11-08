@@ -16,7 +16,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
    - Proposed meetings (Meetings): confirm or decline candidate times.
    - Draft tasks (Tasks): accept or dismiss next-best actions.
    - Routing suggestions and campaign proposals (Revenue Engine hub): decide, do not let them pile up; the engine keeps proposing.
-2. **Inbox** (`/inbox`): read the engine events; anything red (bounce spike, failed send, credential expired) gets fixed before noon.
+2. **Inbox** (`/v2/inbox?tab=notifications`): read the engine events; anything red (bounce spike, failed send, credential expired) gets fixed before noon.
 3. **Today's meetings** (Meetings / My Calendar): open each meeting record for the AI prep note; after the meeting set the disposition and log the activity.
 4. **Tasks due today**: work them or reschedule with a reason. Overdue tasks fire workflow triggers and clutter the panel.
 

@@ -680,7 +680,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["playbook", "routine", "sdr"],
     pageKey: "dashboard",
-    bodyMarkdown: `A repeatable morning beats heroics. **1) Home (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear **Conversations** and the **Unified Inbox** — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear the **Emails page's Needs-review queue** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
+    bodyMarkdown: `A repeatable morning beats heroics. **1) Home (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear the **Inbox** (its Replies and LinkedIn & social tabs) — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear the **Emails page's Needs-review queue** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
   },
   {
     slug: "crm-hygiene-eod",
@@ -720,7 +720,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["prospecting", "linkedin", "social", "outreach"],
     pageKey: "social",
-    bodyMarkdown: `Velocity runs a full LinkedIn motion through each rep's **own** connected account (see *My LinkedIn* / Connected Accounts):\n\n1. **Search & import** — on **Find Prospects**, the *LinkedIn search* card queries LinkedIn (and Sales Navigator where available) and imports results as prospects.\n2. **Connection invites** — the **Social Autopilot** (Autonomy Control Center) sends invites to un-invited leads on a safe hourly cadence with a hard daily cap per workspace.\n3. **Pre-invite warming** — before inviting, the autopilot can engage a prospect's latest post (a like) so your name isn't cold.\n4. **Accept → opener DM** — when someone accepts, an AI opener DM goes out from your account (Approve or Auto, your choice).\n5. **Replies** — inbound DMs land in **Conversations → Social**. Only DMs from people *we* messaged or invited first are treated as replies: those get AI-classified, and a "willing to meet" one from someone we actually messaged can automatically receive your booking link. Everything else — cold pitches, recruiters, strangers — is still listed under the **Not our outreach** filter, but is never classified, never counted and never answered automatically.\n\nThe **Social** page's *Network* tab shows pending invitations and connections, plus post tools (compose, like, comment) for manual engagement. Track the whole funnel — invites → accepts → replies → meetings — in **Analytics**.`,
+    bodyMarkdown: `Velocity runs a full LinkedIn motion through each rep's **own** connected account (see *My LinkedIn* / Connected Accounts):\n\n1. **Search & import** — on **Find Prospects**, the *LinkedIn search* card queries LinkedIn (and Sales Navigator where available) and imports results as prospects.\n2. **Connection invites** — the **Social Autopilot** (Autonomy Control Center) sends invites to un-invited leads on a safe hourly cadence with a hard daily cap per workspace.\n3. **Pre-invite warming** — before inviting, the autopilot can engage a prospect's latest post (a like) so your name isn't cold.\n4. **Accept → opener DM** — when someone accepts, an AI opener DM goes out from your account (Approve or Auto, your choice).\n5. **Replies** — inbound DMs land in **Inbox → LinkedIn & social**. Only DMs from people *we* messaged or invited first are treated as replies: those get AI-classified, and a "willing to meet" one from someone we actually messaged can automatically receive your booking link. Everything else — cold pitches, recruiters, strangers — is still listed under the **Not our outreach** filter, but is never classified, never counted and never answered automatically.\n\nThe **Social** page's *Network* tab shows pending invitations and connections, plus post tools (compose, like, comment) for manual engagement. Track the whole funnel — invites → accepts → replies → meetings — in **Analytics**.`,
   },
 
   /* ── Sequences & Email: conversations autopilot + sending prefs ─────────── */
@@ -1195,10 +1195,10 @@ export const TOURS: TourSeed[] = [
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "inbox",
-    route: "/inbox",
+    route: "/v2/inbox",
     roleTags: ["sdr"],
     steps: [
-      { title: "Everything that came back", bodyMarkdown: "Replies to your outbound arrive here, matched to the prospect and the sequence that produced them.", routeTo: "/inbox", targetDataTourId: "page-inbox", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Everything that came back", bodyMarkdown: "Replies to your outbound arrive here, matched to the prospect and the sequence or campaign that produced them, each with what to do next. Your mailbox, LinkedIn and social messages, calls and notifications are the other tabs.", routeTo: "/v2/inbox", targetDataTourId: "page-inbox", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Replies pause the sequence", bodyMarkdown: "When someone answers, their sequence stops automatically. Nobody gets a scheduled follow-up after they have already written back.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
@@ -1207,11 +1207,12 @@ export const TOURS: TourSeed[] = [
     description: "Your connected mailbox, inside the CRM.",
     type: "feature",
     estimatedMinutes: 2,
-    pageKey: "mailbox",
-    route: "/mailbox",
+    // Its own page is retired into the one Inbox (F25), so Elsie offers it there.
+    pageKey: "inbox",
+    route: "/v2/inbox?tab=mailbox",
     roleTags: ["sdr"],
     steps: [
-      { title: "Your real mail, in context", bodyMarkdown: "Your connected mailbox rendered next to the CRM record, so you can answer without losing what you know about the person.", routeTo: "/mailbox", targetDataTourId: "page-mailbox", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Your real mail, in context", bodyMarkdown: "Your connected mailbox, on the Inbox's Mailbox tab, so you can reply, reply all or forward without losing what you know about the person.", routeTo: "/v2/inbox?tab=mailbox", targetDataTourId: "page-mailbox", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Connect one first", bodyMarkdown: "Nothing shows here until a mailbox is connected. That is also what lets Velocity send as you rather than as a robot from a shared address.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
@@ -1364,11 +1365,12 @@ export const TOURS: TourSeed[] = [
     description: "Reply classification and what happens next.",
     type: "feature",
     estimatedMinutes: 2,
-    pageKey: "conversations",
-    route: "/v2/conversations",
+    // Its own page is retired into the one Inbox (F25), so Elsie offers it there.
+    pageKey: "inbox",
+    route: "/v2/inbox",
     roleTags: ["sdr"],
     steps: [
-      { title: "Threads, not messages", bodyMarkdown: "Replies are grouped into conversations and classified: interested, not now, wrong person, unsubscribe.", routeTo: "/v2/conversations", targetDataTourId: "conversations-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Threads, not messages", bodyMarkdown: "Replies are classified (interested, question, wrong person, unsubscribe and more) and each says what to do next. Unread and Mine narrow the list.", routeTo: "/v2/inbox", targetDataTourId: "conversations-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Conversation Autopilot", bodyMarkdown: "It reads the reply, classifies it, and proposes the follow-up. On Approve you see the draft first; on Autonomous it acts. Wrong-person and unsubscribe are handled without you.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
@@ -1854,14 +1856,15 @@ export const TOURS: TourSeed[] = [
   },
   {
     name: "Handle Replies (Unified Inbox)",
-    description: "Triage inbound replies across every connected account.",
+    description: "Read and answer LinkedIn and other social chats from the Inbox.",
     type: "feature",
     estimatedMinutes: 3,
-    pageKey: "unified-inbox",
-    route: "/unified-inbox",
+    // Its own page is retired into the one Inbox (F25), so Elsie offers it there.
+    pageKey: "inbox",
+    route: "/v2/inbox?tab=social&view=chats",
     roleTags: ["sdr"],
     steps: [
-      { title: "Social chats, one place", bodyMarkdown: "LinkedIn, WhatsApp and other connected accounts' conversations.", routeTo: "/unified-inbox", visualTreatment: "coach", advanceCondition: "route_changed" },
+      { title: "Social chats, one place", bodyMarkdown: "LinkedIn, WhatsApp and other connected accounts' conversations, on the Inbox's LinkedIn & social tab under All chats.", routeTo: "/v2/inbox?tab=social&view=chats", visualTreatment: "coach", advanceCondition: "route_changed" },
       { title: "Reply", bodyMarkdown: "Open a chat and reply without leaving.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Auto-pause", bodyMarkdown: "A LinkedIn reply to your outreach pauses that person's sequences.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],

@@ -133,7 +133,7 @@ const WIDGETS: Record<string, WidgetDef> = {
         <div>{c.replies.slice(0, 5).map((r: any) => (
           <MiniRow key={r.id} primary={r.fromEmail ?? r.fromName ?? "Unknown sender"}
             secondary={r.subject ?? r.snippet ?? undefined}
-            right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/conversations")}>Open <ArrowRight className="size-3" /></Button>} />
+            right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/inbox")}>Open <ArrowRight className="size-3" /></Button>} />
         ))}</div>
       ),
   },
@@ -298,9 +298,9 @@ export default function Home() {
                 same UTC-day bug activities.ts records having fixed server-side
                 using the workspace timezone. Two copies, one fixed. */}
             <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
-            <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/conversations")} />
+            <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/inbox")} />
             <div className="flex-1" />
-            <button type="button" onClick={() => setLocation("/inbox")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">
+            <button type="button" onClick={() => setLocation("/v2/inbox?tab=notifications")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">
               <span className="shrink-0 size-1.5 rounded-full animate-pulse" style={{ backgroundColor: accent }} />
               <span className="truncate text-[12px] text-muted-foreground hover:text-foreground">
                 {(() => { const n = notifs.find((x: any) => ["are_event", "workflow_fired", "system"].includes(x.kind)); return n ? `${n.title}${n.body ? ` — ${String(n.body).slice(0, 80)}` : ""}` : "Autopilots are quiet right now"; })()}

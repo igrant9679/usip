@@ -139,8 +139,7 @@ const _LEGACY_NAV: NavGroup[] = [
     darkActiveBg: "rgba(147,197,253,0.12)",
     items: [
       { href: "/", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/inbox", label: "Inbox", icon: Inbox },
-      { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
+      { href: "/v2/inbox", label: "Inbox", icon: Inbox },
       { href: "/calendar", label: "My Calendar", icon: CalendarDays },
     ],
   },
@@ -219,7 +218,7 @@ const _LEGACY_NAV: NavGroup[] = [
     //   - /sender-pools         → opens from /sending-accounts
     //   - /snippets             → opens from /email-builder
     //   - /segment-rules        → opens from /segments
-    //   - /email-drafts         → opens from /v2/sequences + /unified-inbox
+    //   - /email-drafts         → opens from /v2/sequences + /v2/inbox
     //   - /email-analytics      → opens from /v2/sequences + /dashboards
     // (/sequences itself is retired into /v2/sequences, U14 2026-11-07.)
     //   - /connected-accounts   → opens from /sending-accounts
@@ -229,7 +228,6 @@ const _LEGACY_NAV: NavGroup[] = [
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },
       { href: "/ai-pipeline", label: "AI Pipeline", icon: Sparkles },
-      { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare },
       { href: "/social", label: "Social", icon: Share2 },
     ],
   },
@@ -310,8 +308,8 @@ const TOP_LINKS: NavLink[] = [
   // Back on the rail (owner, 2026-09-04): the pipeline dashboard.
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
-  { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
+  // One reply workspace (F25): Inbox and My Mailbox are its tabs now.
+  { href: "/v2/inbox", label: "Inbox", icon: Inbox, color: "#1D4ED8", darkColor: "#93C5FD" },
   { href: "/calendar", label: "My Calendar", icon: CalendarDays },
 ];
 
@@ -955,7 +953,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             <HelpCircle className="size-4" />
           </button>
 
-          <Link href="/inbox" className="relative p-2 rounded-md hover:bg-secondary" title="Notifications">
+          <Link href="/v2/inbox?tab=notifications" className="relative p-2 rounded-md hover:bg-secondary" title="Notifications" aria-label="Notifications">
             <Bell className="size-4" />
             {unread && unread > 0 ? (
               <span className="absolute top-1 right-1 size-2 rounded-full bg-primary" />

@@ -41,8 +41,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/forecast": { body: "Projected revenue from the open pipeline, weighted by stage." },
   "/v2/library": { body: "Every tool in the product, grouped and searchable. The sidebar shows only the daily loop — anything you can't find lives here (or press Ctrl+K)." },
   "/v2/ai-assistant": { body: "Ask questions about your own data in plain English — \"which deals slipped this month?\" — and have it propose actions (enroll, tasks, lists, enrich, pause/activate or create a campaign) that run only when you confirm.", article: "ai-assistant" },
-  "/inbox": { body: "Notifications from the autonomous engines: what they did, and anything waiting on your approval." },
-  "/mailbox": { body: "Your connected email inbox, inside Velocity. Replies from prospects land here." },
+  "/v2/inbox": { body: "Everything that came back, in one place: replies to your outreach with what to do next, your mailbox, LinkedIn and social messages, calls and notifications.", article: "conversations-autopilot" },
   "/calendar": { body: "Your meetings, including any the AI booked for you." },
 
   // ── Prospect and enrich ──
@@ -66,7 +65,6 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/segments": { body: "Saved filters over your contacts that stay up to date as data changes." },
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },
   "/email-builder": { body: "Design reusable email templates and snippets.", article: "email-builder-templates" },
-  "/unified-inbox": { body: "Your LinkedIn, WhatsApp and other social conversations in one list.", article: "unified-inbox" },
   "/v2/emails": { body: "Every email sitewide — campaign and sequence steps, CRM sends, Inbox mail, proposals, system notifications and inbound replies — with what it was part of and what came back.", article: "email-drafts-sending" },
   "/v2/calls": { body: "Call logs and outcomes, including AI voice-agent calls.", article: "calls-page" },
   "/v2/tasks": { body: "Your to-do queue. AI-proposed tasks land here for approval before they become real work.", article: "autonomy-control-center" },
@@ -103,7 +101,6 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // Pipeline page"). Distinct from Deals — say so here, because the two sit
   // side by side under CRM and the label alone will not explain the pair.
   "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
-  "/v2/conversations": { body: "Ongoing back-and-forth with prospects, and the AI's suggested replies.", article: "conversations-autopilot" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
   "/proposals": { body: "Quotes and proposals you've sent, and whether they've been opened." },
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },
