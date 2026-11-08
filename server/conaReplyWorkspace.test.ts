@@ -212,27 +212,28 @@ describe("each old route redirects to the matching tab, bookmarks included", () 
 /* ── What the Replies and Social tabs show ──────────────────────────────────── */
 
 describe("replies with their classification, next action and read state", () => {
-  const panel = between(CONV, "export function ConversationsPanel(", "export function VoiceCallsChannel(");
+  // Read inside each test, so one missing anchor fails its tests rather than the file.
+  const panel = () => between(CONV, "export function ConversationsPanel(", "export function VoiceCallsChannel(");
 
   it("the list asks the server for Unread and Mine", () => {
-    expect(panel).toContain("const listInput = { filter: filter as any, ...(unreadOnly ? { unreadOnly: true } : {}), ...(mine ? { mine: true } : {}) };");
-    expect(panel).toContain("trpc.conversations.list.useQuery(listInput, { enabled: isEmail })");
-    expect(panel).toContain("trpc.conversations.socialList.useQuery(listInput, { enabled: channel === \"social\" })");
-    expect(panel).toContain("aria-pressed={unreadOnly}");
-    expect(panel).toContain("aria-pressed={mine}");
+    expect(panel()).toContain("const listInput = { filter: filter as any, ...(unreadOnly ? { unreadOnly: true } : {}), ...(mine ? { mine: true } : {}) };");
+    expect(panel()).toContain("trpc.conversations.list.useQuery(listInput, { enabled: isEmail })");
+    expect(panel()).toContain("trpc.conversations.socialList.useQuery(listInput, { enabled: channel === \"social\" })");
+    expect(panel()).toContain("aria-pressed={unreadOnly}");
+    expect(panel()).toContain("aria-pressed={mine}");
   });
 
   it("opening reads it, and Mark unread is offered in both dialogs", () => {
-    expect(panel).toContain("if (!r.readAt) setRead(r, true);");
-    expect(panel).toContain("const setRead = (r: Reply, read: boolean) => (isEmail ? markRead : markSocialRead).mutate({ id: r.id, read });");
+    expect(panel()).toContain("if (!r.readAt) setRead(r, true);");
+    expect(panel()).toContain("const setRead = (r: Reply, read: boolean) => (isEmail ? markRead : markSocialRead).mutate({ id: r.id, read });");
     expect(CONV).toContain('{onMarkUnread && <Button variant="ghost" onClick={() => onMarkUnread(reply)}>Mark unread</Button>}');
     expect(CONV.split("onMarkUnread={(r) => { setRead(r, false); setSelected(null); }}").length - 1).toBe(2);
   });
 
   it("each row names its sequence or campaign and the next thing to do", () => {
-    expect(panel).toContain("Revenue Engine</span>");
-    expect(panel).toContain('Sequence{seqName ? `: ${seqName}` : ""}');
-    expect(panel).toContain("<span>Next: {nextActionFor(r)}</span>");
+    expect(panel()).toContain("Revenue Engine</span>");
+    expect(panel()).toContain('Sequence{seqName ? `: ${seqName}` : ""}');
+    expect(panel()).toContain("<span>Next: {nextActionFor(r)}</span>");
   });
 
   it("an email reply opens its thread in the Mailbox tab, where Reply, Reply all and Forward are", () => {
