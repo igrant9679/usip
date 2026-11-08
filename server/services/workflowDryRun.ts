@@ -13,7 +13,7 @@ type Action = { type?: string; params?: Record<string, any> };
 
 export type DryRunResult = { plan: string[]; problems: string[] };
 
-function hostOf(url: unknown): string | null {
+export function hostOf(url: unknown): string | null {
   try {
     const u = new URL(String(url ?? ""));
     return u.protocol === "http:" || u.protocol === "https:" ? u.host : null;
