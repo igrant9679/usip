@@ -32,6 +32,7 @@ import type { getDb } from "../db";
 import { genuineReplyScope } from "./replyScope";
 import { dayIn, lastDays, seriesSince } from "./email/trackingSeries";
 import { monthToDateRanges, type Range } from "./dealMetrics";
+import { BOOKED_MEETING_STATUSES, REMINDABLE_MEETING_STATUSES, type MeetingStatus } from "@shared/meetingStatus";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -342,7 +343,13 @@ export async function replySummary(db: Db, ws: number): Promise<{ total: number;
 
 /* ── Daily series, on the workspace's days ───────────────────────────────── */
 
-const MEETING_DAY_STATUSES = ["invited", "scheduled", "rescheduled", "completed", "no_show"] as const;
+/**
+ * Meetings someone was expected at: the remindable ones (the attendee has a
+ * time) and the booked ones (it happened, or still will), from the shared
+ * sets, so a proposal nobody agreed to and a cancelled meeting never count,
+ * and no file keeps its own list (meetingStatus.test.ts; merge 2026-11-07).
+ */
+const MEETING_DAY_STATUSES: MeetingStatus[] = Array.from(new Set([...REMINDABLE_MEETING_STATUSES, ...BOOKED_MEETING_STATUSES]));
 
 /**
  * activitiesPerDay / meetingsPerDay / repliesPerDay over the last `days`
@@ -363,7 +370,7 @@ export async function dailyCounts(
   const rows: Array<{ at: unknown }> = metric === "activities"
     ? await db.select({ at: activities.occurredAt }).from(activities).where(and(eq(activities.workspaceId, ws), gte(activities.occurredAt, since)))
     : metric === "meetings"
-      ? await db.select({ at: meetings.scheduledAt }).from(meetings).where(and(eq(meetings.workspaceId, ws), gte(meetings.scheduledAt, since), inArray(meetings.status, [...MEETING_DAY_STATUSES])))
+      ? await db.select({ at: meetings.scheduledAt }).from(meetings).where(and(eq(meetings.workspaceId, ws), gte(meetings.scheduledAt, since), inArray(meetings.status, MEETING_DAY_STATUSES)))
       : await db.select({ at: emailReplies.receivedAt }).from(emailReplies).where(genuineRepliesWhere(ws, { start: since }));
   const byDay = new Map(keys.map((k) => [k, 0]));
   for (const r of rows) {

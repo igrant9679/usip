@@ -74,6 +74,11 @@ describe("Apollo is sourcing-only — removed from the prospect waterfall 2026-0
       // through the same getApolloKey seam the settings router uses — key
       // plumbing for the sourcing adapter, not a waterfall step.
       "server/services/prospectSources/credentials.ts",
+      // 2026-11-07 (audit U1, merged with RESB): the sending status bar's
+      // "Apollo cap reached" reads the daily cap and today's pull ledger
+      // (getApolloDailyCap / apolloPulledToday). Counts only, never a call to
+      // Apollo, so no waterfall step.
+      "server/services/sendingStatus.ts",
       // 2026-11-07 (audit F8, U16): the launchers' "Apollo: 120 of 500 left
       // today" line reads the key's presence, the daily cap and today's pull
       // ledger through getApolloKey / getApolloDailyCap / apolloPulledToday.
