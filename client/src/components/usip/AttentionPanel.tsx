@@ -151,7 +151,7 @@ export function AttentionPanel() {
 
         {s.areApprovals.count > 0 && (
           <QueueCard icon={<Bot className="size-4" />} tint="#7C3AED" title="Prospects to approve"
-            count={s.areApprovals.count} cta="Revenue Engine" href="/are">
+            count={s.areApprovals.count} cta="Approve" href="/are/approvals">
             <ul className="space-y-1">
               {s.areApprovals.byCampaign.slice(0, 3).map((c) => (
                 <li key={c.campaignId} className="text-xs text-muted-foreground truncate">

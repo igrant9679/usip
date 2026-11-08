@@ -50,12 +50,11 @@ export async function noticeCampaignFinished(c: FinishedCampaign, now: Date = ne
       .where(and(exec, inArray(areExecutionQueue.status, ["scheduled", "paused"])));
     const [sent] = await db.select({ n: sql<number>`count(*)` }).from(areExecutionQueue)
       .where(and(exec, eq(areExecutionQueue.status, "sent")));
-    const where = and(eq(areCampaigns.id, c.id), eq(areCampaigns.workspaceId, c.workspaceId));
 
     /* Target reached: discovery has stopped. */
     const reached = c.targetProspectCount > 0 && working >= c.targetProspectCount;
     if (reached && !c.targetReachedNoticeAt) {
-      await db.update(areCampaigns).set({ targetReachedNoticeAt: now } as never).where(where);
+      await db.update(areCampaigns).set({ targetReachedNoticeAt: now } as never).where(and(eq(areCampaigns.id, c.id), eq(areCampaigns.workspaceId, c.workspaceId)));
       await areNotify({
         workspaceId: c.workspaceId, campaignId: c.id, relatedId: c.id, relatedType: "are_campaign",
         eventType: "campaign_completed",
@@ -64,13 +63,13 @@ export async function noticeCampaignFinished(c: FinishedCampaign, now: Date = ne
       });
       out.targetReached = true;
     } else if (!reached && c.targetReachedNoticeAt) {
-      await db.update(areCampaigns).set({ targetReachedNoticeAt: null } as never).where(where);
+      await db.update(areCampaigns).set({ targetReachedNoticeAt: null } as never).where(and(eq(areCampaigns.id, c.id), eq(areCampaigns.workspaceId, c.workspaceId)));
     }
 
     /* Every sequence has ended. */
     const ended = Number(sent?.n ?? 0) > 0 && inFlight === 0 && Number(waiting?.n ?? 0) === 0;
     if (ended && !c.sequencesEndedNoticeAt) {
-      await db.update(areCampaigns).set({ sequencesEndedNoticeAt: now } as never).where(where);
+      await db.update(areCampaigns).set({ sequencesEndedNoticeAt: now } as never).where(and(eq(areCampaigns.id, c.id), eq(areCampaigns.workspaceId, c.workspaceId)));
       const replied = Number(q?.replied ?? 0), completed = Number(q?.completed ?? 0);
       await areNotify({
         workspaceId: c.workspaceId, campaignId: c.id, relatedId: c.id, relatedType: "are_campaign",
@@ -80,7 +79,7 @@ export async function noticeCampaignFinished(c: FinishedCampaign, now: Date = ne
       });
       out.sequencesEnded = true;
     } else if (!ended && c.sequencesEndedNoticeAt) {
-      await db.update(areCampaigns).set({ sequencesEndedNoticeAt: null } as never).where(where);
+      await db.update(areCampaigns).set({ sequencesEndedNoticeAt: null } as never).where(and(eq(areCampaigns.id, c.id), eq(areCampaigns.workspaceId, c.workspaceId)));
     }
   } catch (e) {
     console.error(`[campaignFinished] campaign ${c.id}:`, (e as Error)?.message ?? e);

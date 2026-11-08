@@ -78,7 +78,7 @@ import { targetingFromOverrides } from "@shared/campaignTargeting";
 import { campaignLaunchSearches } from "@shared/discoveryQueries";
 import { launcherBudgetLine } from "@shared/spendPreview";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
-import { isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
+import { PERSON_REJECT_PRESETS, isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -287,18 +287,8 @@ const SEQUENCE_PAGE = 50;
 /** How often "Approve all (N)" re-counts while the Prospects tab is in view (U24). */
 const APPROVAL_POLL_MS = 15_000;
 
-const REJECT_TEMPLATES = [
-  "Wrong industry",
-  "Company too small",
-  "Company too large",
-  "Already a customer",
-  "Competitor",
-  "No decision-making authority",
-  "Outside target geography",
-  "Budget constraints",
-  "Not the right timing",
-  "Duplicate prospect",
-];
+/** The reasons a person picks from (shared with the approval queue, F16). */
+const REJECT_TEMPLATES: string[] = [...PERSON_REJECT_PRESETS];
 
 /* ── Mass-action catalogues per tab (what each tab offers; the server owns what each does) ── */
 const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [

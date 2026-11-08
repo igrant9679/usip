@@ -213,7 +213,11 @@ describe("the mode, its default, and its vocabulary", () => {
     const page = read("client/src/pages/usip/ARECampaignDetail.tsx");
     const reason = /export const TERRITORY_REJECT_REASON = "([^"]+)";/.exec(read("server/areEngine.ts"))?.[1];
     expect(reason, "TERRITORY_REJECT_REASON").toBeTruthy();
-    const templates = page.slice(page.indexOf("const REJECT_TEMPLATES = ["), page.indexOf("];", page.indexOf("const REJECT_TEMPLATES = [")));
+    // 2026-11-07 (audit F16): the list moved to shared/rejectionKind.ts so the
+    // approval queue offers the same reasons; the page takes it from there.
+    expect(page).toContain("const REJECT_TEMPLATES: string[] = [...PERSON_REJECT_PRESETS];");
+    const shared = read("shared/rejectionKind.ts");
+    const templates = shared.slice(shared.indexOf("export const PERSON_REJECT_PRESETS = ["), shared.indexOf("] as const;", shared.indexOf("export const PERSON_REJECT_PRESETS = [")));
     expect(templates).toContain(`"${reason}"`);
   });
 });
