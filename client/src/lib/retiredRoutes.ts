@@ -23,6 +23,15 @@
  *   /campaigns       → /are/campaigns  The legacy Broadcasts page. See below:
  *                                   this one was settled by retiring WITHOUT
  *                                   the fold its plan item assumed.
+ *   /quotes          → /proposals   Quotes folded INTO proposals first
+ *                                   (audit 2026-10-20, F34, 2026-11-07): a
+ *                                   quote is a proposal's pricing section,
+ *                                   versioned, with its PDF and the AI
+ *                                   pricing advice; existing quotes were
+ *                                   attached to their deal's proposal (or a
+ *                                   new draft one) by services/quoteFold, so
+ *                                   every one stays readable there. Remove
+ *                                   this line to bring the page back.
  *
  * About `/campaigns`, so nobody re-runs the investigation (2026-10-27):
  *
@@ -88,6 +97,7 @@ export const RETIRED_ROUTES = {
   "/prospects": "/v2/people",
   "/dashboard-home2": "/v2/home",
   "/campaigns": "/are/campaigns",
+  "/quotes": "/proposals",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

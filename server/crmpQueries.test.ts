@@ -11,7 +11,7 @@
  * Against the real routers and the SQL fake; screens pinned by source.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TrpcContext } from "./_core/context";
 
@@ -95,8 +95,10 @@ describe("opportunities.list is capped, searchable and readable by id (X4.1)", (
     expect(read("client/src/components/usip/RelatedRecordPicker.tsx")).toContain("trpc.opportunities.list.useQuery({ search: q, limit: 8 },");
     expect(read("client/src/pages/usip/ProposalDetail.tsx")).toContain("trpc.opportunities.list.useQuery({ search: search.trim() || undefined, limit: 50 },");
     expect(read("client/src/pages/usip/Calendar.tsx")).toContain("trpc.opportunities.list.useQuery(\n    { limit: 200 },");
-    const quotes = read("client/src/pages/usip/Quotes.tsx");
-    expect(quotes).toContain("trpc.opportunities.list.useQuery({ ids: quoteOppIds, limit: 500 }");
+    // 2026-11-07 (audit F34, batch CRMD): the Quotes page that read its deals
+    // by id is retired — a quote is a proposal's pricing, read with its
+    // proposal — so nothing there reads opportunities.list any more.
+    expect(existsSync(join(__dirname, "..", "client/src/pages/usip/Quotes.tsx"))).toBe(false);
   });
 });
 

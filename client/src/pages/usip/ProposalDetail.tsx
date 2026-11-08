@@ -82,6 +82,7 @@ import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTM
 import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
 import { FileDown, FileType2, PenLine } from "lucide-react";
+import { ProposalPricing } from "@/components/usip/ProposalPricing";
 import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
@@ -1556,7 +1557,7 @@ export default function ProposalDetail() {
           className="gap-1.5 shrink-0 text-muted-foreground hover:text-destructive"
           ariaLabel="Permanently delete this proposal"
           title="Delete this proposal?"
-          description={`"${proposal.title}" will be permanently deleted. This cannot be undone.`}
+          description={`"${proposal.title}" will be permanently deleted, with its sections, milestones and every pricing version. This cannot be undone.`}
           confirmLabel="Delete"
         >
           <Trash2 className="size-3.5" />
@@ -1570,6 +1571,8 @@ export default function ProposalDetail() {
           {[
             { value: "overview", label: "Overview" },
             { value: "content", label: "Content" },
+            // The quote is the proposal's pricing section, versioned (F34).
+            { value: "pricing", label: "Pricing" },
             { value: "timeline", label: "Timeline" },
             { value: "feedback", label: `Change requests${feedback.length > 0 ? ` (${feedback.length})` : ""}` },
             { value: "history", label: "History" },
@@ -1591,6 +1594,9 @@ export default function ProposalDetail() {
           </TabsContent>
           <TabsContent value="content" className="mt-0 h-full">
             <ContentTab proposal={proposal} sections={sections} onRefetch={refetch} />
+          </TabsContent>
+          <TabsContent value="pricing" className="mt-0">
+            <ProposalPricing proposalId={proposal.id} />
           </TabsContent>
           <TabsContent value="timeline" className="mt-0">
             <TimelineTab proposal={proposal} milestones={milestones} onRefetch={refetch} />

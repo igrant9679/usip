@@ -5378,6 +5378,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F34 and F36: quotes fold into proposals as their
+  // pricing section, with versions. Additive columns only; every existing
+  // quote reads as version 1, current, not yet attached. The attaching (each
+  // quote to its deal's newest proposal, or a new draft proposal for a deal
+  // with none) is services/quoteFold, run at boot: idempotent, it touches
+  // only quotes not attached yet.
+  {
+    name: "0404_quotes_in_proposals.sql",
+    statements: [
+      "ALTER TABLE `quotes` ADD COLUMN `proposalId` int NULL",
+      "ALTER TABLE `quotes` ADD COLUMN `version` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `quotes` ADD COLUMN `supersededAt` timestamp NULL",
+      "CREATE INDEX `ix_quote_proposal` ON `quotes` (`workspaceId`, `proposalId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -1694,12 +1694,23 @@ export const quotes = mysqlTable(
     aiDiscountCeil: decimal("aiDiscountCeil", { precision: 5, scale: 2 }),
     aiPriceRationale: text("aiPriceRationale"),
     aiPriceScoredAt: timestamp("aiPriceScoredAt"),
+    /**
+     * Migration 0404 (audit 2026-10-20, F34, F36): a quote is a proposal's
+     * pricing section. `version` counts its pricing changes; a version a newer
+     * one replaced keeps its row, stamped `supersededAt`, so every earlier
+     * price stays viewable. NULL proposalId: not folded yet (services/quoteFold
+     * attaches it at boot).
+     */
+    proposalId: int("proposalId"),
+    version: int("version").default(1).notNull(),
+    supersededAt: timestamp("supersededAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byOpp: index("ix_quote_opp").on(t.opportunityId),
     uqNum: uniqueIndex("uq_quote_num").on(t.workspaceId, t.quoteNumber),
+    byProposal: index("ix_quote_proposal").on(t.workspaceId, t.proposalId),
   }),
 );
 export const quoteLineItems = mysqlTable(

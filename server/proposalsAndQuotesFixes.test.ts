@@ -461,10 +461,14 @@ describe("R71 · R94: a quote says who it is from, expires, and fits its pages",
   });
 
   it("Accept and Reject ask first, and no e-signature is promised", () => {
-    const src = read("client/src/pages/usip/Quotes.tsx");
-    const sent = block(src, `{q.status === "sent" && (`, "\n                        )}");
-    expect(sent).not.toContain("<Button");
-    expect(sent.match(/<ConfirmButton/g)).toHaveLength(2);
-    expect(src).not.toMatch(/e-signature/i);
+    // 2026-11-07 (audit F34, batch CRMD): the Quotes page is retired; a quote
+    // is a proposal's pricing, and the client's answer is the proposal's
+    // (Accept with an e-signature record, Decline, Request changes — each
+    // confirmed on the portal). Accepting the proposal records its current
+    // pricing as accepted. The pricing tab offers no one-click answer and
+    // promises no e-signature of its own.
+    const src = read("client/src/components/usip/ProposalPricing.tsx");
+    expect(src).not.toMatch(/setStatus|e-signature/i);
+    expect(read("server/routers/proposals.ts")).toContain("await acceptCurrentPricing(db, ctx.workspace.id, input.id);");
   });
 });

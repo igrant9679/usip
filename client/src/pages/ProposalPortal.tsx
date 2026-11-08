@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { usePageTitle } from "@/lib/usePageTitle";
+import { formatMoney } from "@shared/quoteTotals";
 
 /**
  * A proposal section as the client should see it (audit 2026-10-20, R22).
@@ -50,6 +51,44 @@ function SectionBody({ content }: { content: string }) {
     return <div className="prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(content) }} />;
   }
   return <div className="prose prose-sm max-w-none text-gray-700"><Streamdown>{content}</Streamdown></div>;
+}
+
+/**
+ * The pricing table (audit 2026-10-20, F34): the proposal's current quote
+ * version — lines, totals, notes and terms — as its PDF prints it. Amounts are
+ * dollars: the portal has no workspace session to read a currency from, and
+ * the quote PDF prints dollars too.
+ */
+export function PortalPricingTable({ pricing }: { pricing: { lineItems: Array<{ name: string; description: string | null; quantity: number; unitPrice: string; discountPct: string; lineTotal: string }>; subtotal: string; discountTotal: string; total: string; notes: string | null; terms: string | null } }) {
+  const money = (v: string) => formatMoney(v);
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-xs text-gray-500 border-b"><tr>
+          <th className="text-left py-1.5 pr-2">Item</th><th className="text-right py-1.5 px-2">Qty</th>
+          <th className="text-right py-1.5 px-2">Unit price</th><th className="text-right py-1.5 px-2">Discount</th><th className="text-right py-1.5 pl-2">Total</th>
+        </tr></thead>
+        <tbody className="divide-y divide-gray-100">
+          {pricing.lineItems.map((l, i) => (
+            <tr key={i}>
+              <td className="py-1.5 pr-2 text-gray-800">{l.name}{l.description && <div className="text-xs text-gray-500">{l.description}</div>}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{l.quantity}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{money(l.unitPrice)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{Number(l.discountPct) > 0 ? `${Number(l.discountPct)}%` : "—"}</td>
+              <td className="py-1.5 pl-2 text-right tabular-nums">{money(l.lineTotal)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="mt-2 flex justify-end gap-4 text-sm tabular-nums">
+        <span className="text-gray-500">Subtotal {money(pricing.subtotal)}</span>
+        {Number(pricing.discountTotal) > 0 && <span className="text-gray-500">Discount −{money(pricing.discountTotal)}</span>}
+        <span className="font-semibold text-gray-900">Total {money(pricing.total)}</span>
+      </div>
+      {pricing.notes && <p className="mt-3 text-xs text-gray-600"><span className="font-medium">Notes:</span> {pricing.notes}</p>}
+      {pricing.terms && <p className="mt-1 text-xs text-gray-600"><span className="font-medium">Terms:</span> {pricing.terms}</p>}
+    </div>
+  );
 }
 
 /**
@@ -189,10 +228,13 @@ export default function ProposalPortal() {
   }
 
   const { proposal, sections, milestones } = data;
+  // The proposal's pricing section: its current quote version (F34).
+  const pricing = data.pricing ?? null;
   const statusCfg: { label: string; color: string } | undefined = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG];
   const sectionMap: Record<string, string> = {};
   for (const s of sections) sectionMap[s.sectionKey] = s.content;
   const populatedSections = Object.entries(sectionMap).filter(([, v]) => v?.trim());
+  const hasContent = populatedSections.length > 0 || !!pricing;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -343,9 +385,9 @@ export default function ProposalPortal() {
           )}
         </div>
 
-        <Tabs defaultValue={populatedSections.length > 0 ? "content" : "timeline"} className="space-y-4">
+        <Tabs defaultValue={hasContent ? "content" : "timeline"} className="space-y-4">
           <TabsList className="bg-white border border-gray-200 rounded-lg p-1 gap-1 h-auto flex-wrap">
-            {populatedSections.length > 0 && (
+            {hasContent && (
               <TabsTrigger value="content" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
                 Proposal Content
               </TabsTrigger>
@@ -366,7 +408,7 @@ export default function ProposalPortal() {
           </TabsList>
 
           {/* Content sections */}
-          {populatedSections.length > 0 && (
+          {hasContent && (
             <TabsContent value="content" className="mt-0 space-y-4">
               {populatedSections.map(([key, content]) => (
                 <div key={key} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
@@ -374,8 +416,15 @@ export default function ProposalPortal() {
                     {SECTION_LABELS[key] ?? key}
                   </h2>
                   <SectionBody content={content} />
+                  {key === "pricing" && pricing && <PortalPricingTable pricing={pricing} />}
                 </div>
               ))}
+              {pricing && !sectionMap.pricing?.trim() && (
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h2 className="text-base font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">Pricing</h2>
+                  <PortalPricingTable pricing={pricing} />
+                </div>
+              )}
             </TabsContent>
           )}
 

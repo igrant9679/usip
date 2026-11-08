@@ -231,7 +231,25 @@ describe("every entity type can actually be cleared", () => {
  */
 describe("quotes.send says only what it does", () => {
   const ops = strip(readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8"));
-  const quotesUi = readFileSync(join(ROOT, "client/src/pages/usip/Quotes.tsx"), "utf8");
+  /**
+   * 2026-11-07 (audit F34, batch CRMD): the Quotes page is retired — quotes
+   * folded into proposals as their pricing section, and /quotes redirects to
+   * /proposals. Its "Mark quote as sent" button went with it: a proposal is
+   * sent through the proposal's own Share flow, and no screen calls
+   * quotes.send any more. The dialog checks below therefore guard the absence
+   * of any caller (a new caller brings a dialog this file must pin again); the
+   * server-side checks are unchanged.
+   */
+  const clientFiles = (() => {
+    const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+    const walk = (dir: string): string[] => readdirSync(join(ROOT, dir)).flatMap((n) => {
+      const rel = `${dir}/${n}`;
+      return statSync(join(ROOT, rel)).isDirectory() ? walk(rel) : /\.tsx?$/.test(n) ? [rel] : [];
+    });
+    return walk("client/src");
+  })();
+  const sendCallers = clientFiles.filter((f) => readFileSync(join(ROOT, f), "utf8").includes("quotes.send.useMutation"));
+  const dialog = "";
 
   const send = (() => {
     const router = ops.slice(ops.indexOf("quotesRouter = router("));
@@ -242,15 +260,10 @@ describe("quotes.send says only what it does", () => {
     return router.slice(at, next);
   })();
 
-  /** The confirm dialog for the Send button, isolated from the other two. */
-  const dialog = (() => {
-    const at = quotesUi.indexOf('ariaLabel="Mark quote as sent"');
-    expect(at, "the send ConfirmButton was not found by its aria-label").toBeGreaterThan(0);
-    const end = quotesUi.indexOf("/>", at);
-    const bounded = end > at ? quotesUi.slice(at, end) : quotesUi.slice(at, at + 600);
-    expect(bounded).toContain("description=");
-    return bounded;
-  })();
+  it("no screen calls it, so no dialog can promise an email", () => {
+    expect(sendCallers, "a screen calls quotes.send again: pin its confirm dialog here").toEqual([]);
+    expect(clientFiles.length).toBeGreaterThan(100);
+  });
 
   it("does not promise an email", () => {
     /**
@@ -275,12 +288,14 @@ describe("quotes.send says only what it does", () => {
 
   it("says plainly that it does NOT email", () => {
     // Stronger than staying silent: a button with a paper-plane icon labelled
-    // "Send" reads as "this mails it" unless the copy says otherwise.
-    expect(dialog).toMatch(/does not email/i);
+    // "Send" reads as "this mails it" unless the copy says otherwise. With no
+    // caller there is no button (pinned above); the handler's own comment
+    // still says so for whoever adds one.
+    expect(dialog).not.toMatch(/will be emailed/i);
+    expect(ops).toContain("Marks a quote as sent. It does NOT email the customer");
   });
 
   it("promises a record, and the handler writes one", () => {
-    expect(dialog).toMatch(/records who did it/i);
     expect(
       send,
       "\n\nThe dialog says the action is recorded. Without recordAudit it is not.\n",

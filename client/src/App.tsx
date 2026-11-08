@@ -69,7 +69,6 @@ const FindProspects = lazyChunk(() => import("@/pages/usip/FindProspects"));
 const Pipeline = lazyChunk(() => import("@/pages/usip/Pipeline"));
 const Products = lazyChunk(() => import("@/pages/usip/Products"));
 const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
-const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
 const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
 const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));
 const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
@@ -537,7 +536,7 @@ function Router() {
           at /v2/home replaces it (phase 5 item 2, 2026-10-27). */}
       <Route path="/dashboard-home2"><AuthGate><RetiredRedirect from="/dashboard-home2" /></AuthGate></Route>
       <Route path="/products"><AuthGate><Products /></AuthGate></Route>
-      <Route path="/quotes"><AuthGate><Quotes /></AuthGate></Route>
+      <Route path="/quotes"><AuthGate><RetiredRedirect from="/quotes" /></AuthGate></Route>
       <Route path="/territories"><AuthGate><Territories /></AuthGate></Route>
       <Route path="/team"><AuthGate><Team /></AuthGate></Route>
       <Route path="/audit"><AuthGate><Audit /></AuthGate></Route>

@@ -105,7 +105,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
   "/v2/conversations": { body: "Ongoing back-and-forth with prospects, and the AI's suggested replies.", article: "conversations-autopilot" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
-  "/proposals": { body: "Quotes and proposals you've sent, and whether they've been opened." },
+  "/proposals": { body: "Proposals, with their versioned pricing, and whether the client has opened, accepted or declined them." },
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },
 
   // ── Automation and analytics ──
