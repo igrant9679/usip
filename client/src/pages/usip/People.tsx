@@ -231,7 +231,7 @@ export default function People() {
   const [verification, setVerification] = useState<string>(""); // verified | needs_review | rejected
   const [promoted, setPromoted] = useState<"all" | "promoted" | "not">("all");
   // One company's people: /v2/people?companyId=42, the company page's "Open in
-  // People" (audit 2026-10-20, F36). A deep link, so not kept in saved searches.
+  // People" (audit 2026-10-20, F36). A saved search can keep it, like any pill.
   const [companyId, setCompanyId] = useState<number | null>(() => {
     const n = Number(urlParams?.get("companyId") ?? "");
     return Number.isInteger(n) && n > 0 ? n : null;
@@ -579,6 +579,7 @@ export default function People() {
     // the same way the prospects.list call's is.
     if (tiers.size) filters.tiers = Array.from(tiers) as TierValue[];
     if (seniorities.size) filters.seniorities = Array.from(seniorities);
+    if (companyId) filters.companyId = companyId;
     return { columns: visibleColumns, filters, sort: { field: sortField, dir: sortDir } };
   };
 
@@ -604,6 +605,7 @@ export default function People() {
     setHasLinkedin(!!f.hasLinkedin);
     setTiers(new Set(f.tiers ?? []));
     setSeniorities(new Set(f.seniorities ?? []));
+    setCompanyId(f.companyId ?? null);
     setSearch(f.search ?? "");
     setTitleQ(f.titleQ ?? "");
     setCompanyQ(f.companyQ ?? "");

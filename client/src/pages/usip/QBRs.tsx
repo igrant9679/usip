@@ -93,7 +93,7 @@ export default function QBRs() {
   const [completeFor, setCompleteFor] = useState<number | null>(null);
   const [moveFor, setMoveFor] = useState<number | null>(null);
   const schedule = trpc.cs.scheduleQbr.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setOpen(false); toast.success("QBR scheduled"); }, onError: (e) => toast.error(e.message) });
-  const reschedule = trpc.cs.rescheduleQbr.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); utils.cs.listQbrs.invalidate(); setMoveFor(null); toast.success("QBR moved"); }, onError: (e) => toast.error(e.message) });
+  const reschedule = trpc.cs.rescheduleQbr.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setMoveFor(null); toast.success("QBR moved"); }, onError: (e) => toast.error(e.message) });
   // Success now means the model wrote it: a failure saves nothing and the
   // server says so, instead of saving canned text under "AI prep" (R74).
   const genPrep = trpc.cs.generateQbrPrep.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); toast.success("AI prep generated"); }, onError: (e) => toast.error(e.message) });

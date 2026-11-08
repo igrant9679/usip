@@ -243,6 +243,17 @@ describe("one company's People (F36)", () => {
     expect(r.total).toBe(2);
   });
 
+  it("a saved search can keep the company filter, only for this workspace's company", async () => {
+    rows("accounts").push({ id: 50, workspaceId: WS, name: "Acme" }, { id: 60, workspaceId: OTHER, name: "Theirs" });
+    const config = (companyId: number) => ({ columns: ["name"] as any, filters: { companyId }, sort: { field: "relevance" as const, dir: "desc" as const } });
+    expect((await refusal(caller(REP).savedSearches.save({ surface: "people", name: "Theirs", config: config(60) } as any))).code).toBe("NOT_FOUND");
+    const { id } = await caller(REP).savedSearches.save({ surface: "people", name: "Acme people", config: config(50) } as any);
+    expect(rows("saved_searches").find((s) => s.id === id).config.filters).toEqual({ companyId: 50 });
+    const { normalizeViewConfig } = await import("../client/src/components/usip/people/savedSearchConfig");
+    expect(normalizeViewConfig({ columns: ["name"], filters: { companyId: 50 } }).filters).toEqual({ companyId: 50 });
+    expect(normalizeViewConfig({ columns: ["name"], filters: { companyId: "50" } }).filters).toEqual({});
+  });
+
   it("People reads ?companyId=, shows it as a removable filter, and the company page links to it", () => {
     const src = read("client/src/pages/usip/People.tsx");
     expect(src).toContain(`const n = Number(urlParams?.get("companyId") ?? "");`);
