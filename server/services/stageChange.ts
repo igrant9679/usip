@@ -38,6 +38,7 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers
 import { stageResolver } from "../_core/stageSemantics";
 import { notifyIfEnabled } from "./policyNotify";
 import { ensureCustomerForWonOpp } from "./wonToCustomer";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -121,7 +122,7 @@ export async function changeOpportunityStage(
       eq(opportunities.workspaceId, workspaceId),
       eq(opportunities.stage, before.stage),
     ));
-  if (Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0) !== 1) return unchanged;
+  if (affectedRowsOf(res) !== 1) return unchanged;
 
   const enteredAt = before.stageEnteredAt ? new Date(before.stageEnteredAt).getTime() : null;
   const daysInPrevStage = enteredAt != null ? Math.max(0, Math.floor((now.getTime() - enteredAt) / DAY_MS)) : before.daysInStage ?? null;

@@ -64,6 +64,7 @@ import { dayRangeBounds } from "../services/calendarDeadline";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isValidTimezone } from "@shared/availability";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -151,7 +152,7 @@ async function reassignOwnedWork(
           WHERE workspaceId = ${workspaceId} AND ${sql.raw(`\`${safeColumn(o.column)}\``)} = ${fromUserId}
           ${scopeCondition(o.scope, now)}`,
     )) as any;
-    out[o.key] = Number(res?.affectedRows ?? 0);
+    out[o.key] = affectedRowsOf(res);
   }
   return out;
 }
@@ -1084,7 +1085,7 @@ export const teamRouter = router({
             eq(bookingLinks.userId, target.userId),
             eq(bookingLinks.active, true),
           ))) as any;
-        bookingLinksDeactivated = Number(res?.affectedRows ?? 0);
+        bookingLinksDeactivated = affectedRowsOf(res);
       } catch (e) {
         console.error("[team.delete] booking link deactivate failed:", (e as Error).message);
       }

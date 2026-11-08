@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { claimRow } from "../_core/claim";
 import { z } from "zod";
 import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
@@ -538,6 +539,9 @@ export const campaignsRouter = router({
 
 /* ───── Custom Dashboards ─────────────────────────────────────────── */
 
+/** Send now twice inside this is one click twice (X1.5). */
+const SEND_NOW_REPEAT_MS = 60_000;
+
 type DashboardCtx = Parameters<typeof assertOwnerOrManager>[0] & { workspace: { id: number } };
 type OpsDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -761,12 +765,22 @@ export const dashboardsRouter = router({
     // Sending is an export to whoever the schedule names, so it is the owner's or a manager's.
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [s] = await db.select({ dashboardId: reportSchedules.dashboardId }).from(reportSchedules)
+    const [s] = await db.select({ dashboardId: reportSchedules.dashboardId, lastSentAt: reportSchedules.lastSentAt }).from(reportSchedules)
       .where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
     if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Schedule not found" });
     await dashboardForEdit(db, ctx, s.dashboardId);
+    // A second Send now within a minute of the last send is the same click
+    // twice (audit X1.5): the claim on lastSentAt lets one through. A send
+    // that fails gives the claim back, so Retry works at once.
+    const since = new Date(Date.now() - SEND_NOW_REPEAT_MS);
+    const claimedAt = new Date();
+    const won = await claimRow(db.update(reportSchedules).set({ lastSentAt: claimedAt })
+      .where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id), or(isNull(reportSchedules.lastSentAt), lt(reportSchedules.lastSentAt, since)))));
+    if (!won) throw new TRPCError({ code: "CONFLICT", message: "This report was sent less than a minute ago." });
     const r = await sendDashboardScheduleEmail(ctx.workspace.id, input.id, ctx.user.id);
     if (!r.ok) {
+      await db.update(reportSchedules).set({ lastSentAt: s.lastSentAt ?? null })
+        .where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id), eq(reportSchedules.lastSentAt, claimedAt)));
       if (r.reason === "db_unavailable" || r.reason === "decrypt_failed") throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: r.message });
       if (r.reason === "no_recipients") throw new TRPCError({ code: "BAD_REQUEST", message: r.message });
       throw new TRPCError({ code: "NOT_FOUND", message: r.message });
@@ -1708,7 +1722,11 @@ export const quotesRouter = router({
     if (quoteHasLapsed(q)) throw lapsedQuote(q);
 
     const sentAt = new Date();
-    await db.update(quotes).set({ status: "sent", sentAt }).where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id)));
+    // Marked once (X1.5): a second click on a quote already sent recorded a
+    // second "sent" entry and moved its sent date.
+    const won = await claimRow(db.update(quotes).set({ status: "sent", sentAt })
+      .where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id), ne(quotes.status, "sent"))));
+    if (!won) return { ok: true, alreadySent: true };
     await recordAudit({
       workspaceId: ctx.workspace.id,
       actorUserId: ctx.user.id,

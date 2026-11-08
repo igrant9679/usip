@@ -51,6 +51,7 @@ import {
   workspaceMembers,
 } from "../../drizzle/schema";
 import { SEED_FINGERPRINT } from "../seed";
+import { affectedRowsOf } from "../_core/claim";
 
 export interface SampleDataCounts {
   accounts: number;
@@ -71,7 +72,6 @@ export interface SampleDataCounts {
   areQueueRows: number;
 }
 
-const affected = (r: unknown): number => Number((r as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
 
 /** Demo-account ids for a workspace — the anchor everything CRM cascades from. */
 async function demoAccountIds(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, ws: number): Promise<number[]> {
@@ -169,8 +169,8 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
     if (queueIds.length) {
       await db.delete(prospectIntelligence).where(and(eq(prospectIntelligence.workspaceId, ws), inArray(prospectIntelligence.prospectQueueId, queueIds)));
     }
-    counts.areQueueRows = affected(await db.delete(prospectQueue).where(and(eq(prospectQueue.workspaceId, ws), inArray(prospectQueue.campaignId, areIds))));
-    counts.areCampaigns = affected(await db.delete(areCampaigns).where(and(eq(areCampaigns.workspaceId, ws), inArray(areCampaigns.id, areIds))));
+    counts.areQueueRows = affectedRowsOf(await db.delete(prospectQueue).where(and(eq(prospectQueue.workspaceId, ws), inArray(prospectQueue.campaignId, areIds))));
+    counts.areCampaigns = affectedRowsOf(await db.delete(areCampaigns).where(and(eq(areCampaigns.workspaceId, ws), inArray(areCampaigns.id, areIds))));
   }
 
   /* ── CRM demo, cascading from the fictional accounts ──────────────── */
@@ -186,7 +186,7 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
       await db.delete(contractAmendments).where(and(eq(contractAmendments.workspaceId, ws), inArray(contractAmendments.customerId, custIds)));
       await db.delete(qbrs).where(and(eq(qbrs.workspaceId, ws), inArray(qbrs.customerId, custIds)));
       await db.delete(tasks).where(and(eq(tasks.workspaceId, ws), eq(tasks.relatedType, "customer"), inArray(tasks.relatedId, custIds)));
-      counts.customers = affected(await db.delete(customers).where(and(eq(customers.workspaceId, ws), inArray(customers.id, custIds))));
+      counts.customers = affectedRowsOf(await db.delete(customers).where(and(eq(customers.workspaceId, ws), inArray(customers.id, custIds))));
     }
 
     // Opportunities (and their roles / tasks)
@@ -195,8 +195,8 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
     const oppIds = oppRows.map((r) => r.id);
     if (oppIds.length) {
       await db.delete(opportunityContactRoles).where(and(eq(opportunityContactRoles.workspaceId, ws), inArray(opportunityContactRoles.opportunityId, oppIds)));
-      counts.tasks += affected(await db.delete(tasks).where(and(eq(tasks.workspaceId, ws), eq(tasks.relatedType, "opportunity"), inArray(tasks.relatedId, oppIds))));
-      counts.opportunities = affected(await db.delete(opportunities).where(and(eq(opportunities.workspaceId, ws), inArray(opportunities.id, oppIds))));
+      counts.tasks += affectedRowsOf(await db.delete(tasks).where(and(eq(tasks.workspaceId, ws), eq(tasks.relatedType, "opportunity"), inArray(tasks.relatedId, oppIds))));
+      counts.opportunities = affectedRowsOf(await db.delete(opportunities).where(and(eq(opportunities.workspaceId, ws), inArray(opportunities.id, oppIds))));
     }
 
     // Contacts (and their enrollments / drafts / tasks)
@@ -204,21 +204,21 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
       .where(and(eq(contacts.workspaceId, ws), inArray(contacts.accountId, accIds)));
     const conIds = conRows.map((r) => r.id);
     if (conIds.length) {
-      counts.enrollments += affected(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.contactId, conIds))));
-      counts.emailDrafts += affected(await db.delete(emailDrafts).where(and(eq(emailDrafts.workspaceId, ws), inArray(emailDrafts.toContactId, conIds))));
+      counts.enrollments += affectedRowsOf(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.contactId, conIds))));
+      counts.emailDrafts += affectedRowsOf(await db.delete(emailDrafts).where(and(eq(emailDrafts.workspaceId, ws), inArray(emailDrafts.toContactId, conIds))));
       await db.delete(tasks).where(and(eq(tasks.workspaceId, ws), eq(tasks.relatedType, "contact"), inArray(tasks.relatedId, conIds)));
-      counts.contacts = affected(await db.delete(contacts).where(and(eq(contacts.workspaceId, ws), inArray(contacts.id, conIds))));
+      counts.contacts = affectedRowsOf(await db.delete(contacts).where(and(eq(contacts.workspaceId, ws), inArray(contacts.id, conIds))));
     }
 
     await db.delete(tasks).where(and(eq(tasks.workspaceId, ws), eq(tasks.relatedType, "account"), inArray(tasks.relatedId, accIds)));
-    counts.accounts = affected(await db.delete(accounts).where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, accIds))));
+    counts.accounts = affectedRowsOf(await db.delete(accounts).where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, accIds))));
   }
 
   /* ── Leads minted from the fictional domains ──────────────────────── */
   const leadIds = await demoLeadIds(db, ws);
   if (leadIds.length) {
-    counts.enrollments += affected(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.leadId, leadIds))));
-    counts.leads = affected(await db.delete(leads).where(and(eq(leads.workspaceId, ws), inArray(leads.id, leadIds))));
+    counts.enrollments += affectedRowsOf(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.leadId, leadIds))));
+    counts.leads = affectedRowsOf(await db.delete(leads).where(and(eq(leads.workspaceId, ws), inArray(leads.id, leadIds))));
   }
 
   /* ── Orphaned seed tasks ──────────────────────────────────────────────
@@ -228,7 +228,7 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
      survived because only 6 of the seeder's 32 opportunities still
      existed). A seed-titled, opportunity-typed task whose relatedId no
      longer resolves is unambiguously seed residue. ─────────────────────── */
-  counts.tasks += affected(await db.delete(tasks).where(and(
+  counts.tasks += affectedRowsOf(await db.delete(tasks).where(and(
     eq(tasks.workspaceId, ws),
     inArray(tasks.title, SEED_FINGERPRINT.taskTitles as unknown as string[]),
     eq(tasks.relatedType, "opportunity"),
@@ -240,12 +240,12 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
     .where(and(eq(sequences.workspaceId, ws), inArray(sequences.name, SEED_FINGERPRINT.sequenceNames as unknown as string[])));
   const seqIds = seqRows.map((r) => r.id);
   if (seqIds.length) {
-    counts.enrollments += affected(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.sequenceId, seqIds))));
-    counts.sequences = affected(await db.delete(sequences).where(and(eq(sequences.workspaceId, ws), inArray(sequences.id, seqIds))));
+    counts.enrollments += affectedRowsOf(await db.delete(enrollments).where(and(eq(enrollments.workspaceId, ws), inArray(enrollments.sequenceId, seqIds))));
+    counts.sequences = affectedRowsOf(await db.delete(sequences).where(and(eq(sequences.workspaceId, ws), inArray(sequences.id, seqIds))));
   }
-  counts.workflowRules = affected(await db.delete(workflowRules).where(and(eq(workflowRules.workspaceId, ws), inArray(workflowRules.name, SEED_FINGERPRINT.workflowNames as unknown as string[]))));
-  counts.campaigns = affected(await db.delete(campaigns).where(and(eq(campaigns.workspaceId, ws), inArray(campaigns.name, SEED_FINGERPRINT.campaignNames as unknown as string[]))));
-  counts.products = affected(await db.delete(products).where(and(eq(products.workspaceId, ws), inArray(products.sku, SEED_FINGERPRINT.productSkus as unknown as string[]))));
+  counts.workflowRules = affectedRowsOf(await db.delete(workflowRules).where(and(eq(workflowRules.workspaceId, ws), inArray(workflowRules.name, SEED_FINGERPRINT.workflowNames as unknown as string[]))));
+  counts.campaigns = affectedRowsOf(await db.delete(campaigns).where(and(eq(campaigns.workspaceId, ws), inArray(campaigns.name, SEED_FINGERPRINT.campaignNames as unknown as string[]))));
+  counts.products = affectedRowsOf(await db.delete(products).where(and(eq(products.workspaceId, ws), inArray(products.sku, SEED_FINGERPRINT.productSkus as unknown as string[]))));
 
   // Dashboards (widgets first)
   const dashRows = await db.select({ id: dashboards.id }).from(dashboards)
@@ -253,7 +253,7 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
   const dashIds = dashRows.map((r) => r.id);
   if (dashIds.length) {
     await db.delete(dashboardWidgets).where(and(eq(dashboardWidgets.workspaceId, ws), inArray(dashboardWidgets.dashboardId, dashIds)));
-    counts.dashboards = affected(await db.delete(dashboards).where(and(eq(dashboards.workspaceId, ws), inArray(dashboards.id, dashIds))));
+    counts.dashboards = affectedRowsOf(await db.delete(dashboards).where(and(eq(dashboards.workspaceId, ws), inArray(dashboards.id, dashIds))));
   }
 
   // Territories: real members/accounts may point at the seeded four — null the
@@ -265,7 +265,7 @@ export async function removeSampleData(workspaceId: number): Promise<SampleDataC
     await db.update(workspaceMembers).set({ territoryId: null }).where(and(eq(workspaceMembers.workspaceId, ws), inArray(workspaceMembers.territoryId, terrIds)));
     await db.update(accounts).set({ territoryId: null }).where(and(eq(accounts.workspaceId, ws), inArray(accounts.territoryId, terrIds)));
     await db.delete(crmTerritoryRules).where(and(eq(crmTerritoryRules.workspaceId, ws), inArray(crmTerritoryRules.territoryId, terrIds)));
-    counts.territories = affected(await db.delete(territories).where(and(eq(territories.workspaceId, ws), inArray(territories.id, terrIds))));
+    counts.territories = affectedRowsOf(await db.delete(territories).where(and(eq(territories.workspaceId, ws), inArray(territories.id, terrIds))));
   }
 
   return counts;

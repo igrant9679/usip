@@ -37,6 +37,7 @@ import {
 } from "@shared/availability";
 import { unguessableSlug } from "@shared/slugify";
 import { isLiveMeetingStatus } from "@shared/meetingStatus";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * Availability bounds. The generator's own defaults live in
@@ -585,7 +586,7 @@ export async function cancelBookingByToken(token: string, reason?: string | null
   }
   const claimed = await db.update(meetings).set({ status: "cancelled", disposition: "cancelled_by_booker" } as never)
     .where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), ne(meetings.status, "cancelled")));
-  if (Number((claimed as any)?.[0]?.affectedRows ?? 0) !== 1) return { ok: true, already: true };
+  if (affectedRowsOf(claimed) !== 1) return { ok: true, already: true };
   const who = m.contactName || m.contactEmail || "The booker";
   const said = String(reason ?? "").trim().slice(0, 500);
   const tz = (await linkForMeeting(m))?.timezone ?? "UTC";

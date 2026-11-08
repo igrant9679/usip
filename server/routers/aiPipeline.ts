@@ -18,6 +18,7 @@ import {
 import { invokeLLM } from "../_core/llm";
 import { researchUseFor } from "../services/research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
+import { affectedRowsOf } from "../_core/claim";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -403,7 +404,7 @@ export const aiPipelineRouter = router({
       .update(emailDrafts)
       .set({ status: "approved", reviewedByUserId: ctx.user.id })
       .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status as any, "ai_pending_review")));
-    const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+    const approved = affectedRowsOf(r);
     return { ok: true, approved };
   }),
 
@@ -568,7 +569,7 @@ Return JSON with:
       if (input.status === "bounced") conditions.push(isNotNull(emailDrafts.bouncedAt));
       else if (input.status) conditions.push(eq(emailDrafts.status, input.status));
       const res = await db.delete(emailDrafts).where(and(...conditions));
-      const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+      const deleted = affectedRowsOf(res);
       return { ok: true, deleted };
     }),
 });

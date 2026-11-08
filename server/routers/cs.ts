@@ -11,6 +11,7 @@ import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } 
 import { renewalStageFor, type RenewalStage } from "@shared/renewalStage";
 // The one score → tier reading (R58), shared with the pages that colour it.
 import { calcHealth } from "@shared/customerHealth";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * 2026-09-20: renewalStage is DERIVED from contractEnd on the way out, because
@@ -340,7 +341,7 @@ export const csRouter = router({
     await db.delete(supportTickets).where(eq(supportTickets.workspaceId, wsId));
     await db.delete(contractAmendments).where(eq(contractAmendments.workspaceId, wsId));
     const res = await db.delete(customers).where(eq(customers.workspaceId, wsId));
-    const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+    const deleted = affectedRowsOf(res);
     await recordAudit({
       workspaceId: wsId,
       actorUserId: ctx.user.id,

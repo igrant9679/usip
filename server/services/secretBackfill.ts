@@ -26,6 +26,7 @@ import { and, eq, isNotNull, or } from "drizzle-orm";
 import { calendarAccounts, sendingAccounts } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { decryptField, encryptField } from "../emailAdapter";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -64,7 +65,7 @@ export async function encryptLegacyMailboxSecrets(dbArg?: Db): Promise<{ encrypt
           .update(t)
           .set({ [col]: enc, updatedAt: row.updatedAt })
           .where(and(eq(t.id, row.id), eq(t[col], row[col])))) as any;
-        if (Number(res?.affectedRows ?? 1) > 0) encrypted++;
+        if (affectedRowsOf(res) > 0) encrypted++;
       }
     }
   }

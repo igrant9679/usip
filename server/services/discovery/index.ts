@@ -50,6 +50,7 @@ import {
 import { processRun, skippedCount, type PersistResult } from "./consolidate";
 import { alreadyInWorkspace, workspaceIdentityIndex } from "../prospectSources/dedupe";
 import { enqueueJob, findActiveJob, kickJobs, registerJobKind, withHeartbeat } from "../jobs/runner";
+import { affectedRowsOf } from "../../_core/claim";
 
 /**
  * Real LinkedIn people search for Discovery v2 (replaces the old fabricating
@@ -885,7 +886,7 @@ export async function runQueuedDiscovery(workspaceId: number, p: DiscoveryJobPay
     eq(discoveryRuns.status, "running"),
     isNull(discoveryRuns.fanOutStartedAt),
   ));
-  if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) !== 1) {
+  if (affectedRowsOf(res) !== 1) {
     // Started before by a worker that is gone, or no longer running: never again.
     await db.update(discoveryRuns).set({ status: "failed", errorMessage: DISCOVERY_RESTARTED_ERROR, completedAt: new Date() })
       .where(and(eq(discoveryRuns.id, p.runId), eq(discoveryRuns.workspaceId, workspaceId), eq(discoveryRuns.status, "running")));

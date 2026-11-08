@@ -26,6 +26,7 @@ import {
   workspaceMembers,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { claimRow } from "../_core/claim";
 import { changeOpportunityStage } from "../services/stageChange";
 import { stageResolver } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
@@ -307,10 +308,14 @@ export const opportunityIntelligenceRouter = router({
       if (!approval) throw new TRPCError({ code: "NOT_FOUND" });
       if (approval.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "Approval already reviewed" });
 
-      await db
+      // The review claims the request (audit X1.5): two reviews of one
+      // request, or a double click, each read "pending" and each applied the
+      // stage. Only the one whose update still found it pending goes on.
+      const won = await claimRow(db
         .update(stageApprovals)
         .set({ status: input.approved ? "approved" : "rejected", approverUserId: ctx.user.id, reviewNote: input.reviewNote ?? null })
-        .where(and(eq(stageApprovals.id, input.approvalId), eq(stageApprovals.workspaceId, ctx.workspace.id)));
+        .where(and(eq(stageApprovals.id, input.approvalId), eq(stageApprovals.workspaceId, ctx.workspace.id), eq(stageApprovals.status, "pending"))));
+      if (!won) throw new TRPCError({ code: "CONFLICT", message: "Approval already reviewed" });
 
       // Apply it through the one stage-change service (audit 2026-10-20, R21):
       // history (with the manager's note), owner notice, closed-won/lost,

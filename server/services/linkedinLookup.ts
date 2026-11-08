@@ -32,6 +32,7 @@ import {
   type UnipileLinkedInSearchHit,
   type UnipileUserProfile,
 } from "../lib/unipile";
+import { affectedRowsOf } from "../_core/claim";
 
 /** UTC calendar date as "YYYY-MM-DD" — the daily-usage partition key. */
 function utcDateKey(): string {
@@ -65,7 +66,7 @@ async function reserveSlot(unipileAccountId: string, cap: number): Promise<boole
           AND \`usage_date\` = ${day}
           AND \`count\` < ${cap}`,
   );
-  return ((res as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  return affectedRowsOf(res) > 0;
 }
 
 /** Reverse a reservation when the downstream Unipile call fails. */

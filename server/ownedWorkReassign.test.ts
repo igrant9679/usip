@@ -388,7 +388,9 @@ describe("the helper itself", () => {
   });
 
   it("counts rows actually affected, not the length of the list", () => {
-    expect(fn).toMatch(/out\[o\.key\] = Number\(res\?\.affectedRows \?\? 0\)/);
+    // 2026-11-07 (audit X1.5): rows changed are read through the one shared
+    // reader, affectedRowsOf (_core/claim.ts); still the rows, not the list.
+    expect(fn).toMatch(/out\[o\.key\] = affectedRowsOf\(res\)/);
   });
 });
 

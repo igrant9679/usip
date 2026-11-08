@@ -26,6 +26,7 @@ import {
   users,
   crmPipelineStages,
 } from "../../drizzle/schema";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * Clearing an alert hides it from everyone (audit 2026-10-20, R37), so it is
@@ -584,7 +585,7 @@ export const pipelineAlertsRouter = router({
         ),
       );
     const dismissed = Number(
-      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+      affectedRowsOf(res),
     );
     return { ok: true, dismissed };
   }),
@@ -597,7 +598,7 @@ export const pipelineAlertsRouter = router({
       .delete(pipelineAlerts)
       .where(eq(pipelineAlerts.workspaceId, ctx.workspace.id));
     const deleted = Number(
-      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+      affectedRowsOf(res),
     );
     return { ok: true, deleted };
   }),

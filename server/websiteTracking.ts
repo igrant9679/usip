@@ -24,6 +24,7 @@ import { activities, contacts, leads, prospects, tasks, websiteVisits, workspace
 import { pageIntent } from "@shared/pageIntent";
 import { activeOwnerOrNull } from "./_core/activeMembers";
 import { findSuppression, type SuppressionTarget } from "./services/suppression";
+import { affectedRowsOf } from "./_core/claim";
 
 /**
  * Privacy (audit 2026-10-20, P87). A visitor whose browser sends Do Not Track
@@ -74,7 +75,7 @@ export async function purgeOldWebsiteVisits(now: Date = new Date()): Promise<num
   for (let i = 0; i < 200; i++) {
     const [res] = await db.execute(sql`DELETE FROM ${websiteVisits} WHERE ${websiteVisits.createdAt} < ${cutoff} LIMIT 5000`);
     batches++;
-    if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+    if (affectedRowsOf(res) < 5000) break;
   }
   return batches;
 }

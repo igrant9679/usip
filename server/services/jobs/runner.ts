@@ -27,6 +27,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { bulkJobs, users } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { runWithRequestContext } from "../../_core/requestContext";
+import { affectedRowsOf } from "../../_core/claim";
 
 export type BulkJob = typeof bulkJobs.$inferSelect;
 export type JobFailure = { id: number | string; error: string };
@@ -135,7 +136,7 @@ async function claimNext(): Promise<BulkJob | null> {
           ...(job.status === "queued" ? [] : [job.heartbeatAt ? eq(bulkJobs.heartbeatAt, job.heartbeatAt) : isNull(bulkJobs.heartbeatAt)]),
         ),
       );
-    if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1) {
+    if (affectedRowsOf(res) === 1) {
       return { ...job, status: "running" };
     }
   }
@@ -205,7 +206,7 @@ async function runSlice(job: BulkJob): Promise<void> {
   // Only a job still running takes the slice's result: one canceled while
   // the slice ran stays canceled.
   const [res] = await db.update(bulkJobs).set(next).where(and(eq(bulkJobs.id, job.id), eq(bulkJobs.status, "running")));
-  const saved = Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1;
+  const saved = affectedRowsOf(res) === 1;
   if (saved && step.finished) {
     await kind.finish?.({ ...job, ...next, status: "done" } as BulkJob, payload, "done").catch((e) => console.error(`[jobs] finish ${job.kind} failed:`, e));
   } else if (!saved) {
@@ -254,7 +255,7 @@ export async function cancelJob(workspaceId: number, jobId: number): Promise<boo
     .update(bulkJobs)
     .set({ status: "canceled", finishedAt: new Date(), message: "Canceled" })
     .where(and(eq(bulkJobs.id, jobId), eq(bulkJobs.workspaceId, workspaceId), inArray(bulkJobs.status, ACTIVE)));
-  return Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1;
+  return affectedRowsOf(res) === 1;
 }
 
 /** A job as the progress card shows it. */

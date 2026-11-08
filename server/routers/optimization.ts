@@ -11,10 +11,11 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
+import { affectedRowsOf, claimRow } from "../_core/claim";
 import { optimizationRecommendations, workspaceSettings } from "../../drizzle/schema";
 
 const MODULES = ["sequences", "messaging", "sourcing", "voice", "crm", "icp", "sdr_coaching"] as const;
@@ -31,6 +32,57 @@ async function loadOwned(db: any, workspaceId: number, id: number) {
     ));
   if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Recommendation not found." });
   return row;
+}
+
+type OptDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/** A claim on a recommendation older than this is a crashed apply, and may be taken again. */
+const APPLY_CLAIM_STALE_MS = 10 * 60_000;
+const OPEN = ["pending", "approved"] as const;
+
+/**
+ * Take a recommendation for applying (audit X1.5). A double click on Approve,
+ * or Approve beside Approve all, each read "pending" and each applied the
+ * change: a cap raised twice, its previous value overwritten. appliedAt is
+ * the claim: an open recommendation has none until it is applied, so the
+ * update that sets it first wins; applyRecommendation then sets it again.
+ */
+async function claimForApply(db: OptDb, workspaceId: number, id: number): Promise<boolean> {
+  return claimRow(db.update(optimizationRecommendations)
+    .set({ appliedAt: new Date() } as never)
+    .where(and(
+      eq(optimizationRecommendations.id, id),
+      eq(optimizationRecommendations.workspaceId, workspaceId),
+      inArray(optimizationRecommendations.status, [...OPEN] as never),
+      or(isNull(optimizationRecommendations.appliedAt), lt(optimizationRecommendations.appliedAt, new Date(Date.now() - APPLY_CLAIM_STALE_MS))),
+    )));
+}
+
+/** Give the claim back when the apply did not happen. */
+async function releaseApplyClaim(db: OptDb, workspaceId: number, id: number): Promise<void> {
+  await db.update(optimizationRecommendations)
+    .set({ appliedAt: null } as never)
+    .where(and(eq(optimizationRecommendations.id, id), eq(optimizationRecommendations.workspaceId, workspaceId), inArray(optimizationRecommendations.status, [...OPEN] as never)));
+}
+
+/** Record an advisory recommendation as approved, once: only from pending. */
+async function claimAdvisory(db: OptDb, workspaceId: number, id: number, userId: number): Promise<boolean> {
+  return claimRow(db.update(optimizationRecommendations)
+    .set({ status: "approved" as never, appliedByUserId: userId })
+    .where(and(eq(optimizationRecommendations.id, id), eq(optimizationRecommendations.workspaceId, workspaceId), eq(optimizationRecommendations.status, "pending" as never))));
+}
+
+/** Apply one claimed recommendation; the claim is released if nothing was applied. */
+async function applyClaimed(db: OptDb, workspaceId: number, row: any, userId: number) {
+  const { applyRecommendation } = await import("../services/optimization/apply");
+  try {
+    const outcome = await applyRecommendation(workspaceId, row, userId);
+    if (!outcome.ok) await releaseApplyClaim(db, workspaceId, row.id);
+    return outcome;
+  } catch (e) {
+    await releaseApplyClaim(db, workspaceId, row.id);
+    throw e;
+  }
 }
 
 export const optimizationRouter = router({
@@ -71,13 +123,11 @@ export const optimizationRouter = router({
       if (row.status !== "pending" && row.status !== "approved") {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Already ${row.status}.` });
       }
-      const { applyRecommendation, isApplicable } = await import("../services/optimization/apply");
+      const { isApplicable } = await import("../services/optimization/apply");
 
       if (!isApplicable(row)) {
-        await db
-          .update(optimizationRecommendations)
-          .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
-          .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
+        // Approving an advisory one twice records it once (X1.5).
+        if (row.status === "pending") await claimAdvisory(db, ctx.workspace.id, input.id, ctx.user.id);
         return {
           ok: true as const,
           applied: false as const,
@@ -85,7 +135,10 @@ export const optimizationRouter = router({
         };
       }
 
-      const outcome = await applyRecommendation(ctx.workspace.id, row, ctx.user.id);
+      if (!(await claimForApply(db, ctx.workspace.id, input.id))) {
+        throw new TRPCError({ code: "CONFLICT", message: "This recommendation is already being applied, or was just applied." });
+      }
+      const outcome = await applyClaimed(db, ctx.workspace.id, row, ctx.user.id);
       if (!outcome.ok) throw new TRPCError({ code: "BAD_REQUEST", message: outcome.detail });
       return { ok: true as const, applied: true as const, detail: outcome.detail };
     }),
@@ -160,14 +213,17 @@ export const optimizationRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const row = await loadOwned(db, ctx.workspace.id, input.id);
       if (row.status === "dismissed") return { ok: true as const };
-      await db
+      // Only from the state it was read in (X1.5): one applied in between
+      // keeps its applied state and its revert, rather than reading dismissed.
+      const won = await claimRow(db
         .update(optimizationRecommendations)
         .set({
           status: "dismissed" as never,
           dismissedAt: new Date(),
           dismissedByUserId: ctx.user.id,
         })
-        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
+        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id), eq(optimizationRecommendations.status, row.status as never))));
+      if (!won) throw new TRPCError({ code: "CONFLICT", message: "This recommendation changed while you were looking at it. Refresh and try again." });
       return { ok: true as const };
     }),
 
@@ -184,7 +240,7 @@ export const optimizationRouter = router({
       await db
         .update(optimizationRecommendations)
         .set({ status: "pending" as never, dismissedAt: null, dismissedByUserId: null })
-        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
+        .where(and(eq(optimizationRecommendations.id, input.id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id), inArray(optimizationRecommendations.status, ["dismissed", "approved"] as never)));
       return { ok: true as const };
     }),
 
@@ -205,14 +261,17 @@ export const optimizationRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
+      // Open ones only (X1.5): an applied recommendation dismissed in bulk lost
+      // its revert, and the count was the ids sent, not the rows changed.
+      const res = await db
         .update(optimizationRecommendations)
         .set({ status: "dismissed" as never, dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
         .where(and(
           eq(optimizationRecommendations.workspaceId, ctx.workspace.id),
           inArray(optimizationRecommendations.id, input.ids),
+          inArray(optimizationRecommendations.status, [...OPEN] as never),
         ));
-      return { ok: true as const, dismissed: input.ids.length };
+      return { ok: true as const, dismissed: affectedRowsOf(res) };
     }),
 
   /**
@@ -226,7 +285,7 @@ export const optimizationRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { applyRecommendation, isApplicable } = await import("../services/optimization/apply");
+      const { isApplicable } = await import("../services/optimization/apply");
       let applied = 0, recorded = 0, skipped = 0;
       const failed: Array<{ id: number; detail: string }> = [];
       for (const id of input.ids) {
@@ -234,14 +293,13 @@ export const optimizationRouter = router({
           const row = await loadOwned(db, ctx.workspace.id, id);
           if (row.status !== "pending" && row.status !== "approved") { skipped++; continue; }
           if (!isApplicable(row)) {
-            await db
-              .update(optimizationRecommendations)
-              .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
-              .where(and(eq(optimizationRecommendations.id, id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
+            if (row.status === "pending" && !(await claimAdvisory(db, ctx.workspace.id, id, ctx.user.id))) { skipped++; continue; }
             recorded++;
             continue;
           }
-          const outcome = await applyRecommendation(ctx.workspace.id, row, ctx.user.id);
+          // Each applies once, whoever else is approving it (X1.5).
+          if (!(await claimForApply(db, ctx.workspace.id, id))) { skipped++; continue; }
+          const outcome = await applyClaimed(db, ctx.workspace.id, row, ctx.user.id);
           if (outcome.ok) applied++; else failed.push({ id, detail: outcome.detail });
         } catch (e) {
           failed.push({ id, detail: (e as Error).message });

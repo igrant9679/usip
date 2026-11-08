@@ -37,6 +37,7 @@ import {
 } from "../drizzle/schema";
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
+import { claimRow } from "./_core/claim";
 import { invokeLLM } from "./_core/llm";
 import type { ResearchUse } from "./services/research/context";
 import { researchUseFor } from "./services/research/recipient";
@@ -1156,10 +1157,14 @@ export async function pauseOnReply(
   // Pause enrollment. resumeAt: null because this pause is a human saying the
   // conversation is live — it must override any OOO snooze already stamped on
   // the row, not queue behind it (0181).
-  await db
+  // Claimed (audit X1.5): two replies handled at once both read "active" and
+  // each paused the enrolment and filed its own review task. Only the one
+  // whose update still found it active files the task.
+  const won = await claimRow(db
     .update(enrollments)
     .set({ status: "paused", resumeAt: null })
-    .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.workspaceId, workspaceId)));
+    .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.workspaceId, workspaceId), eq(enrollments.status, "active"))));
+  if (!won) return;
 
   // Create review task, on the record the enrolment is for. A prospect
   // enrolment's task was filed as a lead with no id, so it belonged to

@@ -26,6 +26,7 @@ import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { opportunities, opportunityStageHistory } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { stageResolver, type StageResolver } from "../_core/stageSemantics";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -93,7 +94,7 @@ export async function backfillDealDates(dbArg?: Db, now: Date = new Date()): Pro
         eq(opportunities.workspaceId, o.workspaceId),
         isNull(opportunities.stageEnteredAt),
       ));
-      const n = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+      const n = affectedRowsOf(res);
       updated += n;
       progressed += n;
     }

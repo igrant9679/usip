@@ -42,6 +42,7 @@ import { stripNameCredentials } from "../services/enrichment/personName";
 import { genuineSocialReplyScope } from "../services/replyScope";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { extractLinkedInIdentifier } from "../services/linkedinLookup";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * Who a hand-sent LinkedIn action is for: the slug of a profile URL, or an id
@@ -943,7 +944,7 @@ export const unipileRouter = router({
           eq(unipileInvites.status, "pending"),
           inArray(unipileInvites.recipientProviderId, input.recipient),
         ));
-        withdrawn = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+        withdrawn = affectedRowsOf(res);
       }
       return { ok: true, withdrawn };
     }),

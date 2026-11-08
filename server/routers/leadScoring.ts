@@ -50,6 +50,7 @@ import { componentMaxes, tierThresholdProblem } from "@shared/leadScoreModel";
 import { normalizeRoutingConditions, routingConditionsMatch, routingConditionsProblem } from "@shared/leadRouting";
 import { takeEngagedLeads, noteLeadEngagement } from "../services/leadRescoreQueue";
 import { activeJob, cancelJob, enqueueJob, getJob as getBulkJob, registerJobKind } from "../services/jobs/runner";
+import { affectedRowsOf } from "../_core/claim";
 
 /* ───────── helpers ───────── */
 
@@ -1084,7 +1085,7 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
         eq(leadRoutingRules.workspaceId, workspaceId),
         seen === undefined ? undefined : eq(leadRoutingRules.rrCursor, seen),
       ));
-    if (Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0) > 0 || seen === undefined) return m.ownerUserId;
+    if (affectedRowsOf(res) > 0 || seen === undefined) return m.ownerUserId;
   }
 }
 

@@ -30,6 +30,7 @@ import { isWithinCallingHours } from "@shared/callingHours";
 import { admitInboundCall } from "./voiceGuards";
 import { agentNumbers, clampVoiceLimits, DEFAULT_VOICE_LIMITS, MAX_CALLS_PER_NUMBER_PER_DAY, pickFromNumber } from "@shared/voiceCapacity";
 import { PlivoError, placeCall, plivoCreds, plivoUrls } from "./plivo";
+import { affectedRowsOf } from "../_core/claim";
 
 /** New calls started per workspace per run (runs every minute), unless an admin changed it. */
 export const MAX_DIALS_PER_MINUTE_PER_WORKSPACE = DEFAULT_VOICE_LIMITS.dialsPerMinute;
@@ -150,7 +151,7 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
     const claimed = await db.update(voiceCallRequests)
       .set({ status: "dialing", statusReason: null, attempts: sql`${voiceCallRequests.attempts} + 1`, lastAttemptAt: new Date(nowMs) })
       .where(and(eq(voiceCallRequests.id, r.id), eq(voiceCallRequests.status, "approved")));
-    if (Number((claimed as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0) !== 1) continue;
+    if (affectedRowsOf(claimed) !== 1) continue;
 
     const ins = await db.insert(voiceCalls).values({
       workspaceId: ws,

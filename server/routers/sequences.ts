@@ -54,6 +54,7 @@ import { nextSendAt } from "@shared/recipientTime";
 import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services/recipientZone";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { addVisitorIdsToEmail } from "../services/visitorLinks";
+import { affectedRowsOf } from "../_core/claim";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -2819,7 +2820,7 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
       const statuses = src === "sequence" ? ["pending_review"] : src === "ai_draft" ? ["ai_pending_review"] : ["pending_review", "ai_pending_review"];
       const r = await db.update(emailDrafts).set({ status: "approved", reviewedByUserId: ctx.user.id })
         .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status as any, statuses as never)));
-      const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+      const approved = affectedRowsOf(r);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "email_draft", entityId: 0, after: { approveAll: src, approved } });
       return { ok: true, approved };
     }),

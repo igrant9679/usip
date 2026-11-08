@@ -11,6 +11,7 @@ import { researchMarkets, researchRevisions, researchSectors } from "../../../dr
 import { getDb } from "../../db";
 import { forgetResearchContext } from "./context";
 import { changedParts, cleanMarketContent, cleanSectorContent, type MarketContent, type SectorContent } from "@shared/researchShape";
+import { affectedRowsOf } from "../../_core/claim";
 
 export type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -25,8 +26,6 @@ export const REVISIONS_KEPT = 50;
 
 export const CONFLICT_MESSAGE = "Someone else saved this since you opened it. Reload to see their changes, then make yours again.";
 
-const affectedRows = (r: unknown): number =>
-  Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
 
 /* ── Row ⇄ content ──────────────────────────────────────────────────────── */
 
@@ -185,7 +184,7 @@ export async function saveMarket(
     ));
   // Compare-and-swap: a save that landed between our read and this write
   // moved the revision on, so this one matches no row.
-  if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
+  if (affectedRowsOf(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
   const revision = args.expectedRevision + 1;
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
   forgetResearchContext(args.workspaceId);
@@ -219,7 +218,7 @@ export async function saveSector(
       eq(researchSectors.workspaceId, args.workspaceId),
       eq(researchSectors.revision, args.expectedRevision),
     ));
-  if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
+  if (affectedRowsOf(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
   const revision = args.expectedRevision + 1;
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
   forgetResearchContext(args.workspaceId);

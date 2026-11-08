@@ -49,6 +49,7 @@ import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertRowInWorkspace } from "../services/foreignIds";
 import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
 import { clientIpOf } from "../_core/clientIp";
+import { affectedRowsOf } from "../_core/claim";
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 export const SECTION_KEYS = [
@@ -865,7 +866,7 @@ export const proposalsRouter = router({
         .update(proposals)
         .set({ status: "accepted", acceptedAt: new Date() })
         .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id), ne(proposals.status, "accepted")));
-      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(claim) !== 1) {
         return { ok: true, alreadyAccepted: true, opportunityId: proposal.linkedOpportunityId ?? null, taskId: null };
       }
       await snapshotAcceptedSections(db, input.id, ctx.user.id);
@@ -1127,7 +1128,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
           inArray(proposals.status, ACCEPTABLE_STATUSES),
           or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date())),
         ));
-      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(claim) !== 1) {
         const [now] = await db.select({ status: proposals.status, expiresAt: proposals.expiresAt }).from(proposals).where(eq(proposals.id, proposal.id)).limit(1);
         if (now?.status === "accepted") return { ok: true, alreadyAccepted: true };
         if (now?.expiresAt && new Date(now.expiresAt).getTime() <= Date.now()) {
@@ -1268,7 +1269,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .update(proposals)
         .set({ status: "not_accepted" })
         .where(and(eq(proposals.id, proposal.id), inArray(proposals.status, ACCEPTABLE_STATUSES)));
-      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(claim) !== 1) {
         const [now] = await db.select({ status: proposals.status }).from(proposals).where(eq(proposals.id, proposal.id)).limit(1);
         if (now?.status === "not_accepted") return { ok: true, alreadyDeclined: true };
         throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal can no longer be declined here. Contact the team that sent it." });

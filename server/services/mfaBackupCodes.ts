@@ -20,6 +20,7 @@ import crypto from "crypto";
 import { and, count, eq, isNull } from "drizzle-orm";
 import { mfaBackupCodes } from "../../drizzle/schema";
 import type { getDb } from "../db";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -87,7 +88,7 @@ export async function useBackupCode(db: Db, userId: number, raw: unknown): Promi
       eq(mfaBackupCodes.codeHash, hashBackupCode(userId, clean)),
       isNull(mfaBackupCodes.usedAt),
     ));
-  const affected = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+  const affected = affectedRowsOf(res);
   return affected > 0;
 }
 

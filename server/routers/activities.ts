@@ -16,6 +16,7 @@ import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertOwnerInWorkspace, assertRecordInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
 import { activeMemberIds } from "../_core/activeMembers";
 import { deadlineFrom } from "../services/calendarDeadline";
+import { affectedRowsOf } from "../_core/claim";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
 
@@ -366,7 +367,7 @@ export const tasksRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const r = await db.update(tasks).set({ status: "open" } as never)
       .where(and(eq(tasks.workspaceId, ctx.workspace.id), eq(tasks.status, "draft")));
-    const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+    const approved = affectedRowsOf(r);
     return { approved };
   }),
 
