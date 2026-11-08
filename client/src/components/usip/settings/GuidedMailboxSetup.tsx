@@ -1661,7 +1661,7 @@ function CompleteStep({
   const options = [
     { icon: Network, tint: "text-sky-600", label: "Explore the Deliverability suite", act: () => { onClose(); navigate("/v2/deliverability"); } },
     { icon: Mail, tint: "text-muted-foreground", label: "Link another mailbox", act: onLinkAnother },
-    { icon: Send, tint: "text-pink-500", label: "Create sequence", act: () => { onClose(); navigate("/sequences"); } },
+    { icon: Send, tint: "text-pink-500", label: "Create sequence", act: () => { onClose(); navigate("/v2/sequences"); } },
     { icon: Plug, tint: "text-indigo-500", label: "Connect your CRM", act: () => { onClose(); navigate("/v2/settings/integrations"); } },
   ];
   const cardCls =

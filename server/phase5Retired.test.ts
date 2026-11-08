@@ -40,17 +40,26 @@ describe("the retired v1 paths redirect (phase 5 item 2)", () => {
   });
 
   it("each redirect lands on a route that exists", () => {
+    // 2026-11-07 (U14, F25): a target may now carry a `:id` filled from the
+    // old route (a canvas deep link keeps its sequence) and a query string
+    // naming the tab it lands on, so the ROUTE part of the mapping is what
+    // must be routed. Same guarantee: no retired path lands on a 404.
     for (const path of retired) {
-      const target = retiredRedirectUrl(path);
+      const target = RETIRED_ROUTES[path].split("?")[0];
       expect(routedPaths.has(target), `${path} redirects to ${target}, which App.tsx does not route`).toBe(true);
       // A retired path must not forward to another retired path.
       expect(retired as string[], target).not.toContain(target);
+      // And the URL actually produced resolves to that route.
+      expect(retiredRedirectUrl(path, { params: { id: "7" } }).split("?")[0], path).toBe(target.replace(":id", "7"));
     }
   });
 
   it("the hop replaces history, so Back does not bounce the reader", () => {
     const src = read("client/src/pages/usip/RetiredRedirect.tsx");
-    expect(src).toContain("setLocation(retiredRedirectUrl(from), { replace: true })");
+    // 2026-11-07 (U14, F25): the URL now carries the route's params and the
+    // query string, and is built once; the hop still replaces history.
+    expect(src).toContain("const to = retiredRedirectUrl(from, { params, search });");
+    expect(src).toContain("setLocation(to, { replace: true })");
   });
 
   it("the pages are deleted and nothing imports them", () => {

@@ -383,7 +383,7 @@ export function SocialAccountsSection() {
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/data-enrichment?tab=find-prospects")}>
                 <Search className="size-3.5" /> Find prospects <ExternalLink className="size-3 opacity-60" />
               </Button>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/unified-inbox")}>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/inbox?tab=social&view=chats")}>
                 <MessageSquare className="size-3.5" /> Unified inbox <ExternalLink className="size-3 opacity-60" />
               </Button>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/workflows")}>

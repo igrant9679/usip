@@ -6,9 +6,9 @@
  * closing the sequence → reply → meeting loop.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { emailReplies, unipileMessages, workspaceSettings } from "../../drizzle/schema";
+import { emailDrafts, emailReplies, unipileAccounts, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -22,6 +22,12 @@ export const conversationsRouter = router({
     .input(z.object({
       filter: z.enum(["all", "unhandled", ...REPLY_CLASSES]).optional(),
       unreadOnly: z.boolean().optional(),
+      /**
+       * Only replies that came into the caller's own mailbox (`userId` is the
+       * mailbox owner the poller filed it under). The one reply workspace's
+       * "Mine" filter (audit 2026-10-20, F25).
+       */
+      mine: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
@@ -40,11 +46,40 @@ export const conversationsRouter = router({
       if (f === "unhandled") conds.push(isNull(emailReplies.handledAt));
       else if (f && f !== "all") conds.push(eq(emailReplies.replyClass, f));
       if (input?.unreadOnly) conds.push(isNull(emailReplies.readAt));
-      return db.select().from(emailReplies)
+      if (input?.mine) conds.push(eq(emailReplies.userId, ctx.user.id));
+      const rows = await db.select().from(emailReplies)
         .where(and(...conds))
         .orderBy(desc(emailReplies.receivedAt))
         .limit(300);
+      /**
+       * Which sequence each reply answers (F25: the reply workspace names it, as
+       * it names a Revenue Engine campaign). Read from the drafts the replies
+       * matched, in this workspace, in one query; null for a campaign reply or
+       * a draft written outside a sequence.
+       */
+      const draftIds = Array.from(new Set(rows.map((r) => r.draftId).filter((x): x is number => typeof x === "number")));
+      const seqByDraft = new Map<number, number | null>();
+      if (draftIds.length) {
+        const drafts = await db.select({ id: emailDrafts.id, sequenceId: emailDrafts.sequenceId }).from(emailDrafts)
+          .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.id, draftIds)));
+        for (const d of drafts) seqByDraft.set(d.id, d.sequenceId ?? null);
+      }
+      return rows.map((r) => ({ ...r, sequenceId: r.draftId != null ? seqByDraft.get(r.draftId) ?? null : null }));
     }),
+
+  /**
+   * One reply, for the reply workspace's ?reply=<id> link (F25, batch CONA).
+   * Deleted with the uncalled procedures on 2026-11-07 (X6.2) and restored at
+   * the merge, now that it has a caller; it reads the same population as the
+   * list (genuine replies), so a link cannot open private mail the list hides.
+   */
+  get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return null;
+    const [row] = await db.select().from(emailReplies)
+      .where(and(eq(emailReplies.id, input.id), eq(emailReplies.workspaceId, ctx.workspace.id), genuineReplyScope()));
+    return row ?? null;
+  }),
 
   stats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -134,6 +169,8 @@ export const conversationsRouter = router({
     .input(z.object({
       filter: z.enum(["all", "unhandled", "not_our_outreach", ...REPLY_CLASSES]).optional(),
       unreadOnly: z.boolean().optional(),
+      /** Only messages to the caller's own connected accounts (F25's "Mine"). */
+      mine: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
@@ -154,6 +191,12 @@ export const conversationsRouter = router({
       // and the tab would show nothing.
       else if (f && f !== "all" && f !== "not_our_outreach") conds.push(eq(unipileMessages.replyClass, f));
       if (input?.unreadOnly) conds.push(isNull(unipileMessages.readAt));
+      if (input?.mine) {
+        const own = await db.select({ id: unipileAccounts.unipileAccountId }).from(unipileAccounts)
+          .where(and(eq(unipileAccounts.workspaceId, ctx.workspace.id), eq(unipileAccounts.userId, ctx.user.id)));
+        if (own.length === 0) return [];
+        conds.push(inArray(unipileMessages.unipileAccountId, own.map((a) => a.id)));
+      }
       return db.select().from(unipileMessages)
         .where(and(...conds))
         .orderBy(desc(unipileMessages.createdAt))

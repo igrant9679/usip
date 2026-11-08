@@ -7,6 +7,14 @@
  * step" picker (Email / Phone call / Action item / LinkedIn / Wait) and inline
  * editors per step. Steps persist via sequences.updateSteps; name and
  * description via sequences.update; status via sequences.setStatus.
+ *
+ * THE sequence editor (audit 2026-10-20, U14, 2026-11-07). Legacy /sequences
+ * and its canvas now redirect here, after everything only they had was folded
+ * in: the A/B tests tab, the bulk enrol picker behind "Add contacts", the
+ * daily cap and reply detection, Archive and Delete, "Mark replied", the
+ * prospect preview, the per-step report, AI-written email steps and waits in
+ * hours. What a sequence saved from either old screen loads and saves here
+ * unchanged (server/conaSequenceEditor.test.ts).
  */
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
@@ -25,13 +33,13 @@ import {
 import {
   Send, Star, Share2, Zap, UserPlus, ChevronDown, Plus, Mail, Phone,
   CheckSquare, MessageSquare, Clock, Trash2, GripVertical, ArrowUp, ArrowDown,
-  PauseCircle, PlayCircle,
+  PauseCircle, PlayCircle, Archive, Eye, FlaskConical, Sparkles, AlertTriangle,
   Loader2, Users, Activity as ActivityIcon, Settings2, X,
 } from "lucide-react";
 import { pressable } from "@/lib/pressable";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
-import { applyTemplate, describeSendWindow, detachTemplate, stepDistribution, type EmailStep, type TemplateChoice } from "@/lib/sequenceSteps";
+import { applyTemplate, describeSendWindow, detachTemplate, stepDistribution, stepWithDisplacedVariants, waitDaysFrom, waitParts, MAX_WAIT_DAYS, type EmailStep, type TemplateChoice } from "@/lib/sequenceSteps";
 import { SequenceEnrollmentActions } from "@/components/usip/SequenceEnrollmentActions";
 import { SequenceDraftsNote } from "@/components/usip/SequenceDraftsNote";
 import { ConfirmButton } from "@/components/usip/Common";
@@ -42,6 +50,14 @@ import { SequenceSendingSettings } from "@/components/usip/SequenceSendingSettin
 import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
 import { SequenceScheduleSettings } from "@/components/usip/SequenceScheduleSettings";
 import { SequenceTimelinePreview } from "@/components/usip/SequenceTimelinePreview";
+import { SequenceEnrollDialog } from "@/components/usip/SequenceEnrollDialog";
+import { SequenceAbTests, variantCountsByStep } from "@/components/usip/SequenceAbTests";
+import { SequenceStepBreakdown } from "@/components/usip/SequenceStepBreakdown";
+import { SequenceMarkReply } from "@/components/usip/SequenceMarkReply";
+import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
+import { Switch } from "@/components/ui/switch";
+import { canvasLeftovers } from "@/lib/canvasSupport";
+import { isHtmlBody } from "@shared/emailBody";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -80,7 +96,7 @@ function stepMeta(s: Step): { icon: any; label: string; summary: string } {
   }
 }
 
-const TABS = ["Editor", "Contacts", "Activity", "Report", "Settings"] as const;
+const TABS = ["Editor", "Contacts", "A/B tests", "Activity", "Report", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
@@ -147,12 +163,30 @@ export default function SequenceEditor() {
     onSuccess: (_d, v) => {
       utils.sequences.get.invalidate({ id });
       utils.sequences.list.invalidate();
-      toast.success(v.status === "active" ? "Sequence activated" : "Sequence paused");
+      toast.success(v.status === "active" ? "Sequence activated" : v.status === "archived" ? "Sequence archived" : v.status === "draft" ? "Sequence restored as a draft" : "Sequence paused");
     },
     onError: (e) => toast.error(e.message),
   });
   const { user } = useAuth();
   const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  // Reply detection, from the legacy edit dialog and the canvas panel (U14).
+  const saveReplyDetection = trpc.sequences.updateMeta.useMutation({
+    onSuccess: (_d, v) => { utils.sequences.get.invalidate({ id }); toast.success(v.settings?.replyDetection === false ? "Replies no longer pause anyone" : "A reply pauses the person again"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Delete, from the legacy list (U14), with its words about what stays (O22).
+  const removeSeq = trpc.sequences.delete.useMutation({
+    onSuccess: () => { utils.sequences.list.invalidate(); toast.success("Sequence deleted"); setLocation("/v2/sequences"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  /** Every variant of every step, to badge the steps and keep them in place (U14). */
+  const variantsQ = trpc.sequenceAb.list.useQuery({ sequenceId: id }, { enabled: Number.isFinite(id) });
+  const variantsByStep = useMemo(() => variantCountsByStep(variantsQ.data as { stepIndex: number }[] | undefined), [variantsQ.data]);
+  /** What a drawing on the retired canvas held beyond these steps (U14). */
+  const canvasQ = trpc.sequences.getCanvas.useQuery({ id }, { enabled: Number.isFinite(id) });
+  const leftovers = useMemo(() => canvasLeftovers((canvasQ.data?.nodes ?? []) as any[], (canvasQ.data?.edges ?? []) as any[]), [canvasQ.data]);
 
   const [tabForQuery, setTabForQuery] = useState(false);
   /**
@@ -176,18 +210,30 @@ export default function SequenceEditor() {
   // settings draft
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [dailyCap, setDailyCap] = useState("");
 
   useEffect(() => {
     if (seq) {
       setSteps(Array.isArray(seq.steps) ? seq.steps : []);
       setName(seq.name ?? "");
       setDescription(seq.description ?? "");
+      setDailyCap(seq.dailyCap != null ? String(seq.dailyCap) : "");
     }
   }, [seq?.id]);
 
   const commit = (next: Step[]) => { setSteps(next); updateSteps.mutate({ id, steps: next as any }); };
   const addStep = (make: () => Step) => { const next = [...steps, make()]; setSteps(next); updateSteps.mutate({ id, steps: next as any }); setExpanded(next.length - 1); setAddOpen(false); };
-  const removeStep = (i: number) => { const next = steps.filter((_, idx) => idx !== i); commit(next); if (expanded === i) setExpanded(null); };
+  /**
+   * A/B variants are kept by step position, so a move or removal that shifts a
+   * step with variants would send them at another step. Refused, with why (U14).
+   */
+  const displacesVariants = (change: Parameters<typeof stepWithDisplacedVariants>[0]) => {
+    const at = stepWithDisplacedVariants(change, steps.length, variantsByStep);
+    if (at === null) return false;
+    toast.error(`Step ${at + 1} has A/B variants, and they belong to its place in the sequence. Remove them on the A/B tests tab first, or they would send at a different step.`);
+    return true;
+  };
+  const removeStep = (i: number) => { if (displacesVariants({ kind: "remove", at: i })) return; const next = steps.filter((_, idx) => idx !== i); commit(next); if (expanded === i) setExpanded(null); };
   /**
    * Retire / restore a step. Retiring keeps it in the sequence (so its history
    * and copy survive) but the engine skips it — the reversible alternative to
@@ -199,9 +245,11 @@ export default function SequenceEditor() {
     );
     commit(next);
   };
-  const moveStep = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= steps.length) return; const next = [...steps]; [next[i], next[j]] = [next[j], next[i]]; commit(next); };
+  const moveStep = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= steps.length) return; if (displacesVariants({ kind: "move", from: i, to: j })) return; const next = [...steps]; [next[i], next[j]] = [next[j], next[i]]; commit(next); };
   const patchStep = (i: number, patch: Partial<Step>) => { setSteps((prev) => prev.map((s, idx) => (idx === i ? ({ ...s, ...patch } as Step) : s))); };
   const commitEdits = () => updateSteps.mutate({ id, steps: steps as any });
+  // A change saved at once, for controls that leave no field behind to blur.
+  const commitPatch = (i: number, patch: Partial<Step>) => commit(steps.map((s, idx) => (idx === i ? ({ ...s, ...patch } as Step) : s)));
   // Saved at once: the picker and the button leave no field behind to blur.
   const withEmailStep = (i: number, change: (s: EmailStep) => EmailStep) =>
     commit(steps.map((s, idx) => (idx === i && s.type === "email" ? change(s) : s)));
@@ -242,7 +290,8 @@ export default function SequenceEditor() {
             {statusBadge}
             <div className="flex-1" />
             <Button variant="ghost" size="sm" className="h-7 gap-1.5"><Share2 className="size-3.5" /> Share</Button>
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/people")}><Users className="size-3.5" /> Add contacts</Button>
+            {/* The bulk enrol picker from legacy /sequences (U14). */}
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={seq.status === "archived"} onClick={() => setEnrollOpen(true)}><Users className="size-3.5" /> Add contacts</Button>
             {seq.status === "active" ? (
               <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={setStatus.isPending} onClick={() => setStatus.mutate({ id, status: "paused" })}>
                 <PauseCircle className="size-3.5" /> Pause
@@ -260,7 +309,24 @@ export default function SequenceEditor() {
               >
                 <Zap className="size-3.5" /> {steps.length === 0 ? "Add a step to activate" : "Activate"}
               </ConfirmButton>
-            ) : null}
+            ) : (
+              <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={setStatus.isPending} onClick={() => setStatus.mutate({ id, status: "draft" })}>
+                Restore as draft
+              </Button>
+            )}
+            {/* Archive, from legacy /sequences and the canvas (U14). It ends every enrolment, so it asks. */}
+            {seq.status !== "archived" && (
+              <ConfirmButton
+                className="h-7 gap-1.5"
+                disabled={setStatus.isPending}
+                title="Archive this sequence?"
+                description="Everyone still active or paused in it is taken out, and nothing more is drafted from it. Its emails, report and history stay. You can restore it as a draft later, but people would have to be enrolled again."
+                confirmLabel="Archive"
+                onConfirm={() => setStatus.mutate({ id, status: "archived" })}
+              >
+                <Archive className="size-3.5" /> Archive
+              </ConfirmButton>
+            )}
           </div>
           {/* tabs */}
           <div {...tablistProps("Sequence sections")} className="flex items-center gap-1">
@@ -282,7 +348,20 @@ export default function SequenceEditor() {
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-[12px] font-medium px-2 py-1 rounded-md border bg-card inline-flex items-center gap-1.5"><Send className="size-3.5" style={{ color: accent }} /> {steps.length} step{steps.length === 1 ? "" : "s"}</span>
                 {updateSteps.isPending && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> Saving…</span>}
+                <div className="flex-1" />
+                {/* The prospect's-eye preview from legacy /sequences (U14): the copy that sends. */}
+                <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={steps.length === 0} onClick={() => setPreviewOpen(true)}><Eye className="size-3.5" /> Preview</Button>
               </div>
+              {(leftovers.notes.length > 0 || leftovers.unreached > 0) && (
+                <div role="note" className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+                  <div className="font-semibold flex items-center gap-1.5"><AlertTriangle className="size-3.5" /> This sequence was drawn on the old canvas, and part of the drawing never ran</div>
+                  <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                    {leftovers.notes.map((n) => <li key={n}>{n}</li>)}
+                    {leftovers.unreached > 0 && <li>{leftovers.unreached} {leftovers.unreached === 1 ? "node isn't" : "nodes aren't"} joined to the start, so {leftovers.unreached === 1 ? "it" : "they"} never ran.</li>}
+                  </ul>
+                  <p className="mt-1">The steps below are what runs. Saving them here redraws the canvas as a straight line, and these drop off then.</p>
+                </div>
+              )}
 
               {steps.length === 0 ? (
                 <div className="text-center py-14 border border-dashed rounded-xl">
@@ -314,6 +393,14 @@ export default function SequenceEditor() {
                           <div className="min-w-0 flex-1">
                             <div className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
                               {meta.label}
+                              {(variantsByStep.get(i) ?? 0) > 0 && (
+                                <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-violet-800 dark:bg-violet-950/50 dark:text-violet-300" title="This step sends its A/B variants instead of its own copy">
+                                  A/B · {variantsByStep.get(i)}
+                                </span>
+                              )}
+                              {s.type === "email" && s.emailMode === "dynamic" && (
+                                <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-blue-800 dark:bg-blue-950/50 dark:text-blue-300">AI writes it</span>
+                              )}
                               {retired && (
                                 <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-amber-900 dark:bg-amber-950/50 dark:text-amber-300">
                                   Skipped — not sending
@@ -352,6 +439,9 @@ export default function SequenceEditor() {
                               blocked={stepsBlocked}
                               onPickTemplate={(t: TemplateChoice) => withEmailStep(i, (e) => applyTemplate(e, t))}
                               onDetachTemplate={() => withEmailStep(i, detachTemplate)}
+                              onCommit={(patch) => commitPatch(i, patch)}
+                              enrolledCount={Number(seq.enrolledCount ?? 0)}
+                              hasVariants={(variantsByStep.get(i) ?? 0) > 0}
                             />
                           </div>
                         )}
@@ -373,7 +463,17 @@ export default function SequenceEditor() {
               query={enrollmentsQ}
               sequenceId={id}
               steps={steps}
-              onAddContacts={() => setLocation("/v2/people")}
+              onAddContacts={() => setEnrollOpen(true)}
+            />
+          )}
+
+          {/* A/B TESTS, from legacy /sequences (U14) */}
+          {tab === "A/B tests" && (
+            <SequenceAbTests
+              sequenceId={id}
+              steps={steps}
+              accent={accent}
+              locked={seq.status === "active" ? "Pause the sequence to change its variants." : seq.status === "archived" ? "An archived sequence can't be changed." : null}
             />
           )}
 
@@ -394,6 +494,7 @@ export default function SequenceEditor() {
 
           {/* REPORT */}
           {tab === "Report" && <SequenceReport sequenceId={id} accent={accent} />}
+          {tab === "Report" && <SequenceStepBreakdown sequenceId={id} accent={accent} />}
 
           {/* SETTINGS */}
           {tab === "Settings" && (
@@ -408,9 +509,15 @@ export default function SequenceEditor() {
                   <div className="text-[12px] font-medium mb-1">Description</div>
                   <textarea aria-label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
                 </div>
+                {/* The daily cap, from the legacy edit dialog (U14). The engine stops drafting from this sequence for the day once it is reached. */}
+                <div>
+                  <div className="text-[12px] font-medium mb-1">Daily send cap</div>
+                  <Input aria-label="Daily send cap" type="number" min={1} max={10000} className="w-36" placeholder="No cap" value={dailyCap} onChange={(e) => setDailyCap(e.target.value)} />
+                  <p className="text-[11px] text-muted-foreground mt-1">The most emails this sequence drafts in a day, across everyone in it. Leave it empty for no cap of its own; the workspace's daily limit still applies.</p>
+                </div>
                 <div className="flex items-center gap-2"><span className="text-[12px] text-muted-foreground">Status:</span> {statusBadge}</div>
                 <div className="flex justify-end">
-                  <Button size="sm" style={{ backgroundColor: accent }} disabled={updateMeta.isPending || !name.trim()} onClick={() => updateMeta.mutate({ id, patch: { name: name.trim(), description: description.trim() || null } })}>
+                  <Button size="sm" style={{ backgroundColor: accent }} disabled={updateMeta.isPending || !name.trim() || (dailyCap.trim() !== "" && !(Number(dailyCap) >= 1 && Number(dailyCap) <= 10000))} onClick={() => updateMeta.mutate({ id, patch: { name: name.trim(), description: description.trim() || null, dailyCap: dailyCap.trim() === "" ? null : Math.round(Number(dailyCap)) } })}>
                     {updateMeta.isPending ? "Saving…" : "Update settings"}
                   </Button>
                 </div>
@@ -425,10 +532,45 @@ export default function SequenceEditor() {
               </div>
               {/* Review or auto-send, and recipient time, for this sequence (F22, F18). */}
               <SequenceSendingSettings sequenceId={id} settings={seq.settings} accent={accent} />
+              {/* Reply detection, from the legacy edit dialog and the canvas panel (U14). On unless switched off, as the engine reads it. */}
+              <div className="rounded-xl border bg-card shadow-sm p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold">Pause a person when they reply</h2>
+                    <p className="text-[12px] text-muted-foreground mt-0.5">A reply stops their remaining steps until someone resumes them. Switched off, they keep getting steps after replying.</p>
+                  </div>
+                  <Switch
+                    aria-label="Pause a person when they reply"
+                    checked={(seq.settings as { replyDetection?: boolean } | null)?.replyDetection !== false}
+                    disabled={saveReplyDetection.isPending || seq.status === "archived"}
+                    onCheckedChange={(on) => saveReplyDetection.mutate({ id, settings: { replyDetection: on } })}
+                  />
+                </div>
+              </div>
+              {/* Delete, from legacy /sequences (U14), saying what stays (O22). */}
+              <div className="rounded-xl border border-destructive/30 bg-card shadow-sm p-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">Delete this sequence</h2>
+                  <p className="text-[12px] text-muted-foreground mt-0.5">Its steps, enrolments and unsent drafts go. Emails it already sent stay.</p>
+                </div>
+                <ConfirmButton
+                  variant="outline"
+                  className="h-8 text-destructive"
+                  disabled={removeSeq.isPending}
+                  title="Delete this sequence?"
+                  description={`"${seq.name}" is deleted with its steps, its enrolments and any drafts not yet sent. Emails it already sent stay in the Emails log, and their unsubscribe links keep working. This cannot be undone.`}
+                  confirmLabel="Delete"
+                  onConfirm={() => removeSeq.mutate({ id })}
+                >
+                  <Trash2 className="size-3.5" /> Delete
+                </ConfirmButton>
+              </div>
             </div>
           )}
         </div>
       </div>
+      <SequenceEnrollDialog sequenceId={id} open={enrollOpen} onClose={() => setEnrollOpen(false)} />
+      <EmailClientPreview open={previewOpen} onClose={() => setPreviewOpen(false)} steps={steps} sequenceName={seq.name} />
     </Shell>
   );
 }
@@ -562,7 +704,7 @@ function ContactsTab({
         <div className="rounded-xl border bg-card shadow-sm py-14 text-center">
           <Users className="size-8 text-muted-foreground opacity-40 mx-auto mb-2" />
           <div className="text-sm font-medium">No contacts enrolled yet</div>
-          <p className="text-xs text-muted-foreground mt-1">Add people from the People page or a list to start this sequence.</p>
+          <p className="text-xs text-muted-foreground mt-1">Pick contacts, leads or prospects to enrol, or select people on the People page.</p>
           <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={onAddContacts}>Add contacts</Button>
         </div>
       ) : (
@@ -596,6 +738,7 @@ function ContactsTab({
                 <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide", state?.pill ?? "bg-muted text-muted-foreground")}>
                   {state?.label ?? String(e?.status ?? "unknown")}
                 </span>
+                <SequenceMarkReply enrollment={e} sequenceId={sequenceId} />
                 <SequenceEnrollmentActions enrollment={e} sequenceId={sequenceId} />
               </li>
             );
@@ -603,7 +746,6 @@ function ContactsTab({
         </ul>
       )}
 
-      {/* The bulk enrol picker lives on legacy /sequences and is not here yet; the gap is recorded in HANDOFF.md. */}
     </div>
   );
 }
@@ -633,58 +775,150 @@ function AddStepButton({ accent, open, setOpen, onAdd }: { accent: string; open:
   );
 }
 
-function StepEditor({ step, onChange, accent, blocked, onPickTemplate, onDetachTemplate }: {
+/** The canvas's AI-writing choices (NodeEditPanel), carried into the editor with U14. */
+const AI_TONES = ["professional", "friendly", "direct", "consultative", "casual"] as const;
+const AI_LENGTHS = [
+  { value: "short", label: "Short (1–2 sentences)" },
+  { value: "medium", label: "Medium (3–5 sentences)" },
+  { value: "long", label: "Long (a full paragraph)" },
+] as const;
+
+function StepEditor({ step, onChange, accent, blocked, onPickTemplate, onDetachTemplate, onCommit, enrolledCount, hasVariants }: {
   step: Step;
   onChange: (patch: Partial<Step>) => void;
   accent: string;
   blocked: string | null;
   onPickTemplate: (template: TemplateChoice) => void;
   onDetachTemplate: () => void;
+  /** Saved at once, for controls that leave no field behind to blur. */
+  onCommit: (patch: Partial<Step>) => void;
+  enrolledCount: number;
+  hasVariants: boolean;
 }) {
   const ta = "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2";
   const ring = { ["--tw-ring-color" as any]: `${accent}55` } as React.CSSProperties;
   if (step.type === "email") {
+    /**
+     * Who writes the email (U14): the canvas's "AI-dynamic" mode, which the
+     * engine honours (generateDynamicEmail) and which this editor could not
+     * show, so a step saved that way looked like an empty email here. AI writes
+     * per person at send time, so switching to it spends; it says how much and
+     * asks first.
+     */
+    const ai = step.emailMode === "dynamic";
+    const modeBtn = (on: boolean) => cn("h-7 rounded-md px-2.5 text-[12px] font-medium border", on ? "text-white" : "bg-card text-muted-foreground hover:text-foreground");
     return (
       <>
-        <StepTemplatePicker step={step} blocked={blocked} onPick={onPickTemplate} />
-        <Input aria-label="Subject" value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
-        {step.templateId ? (
-          /* The rich-text editor can't hold Email Builder HTML faithfully, and
-             its first keystroke would save its own version over the copy. So a
-             step from a template shows the copy that will send, and editing it
-             here is a choice. */
-          <>
-            <div
-              className="border rounded-md bg-white text-[#202124] p-3 text-sm max-h-[300px] overflow-y-auto [&_a]:text-blue-600 [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
-              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(step.body ?? "") }}
-            />
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="min-w-0 flex-1">This is the copy that sends. Later changes to the template don't reach it; pick the template again to refresh it.</span>
-              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!!blocked} onClick={onDetachTemplate}>Edit the text here</Button>
+        <div role="radiogroup" aria-label="Who writes this email" className="flex flex-wrap items-center gap-1.5">
+          <button type="button" role="radio" aria-checked={!ai} disabled={!!blocked} className={modeBtn(!ai)} style={!ai ? { backgroundColor: accent, borderColor: accent } : undefined}
+            onClick={() => { if (ai) onCommit({ emailMode: "typed" } as Partial<Step>); }}>
+            Written here
+          </button>
+          {ai ? (
+            <button type="button" role="radio" aria-checked className={modeBtn(true)} style={{ backgroundColor: accent, borderColor: accent }}>
+              <Sparkles className="size-3 inline mr-1" />AI writes it
+            </button>
+          ) : (
+            <ConfirmButton
+              variant="outline"
+              destructive={false}
+              disabled={!!blocked}
+              className={modeBtn(false)}
+              title="Have AI write this email for each person?"
+              description={`When this step runs, AI writes a subject and body for each person who reaches it: one AI call each, up to about 700 tokens, charged to the workspace's AI provider and counted in Settings → Billing. ${enrolledCount} ${enrolledCount === 1 ? "person is" : "people are"} enrolled now. The drafts still wait for review unless auto-send sends them, and nothing goes out while outbound sending is paused.${hasVariants ? " This step has A/B variants, which are sent instead, so AI would write nothing until they are removed." : ""}`}
+              confirmLabel="Use AI"
+              onConfirm={() => onCommit({ emailMode: "dynamic", aiTone: step.aiTone ?? "professional", aiLength: step.aiLength ?? "medium" } as Partial<Step>)}
+            >
+              <Sparkles className="size-3 mr-1" />AI writes it
+            </ConfirmButton>
+          )}
+          {blocked && <span className="text-[11px] text-muted-foreground">{blocked}</span>}
+        </div>
+        {ai ? (
+          <div className="space-y-2 rounded-md border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900/50 dark:bg-blue-950/30">
+            <p className="text-[12px] text-blue-900 dark:text-blue-200">
+              AI writes the subject and body for each person when this step runs, using what Velocity knows about them. One AI call per person.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-[12px] font-medium space-y-1 block">
+                <span>Tone</span>
+                <select aria-label="AI tone" className="h-8 w-full rounded-md border bg-background px-2 text-[13px] capitalize" disabled={!!blocked}
+                  value={step.aiTone ?? "professional"} onChange={(e) => onCommit({ aiTone: e.target.value } as Partial<Step>)}>
+                  {AI_TONES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="text-[12px] font-medium space-y-1 block">
+                <span>Length</span>
+                <select aria-label="AI length" className="h-8 w-full rounded-md border bg-background px-2 text-[13px]" disabled={!!blocked}
+                  value={step.aiLength ?? "medium"} onChange={(e) => onCommit({ aiLength: e.target.value } as Partial<Step>)}>
+                  {AI_LENGTHS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
             </div>
-          </>
+            <label className="text-[12px] font-medium space-y-1 block">
+              <span>What the email is for</span>
+              <Input aria-label="What the AI email is for" maxLength={500} value={step.aiFocus ?? ""} placeholder="e.g. book a 15-minute call about their RevOps stack"
+                onChange={(e) => onChange({ aiFocus: e.target.value } as Partial<Step>)} />
+            </label>
+            {/* The engine skips a dynamic step with no goal rather than mail emptiness. */}
+            {!(step.aiFocus ?? "").trim() && <p className="text-[11px] text-rose-600">Without this the step is skipped: AI has nothing to write from.</p>}
+          </div>
         ) : (
-          <RichTextEditor
-            value={step.body ?? ""}
-            placeholder="Write your email… Use {{first_name}} for personalization."
-            minHeight="140px"
-            compact
-            aiContext={{ subject: step.subject }}
-            onChange={(html) => onChange({ body: html } as any)}
-          />
+          <>
+            <StepTemplatePicker step={step} blocked={blocked} onPick={onPickTemplate} />
+            <Input aria-label="Subject" value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
+            {step.templateId ? (
+              /* The rich-text editor can't hold Email Builder HTML faithfully, and
+                 its first keystroke would save its own version over the copy. So a
+                 step from a template shows the copy that will send, and editing it
+                 here is a choice. */
+              <>
+                <div
+                  className="border rounded-md bg-white text-[#202124] p-3 text-sm max-h-[300px] overflow-y-auto [&_a]:text-blue-600 [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(step.body ?? "") }}
+                />
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="min-w-0 flex-1">This is the copy that sends. Later changes to the template don't reach it; pick the template again to refresh it.</span>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!!blocked} onClick={onDetachTemplate}>Edit the text here</Button>
+                </div>
+              </>
+            ) : (
+              <RichTextEditor
+                value={step.body ?? ""}
+                placeholder="Write your email… Use {{first_name}} for personalization."
+                minHeight="140px"
+                compact
+                aiContext={{ subject: step.subject }}
+                onChange={(html) => onChange({ body: html } as any)}
+              />
+            )}
+          </>
         )}
       </>
     );
   }
   if (step.type === "wait") {
+    // Days and hours (U14): the canvas could save a wait in hours, which is a
+    // fractional `days`, and one whole-number box could neither show nor keep it.
+    const parts = waitParts(step.days);
     return (
-      <label className="flex items-center gap-2 text-[13px]">Wait
-        <Input type="number" min={0} max={60} value={step.days} className="w-20 h-8" onChange={(e) => onChange({ days: Math.max(0, Math.min(60, Number(e.target.value) || 0)) } as any)} /> day(s) before the next step.
-      </label>
+      <div className="flex flex-wrap items-center gap-2 text-[13px]">
+        <span>Wait</span>
+        <Input aria-label="Wait days" type="number" min={0} max={MAX_WAIT_DAYS} value={parts.days} className="w-20 h-8"
+          onChange={(e) => onChange({ days: waitDaysFrom(Number(e.target.value), parts.hours) } as any)} />
+        <span>day(s) and</span>
+        <Input aria-label="Wait hours" type="number" min={0} max={23} value={parts.hours} className="w-20 h-8"
+          onChange={(e) => onChange({ days: waitDaysFrom(parts.days, Number(e.target.value)) } as any)} />
+        <span>hour(s) before the next step, up to {MAX_WAIT_DAYS} days.</span>
+      </div>
     );
   }
   if (step.type === "task") {
-    return <textarea aria-label="Task instructions" value={step.body} placeholder="What should the rep do? (e.g. Call and reference their recent funding)" rows={3} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
+    // The legacy editor wrote task text as rich text; that keeps its editor here
+    // rather than showing its markup in a plain box (U14).
+    return isHtmlBody(step.body ?? "")
+      ? <RichTextEditor value={step.body ?? ""} placeholder="What should the rep do?" minHeight="80px" compact onChange={(html) => onChange({ body: html } as any)} />
+      : <textarea aria-label="Task instructions" value={step.body} placeholder="What should the rep do? (e.g. Call and reference their recent funding)" rows={3} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
   }
   if (step.type === "linkedin_invite") {
     return <textarea aria-label="Connection request note" value={step.note ?? ""} placeholder="Connection request note (optional, 300 char max)" rows={3} maxLength={300} className={ta} style={ring} onChange={(e) => onChange({ note: e.target.value } as any)} />;

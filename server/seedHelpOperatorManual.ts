@@ -106,9 +106,9 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **AI Assistant** (/v2/ai-assistant) — chat over your own data. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. Admins can also confirm an Off / Approve / Auto dial change from chat; the card names the dial and says what Auto does unattended. Two things it will not do: fully unattended campaign autonomy (a human sets that on the campaign's Settings tab behind the acknowledgement), and composing mail — it can only send what an approval queue already holds (an approved draft, a proposed meeting, a chat follow-up), and the card says so.
 
-**Inbox** (/inbox) — your notifications: mentions, tasks assigned or due, deals won or lost, renewals due, churn risk, approval requests, workflow fired, email replies, engine events.
+**Inbox** (/v2/inbox) — everything that came back, in tabs. **Replies**: genuine replies to sequences and Revenue Engine campaigns, classified, each naming its sequence or campaign and the next thing to do; opening one marks it read, and Unread and Mine (your own mailbox) narrow the list. **Mailbox** (?tab=mailbox): your connected email account, with Reply, Reply all, Forward and Compose; a reply's "Open the thread in Mailbox" lands here. **LinkedIn & social** (?tab=social): replies to our outreach, and All chats to read and answer live. **Calls** (?tab=calls): the voice agents' calls. **Notifications** (?tab=notifications): mentions, tasks, deals, renewals, approvals, workflow and engine events. The old Inbox, My Mailbox, Conversations and Unified Inbox addresses open the matching tab.
 
-**My Mailbox** (/mailbox) — your connected email account inside Velocity. **My Calendar** (/calendar) — your schedule synced from your calendar provider, including meetings the AI booked.
+**My Calendar** (/calendar) — your schedule synced from your calendar provider, including meetings the AI booked.
 
 **Autonomy Center** (/v2/workflows) — every Off / Approve / Auto dial on one screen, plus AI-suggested workflow rules. Admin-only to change.
 
@@ -144,11 +144,11 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Emails** (/v2/emails) — every email in and out, sitewide. **AI Pipeline** and **Email Drafts** are saved filters of this page where you approve, edit or discard.
 
-**Conversations** (/v2/conversations) — inbound replies that need a human, classified with sentiment and a suggested reply. Handling one stops the sequence for that person. The Social counters count replies to OUR outreach only (a DM from someone we messaged or invited first), so they will not match a raw DM count; strangers sit under the **Not our outreach** filter, unclassified and never auto-answered.
+**Replies** (Inbox, /v2/inbox) — inbound replies that need a human, classified with sentiment and a suggested reply. Handling one stops the sequence for that person. The Social counters count replies to OUR outreach only (a DM from someone we messaged or invited first), so they will not match a raw DM count; strangers sit under the **Not our outreach** filter, unclassified and never auto-answered.
 
 **Meetings** (/v2/meetings) — proposed, invited, scheduled, completed, no-show. Confirm AI proposals here; a proposal whose offered times have all passed shows a **Regenerate** button (fresh future times, fresh invite — also swept automatically each autopilot tick, and "Regenerate outdated" does the whole queue, 10 per click). Offered times start between 9:00 and 16:00 in the workspace time zone; a proposal holding any time outside that window counts as outdated too. Your **booking link** lives here: set its timezone (it defaults to UTC).
 
-**Unified Inbox** (/unified-inbox) — LinkedIn, WhatsApp and social DMs. **Social** (/social) — LinkedIn invites, DMs and replies under the Social Autopilot and LinkedIn Limits. **LinkedIn Limits** (/settings/linkedin-limits) — per-account caps, pacing, working hours and the Active/Paused switch; people searches, invites, messages and profile lookups all pass this gate, so Paused stops the Revenue Engine's LinkedIn discovery too.
+**Social** (/social) — LinkedIn invites, DMs and replies under the Social Autopilot and LinkedIn Limits. **LinkedIn Limits** (/settings/linkedin-limits) — per-account caps, pacing, working hours and the Active/Paused switch; people searches, invites, messages and profile lookups all pass this gate, so Paused stops the Revenue Engine's LinkedIn discovery too.
 
 ## Marketing, Proposals, Dialer, Customer Success
 

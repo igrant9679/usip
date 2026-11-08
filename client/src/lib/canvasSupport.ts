@@ -45,3 +45,29 @@ export function canvasNotRunNotes(nodes: readonly NodeLike[], edges: readonly Ed
   }
   return notes;
 }
+
+/**
+ * What a sequence's stored canvas holds that its steps do not (audit
+ * 2026-10-20, U14). The canvas is retired: the v2 editor shows the steps the
+ * engine runs, and saving them redraws the canvas as a straight line. Anything
+ * drawn beyond that line never ran, and is said here before it is redrawn
+ * away: the not-run notes above, and how many nodes the walk from the start
+ * never reaches (the same walk `canvasToSteps` makes: the start node, or the
+ * first node, then each node's TRUE edge, else its first edge).
+ */
+export function canvasLeftovers(nodes: readonly NodeLike[], edges: readonly EdgeLike[]): { notes: string[]; unreached: number } {
+  if (nodes.length === 0) return { notes: [], unreached: 0 };
+  const out = new Map<string, EdgeLike[]>();
+  for (const e of edges) out.set(e.source, [...(out.get(e.source) ?? []), e]);
+  const start = nodes.find((n) => n.type === "start") ?? nodes[0];
+  const seen = new Set<string>();
+  let cur: string | null = start.id;
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const outs: EdgeLike[] = out.get(cur) ?? [];
+    const next: EdgeLike | undefined = outs.find((e) => e.sourceHandle === "true") ?? outs[0];
+    cur = next ? next.target : null;
+  }
+  const unreached = nodes.filter((n) => !seen.has(n.id) && n.type !== "start").length;
+  return { notes: canvasNotRunNotes(nodes, edges), unreached };
+}

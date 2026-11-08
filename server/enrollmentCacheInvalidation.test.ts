@@ -107,9 +107,16 @@ describe("every enrolment writer goes through it", () => {
   it("finds the writers this repo actually has", () => {
     // If this list shrinks, a writer was deleted or renamed and the rules
     // below stopped covering it — the point of deriving it from source.
+    // 2026-11-07 (U14, one sequence editor): the bulk enrol picker moved out of
+    // legacy Sequences.tsx into SequenceEnrollDialog so the v2 editor opens it,
+    // and "Mark replied" (pauseOnReply) came into the editor as its own button.
+    // Both are writers and both go through the shared function; the retired
+    // page keeps its row actions, so it is still listed.
     expect(writerFiles.map((f) => f.rel).sort()).toEqual([
       "components/usip/AddToMenu.tsx",
+      "components/usip/SequenceEnrollDialog.tsx",
       "components/usip/SequenceEnrollmentActions.tsx",
+      "components/usip/SequenceMarkReply.tsx",
       "components/usip/people/SelectionToolbar.tsx",
       "pages/usip/Sequences.tsx",
     ]);

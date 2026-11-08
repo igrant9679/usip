@@ -1,5 +1,5 @@
 /**
- * ConversationsV2 — the Engage → "Conversations" surface (/v2/conversations).
+ * ConversationsV2 — the Engage → "Conversations" surface (formerly /v2/conversations).
  *
  * A unified inbox of inbound email replies with autonomous AI handling. Each
  * reply is classified with the 8-class taxonomy; the per-class action can run
@@ -8,8 +8,13 @@
  *
  * Modes (per workspace): Off / Approve (AI classifies + suggests, human applies)
  * / Autonomous (AI classifies AND applies the action). Backed by conversations.*.
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F25) the page itself is retired into the
+ * one reply workspace at /v2/inbox, which renders ConversationsPanel and
+ * VoiceCallsChannel from this file. The default export stays for a one-line
+ * undo of the redirect.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -17,6 +22,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
 import { formatPhone } from "@shared/phoneFormat";
+import { nextActionFor } from "@/lib/replyNextAction";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +62,8 @@ type Reply = {
   meetingId?: number | null;
   handledAt?: string | Date | null;
   handledBy?: string | null;
+  /** The sequence the reply answers, when its draft came from one (F25). */
+  sequenceId?: number | null;
 };
 
 const CLASS_META: Record<string, { label: string; tone: string }> = {
@@ -135,9 +143,14 @@ function normSocial(m: any): Reply {
   };
 }
 
+/**
+ * Retired page (audit 2026-10-20, F25, 2026-11-07): /v2/conversations
+ * redirects to the one reply workspace (/v2/inbox), whose Replies, Social and
+ * Calls tabs render ConversationsPanel below. Kept so the redirect can be
+ * undone in one line.
+ */
 export default function ConversationsV2() {
   const accent = useAccentColor();
-  const utils = trpc.useUtils();
   // ?channel=social so Home's "LinkedIn & social replies" card lands on the
   // list that can actually mark them handled — the old CTA pointed at Unified
   // Inbox, which reads live Unipile and has no handledAt (2026-09-20).
@@ -145,18 +158,64 @@ export default function ConversationsV2() {
     const c = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("channel");
     return c === "social" || c === "calls" ? c : "email";
   });
+
+  return (
+    <Shell title="Conversations">
+      <div data-tour-id="conversations-list" className="flex flex-col h-full min-h-0">
+        {/* Header */}
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
+          <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
+          <MessageSquare className="size-4" style={{ color: accent }} />
+          <h1 className="text-[15px] font-semibold tracking-tight">Conversations</h1>
+          <div className="ml-2 inline-flex rounded-md border bg-card p-0.5">
+            {(["email", "social", "calls"] as const).map((c) => (
+              <button key={c} onClick={() => setChannel(c)}
+                className={cn("h-6 px-2.5 rounded text-[12px] font-medium capitalize flex items-center gap-1", channel === c ? "text-white" : "text-muted-foreground hover:text-foreground")}
+                style={channel === c ? { backgroundColor: accent } : undefined}>
+                {c === "email" ? <Mail className="size-3" /> : c === "social" ? <Share2 className="size-3" /> : <Phone className="size-3" />} {c}
+              </button>
+            ))}
+          </div>
+        </div>
+        <ConversationsPanel key={channel} channel={channel} />
+      </div>
+    </Shell>
+  );
+}
+
+/**
+ * Inbound replies with their classification and next action, one channel at a
+ * time: email (genuine replies to sequences and Revenue Engine campaigns),
+ * social (LinkedIn and other DMs to our outreach) or the voice agents' calls.
+ *
+ * The reply workspace (F25) adds read state and an owner filter on top of what
+ * the Conversations page had: opening a reply marks it read and it can be
+ * marked unread again, "Unread" and "Mine" narrow the list on the server, each
+ * row names its sequence or campaign and says what to do next, and an email
+ * reply opens its thread in the Mailbox tab, where Reply, Reply all and
+ * Forward are. Nothing here sends mail.
+ */
+export function ConversationsPanel({ channel, openReplyId }: { channel: "email" | "social" | "calls"; /** Open this email reply when it loads (?reply=<id>). */ openReplyId?: number | null }) {
+  const accent = useAccentColor();
+  const utils = trpc.useUtils();
   const [filter, setFilter] = useState("all");
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [mine, setMine] = useState(false);
   const [selected, setSelected] = useState<Reply | null>(null);
   const isEmail = channel === "email";
   const isCalls = channel === "calls";
 
-  const emailListQ = trpc.conversations.list.useQuery({ filter: filter as any }, { enabled: isEmail });
-  const socialListQ = trpc.conversations.socialList.useQuery({ filter: filter as any }, { enabled: !isEmail });
+  const listInput = { filter: filter as any, ...(unreadOnly ? { unreadOnly: true } : {}), ...(mine ? { mine: true } : {}) };
+  const emailListQ = trpc.conversations.list.useQuery(listInput, { enabled: isEmail });
+  const socialListQ = trpc.conversations.socialList.useQuery(listInput, { enabled: channel === "social" });
   const emailStatsQ = trpc.conversations.stats.useQuery(undefined, { enabled: isEmail });
-  const socialStatsQ = trpc.conversations.socialStats.useQuery(undefined, { enabled: !isEmail });
+  const socialStatsQ = trpc.conversations.socialStats.useQuery(undefined, { enabled: channel === "social" });
   const list = isEmail ? emailListQ : socialListQ;
   const stats = isEmail ? emailStatsQ : socialStatsQ;
   const autopilot = trpc.conversations.getAutopilotSettings.useQuery();
+  // Sequence names for the row chips, from the list every sequence screen shares.
+  const sequencesQ = trpc.sequences.list.useQuery(undefined, { enabled: isEmail });
+  const sequenceName = useMemo(() => new Map(((sequencesQ.data ?? []) as Array<{ id: number; name: string }>).map((s) => [s.id, s.name])), [sequencesQ.data]);
 
   const invalidateAll = () => {
     utils.conversations.list.invalidate();
@@ -165,16 +224,6 @@ export default function ConversationsV2() {
     utils.conversations.socialStats.invalidate();
   };
 
-  // Opening a reply marks it read (audit X6.2/G67): markRead and
-  // markSocialRead existed with no caller, so the unread dot and bold name
-  // never cleared however many times a reply was opened. Best-effort: a failed
-  // write costs the dot, not the reading.
-  const markRead = trpc.conversations.markRead.useMutation({ meta: { silentError: true }, onSuccess: () => invalidateAll() });
-  const markSocialRead = trpc.conversations.markSocialRead.useMutation({ meta: { silentError: true }, onSuccess: () => invalidateAll() });
-  const openReply = (r: Reply) => {
-    setSelected(r);
-    if (!r.readAt) (isEmail ? markRead : markSocialRead).mutate({ id: r.id });
-  };
   const setMode = trpc.conversations.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.conversations.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
@@ -183,6 +232,25 @@ export default function ConversationsV2() {
     onSuccess: (r) => { invalidateAll(); toast.success(r.classified === 0 ? "Nothing new to classify" : `Classified ${r.classified} repl${r.classified === 1 ? "y" : "ies"}`); },
     onError: (e) => toast.error(e.message),
   });
+  // Read state only: the invalidate corrects the dot, so a failure heals on the next load.
+  const markRead = trpc.conversations.markRead.useMutation({ onSuccess: invalidateAll, meta: { silentError: true } });
+  const markSocialRead = trpc.conversations.markSocialRead.useMutation({ onSuccess: invalidateAll, meta: { silentError: true } });
+  const setRead = (r: Reply, read: boolean) => (isEmail ? markRead : markSocialRead).mutate({ id: r.id, read });
+  /** Opening a reply reads it, as in any mail client. */
+  const open = (r: Reply) => {
+    setSelected(r);
+    if (!r.readAt) setRead(r, true);
+  };
+
+  // A link to one reply (Meetings: "the reply that booked this") opens it, once.
+  const linkedQ = trpc.conversations.get.useQuery({ id: openReplyId ?? 0 }, { enabled: isEmail && !!openReplyId });
+  const openedLink = useRef(false);
+  useEffect(() => {
+    if (openedLink.current || !linkedQ.data) return;
+    openedLink.current = true;
+    open(linkedQ.data as Reply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedQ.data]);
 
   const mode = autopilot.data?.mode ?? "off";
   const replies = isEmail ? ((list.data ?? []) as Reply[]) : ((list.data ?? []) as any[]).map(normSocial);
@@ -197,128 +265,119 @@ export default function ConversationsV2() {
       </div>
     );
   };
+  const toggle = (on: boolean) => cn("h-7 rounded-md border px-2.5 text-[12px] font-medium", on ? "text-white" : "bg-card text-muted-foreground hover:text-foreground");
 
   return (
-    <Shell title="Conversations">
-      <div data-tour-id="conversations-list" className="flex flex-col h-full min-h-0">
-        {/* Header */}
-        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
-          <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
-          <MessageSquare className="size-4" style={{ color: accent }} />
-          <h1 className="text-[15px] font-semibold tracking-tight">Conversations</h1>
-          <div className="ml-2 inline-flex rounded-md border bg-card p-0.5">
-            {(["email", "social", "calls"] as const).map((c) => (
-              <button key={c} onClick={() => { setChannel(c); setFilter("all"); setSelected(null); }}
-                className={cn("h-6 px-2.5 rounded text-[12px] font-medium capitalize flex items-center gap-1", channel === c ? "text-white" : "text-muted-foreground hover:text-foreground")}
-                style={channel === c ? { backgroundColor: accent } : undefined}>
-                {c === "email" ? <Mail className="size-3" /> : c === "social" ? <Share2 className="size-3" /> : <Phone className="size-3" />} {c}
-              </button>
-            ))}
-          </div>
-          <div className="flex-1" />
-          {!isCalls && <div className="flex items-center gap-1.5">
-            <Bot className="size-3.5 text-muted-foreground" />
-            <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
-              <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">Autopilot: Off</SelectItem>
-                <SelectItem value="approval">Autopilot: Approve</SelectItem>
-                <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>}
-          {isEmail && (
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={classifyRecent.isPending} onClick={() => classifyRecent.mutate({ limit: 20 })}>
-              <Sparkles className="size-3.5" /> {classifyRecent.isPending ? "Classifying…" : "Classify with AI"}
-            </Button>
-          )}
+    <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
+      {isCalls && <VoiceCallsChannel accent={accent} />}
+      {!isCalls && (<>
+      {/* Autopilot status strip, with its switch */}
+      <div className="rounded-lg border bg-card px-4 py-2.5 flex flex-wrap items-center gap-3 shadow-sm">
+        <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
+          {mode === "auto" ? <Zap className="size-4" /> : <Bot className="size-4" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">{MODE_META[mode]?.label}</div>
+          <div className="text-[12px] text-muted-foreground">{MODE_META[mode]?.blurb}{autopilot.data?.lastRunAt ? ` Last run ${fmtDate(autopilot.data.lastRunAt)}.` : ""}</div>
         </div>
-
-        <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
-          {isCalls && <VoiceCallsChannel accent={accent} />}
-          {!isCalls && (<>
-          {/* Autopilot status strip */}
-          <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
-            <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
-              {mode === "auto" ? <Zap className="size-4" /> : <Bot className="size-4" />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium">{MODE_META[mode]?.label}</div>
-              <div className="text-[12px] text-muted-foreground">{MODE_META[mode]?.blurb}</div>
-            </div>
-            {autopilot.data?.lastRunAt && (
-              <div className="shrink-0 text-[11px] text-muted-foreground hidden sm:block">Last run {fmtDate(autopilot.data.lastRunAt)}</div>
-            )}
-          </div>
-
-          {/* Stats */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <StatCard label="Replies" value={s.total} />
-            <StatCard label="Unhandled" value={s.unhandled} tone={s.unhandled ? "warn" : undefined} />
-            <StatCard label="Needs classify" value={s.needsClassify} tone={s.needsClassify ? "ai" : undefined} />
-            <StatCard label="Willing to meet" value={s.willingToMeet} tone={s.willingToMeet ? "good" : undefined} />
-            <StatCard label="Meetings from replies" value={s.meetingsProposed} tone={s.meetingsProposed ? "good" : undefined} />
-          </div>
-
-          {/* Filter + list */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold flex items-center gap-2"><Inbox className="size-4" style={{ color: accent }} /> Inbox</h2>
-              <Select value={filter} onValueChange={setFilter}>
-                <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>{(isEmail || isCalls ? FILTERS : SOCIAL_FILTERS).map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
-              {list.isLoading ? (
-                <div className="p-3 space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12 rounded bg-muted/50 animate-pulse" />)}</div>
-              ) : list.error ? (
-                <div className="text-center py-12 px-4">
-                  <p className="text-sm text-muted-foreground">Couldn’t load replies. {list.error.message}</p>
-                  <Button variant="outline" size="sm" className="mt-3" onClick={() => list.refetch()}>Retry</Button>
-                </div>
-              ) : replies.length === 0 ? (
-                <div className="text-center py-14 px-4">
-                  <Mail className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
-                  <div className="text-sm font-medium">No replies here</div>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Inbound replies to your sequences land here. Turn on Autopilot to classify and act on them automatically.</p>
-                </div>
-              ) : (
-                replies.map((r) => {
-                  const href = recordHref(r);
-                  const unread = !r.readAt;
-                  return (
-                    <button key={r.id} onClick={() => openReply(r)}
-                      className="w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
-                      <span className="relative shrink-0">
-                        <ColorAvatar name={r.fromName || r.fromEmail} size="size-8" />
-                        {unread && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background" style={{ backgroundColor: accent }} />}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className={cn("text-sm truncate flex items-center gap-1.5", unread ? "font-semibold" : "font-medium")}>
-                          {r.fromName || r.fromEmail}
-                          {r.handledAt && <Check className="size-3 shrink-0 text-emerald-500" />}
-                        </div>
-                        <div className="text-[12px] text-muted-foreground truncate">{r.subject || "(no subject)"} — {(r.bodyText || "").slice(0, 80)}</div>
-                      </div>
-                      {href && <Link href={href} onClick={(e) => e.stopPropagation()} className="shrink-0 text-muted-foreground hover:text-foreground" title="Open record"><Link2 className="size-3.5" /></Link>}
-                      <ClassChip cls={r.replyClass} />
-                      {r.meetingId && <span title="Meeting proposed"><CalendarClock className="size-3.5 text-emerald-500 shrink-0" /></span>}
-                      <div className="shrink-0 text-[11px] w-24 text-right tabular-nums text-muted-foreground">{fmtDate(r.receivedAt)}</div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </section>
-          </>)}
-        </div>
+        <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
+          <SelectTrigger aria-label="Conversation Autopilot" className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="off">Autopilot: Off</SelectItem>
+            <SelectItem value="approval">Autopilot: Approve</SelectItem>
+            <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
+          </SelectContent>
+        </Select>
+        {isEmail && (
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={classifyRecent.isPending} onClick={() => classifyRecent.mutate({ limit: 20 })}>
+            <Sparkles className="size-3.5" /> {classifyRecent.isPending ? "Classifying…" : "Classify with AI"}
+          </Button>
+        )}
       </div>
 
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <StatCard label="Replies" value={s.total} />
+        <StatCard label="Unhandled" value={s.unhandled} tone={s.unhandled ? "warn" : undefined} />
+        <StatCard label="Needs classify" value={s.needsClassify} tone={s.needsClassify ? "ai" : undefined} />
+        <StatCard label="Willing to meet" value={s.willingToMeet} tone={s.willingToMeet ? "good" : undefined} />
+        <StatCard label="Meetings from replies" value={s.meetingsProposed} tone={s.meetingsProposed ? "good" : undefined} />
+      </div>
+
+      {/* Filter + list */}
+      <section>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h2 className="text-sm font-semibold flex items-center gap-2"><Inbox className="size-4" style={{ color: accent }} /> {isEmail ? "Email replies" : "Social replies"}</h2>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button type="button" aria-pressed={unreadOnly} className={toggle(unreadOnly)} style={unreadOnly ? { backgroundColor: accent, borderColor: accent } : undefined} onClick={() => setUnreadOnly((v) => !v)}>
+              <CircleDot className="size-3 inline mr-1" />Unread
+            </button>
+            <button type="button" aria-pressed={mine} className={toggle(mine)} style={mine ? { backgroundColor: accent, borderColor: accent } : undefined} onClick={() => setMine((v) => !v)}
+              title={isEmail ? "Replies that came into your own mailbox" : "Messages to your own connected accounts"}>
+              Mine
+            </button>
+            <Select value={filter} onValueChange={setFilter}>
+              <SelectTrigger aria-label="Filter replies" className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>{(isEmail || isCalls ? FILTERS : SOCIAL_FILTERS).map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
+          {list.isLoading ? (
+            <div className="p-3 space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12 rounded bg-muted/50 animate-pulse" />)}</div>
+          ) : list.error ? (
+            <div className="text-center py-12 px-4">
+              <p className="text-sm text-muted-foreground">Couldn’t load replies. {list.error.message}</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => list.refetch()}>Retry</Button>
+            </div>
+          ) : replies.length === 0 ? (
+            <div className="text-center py-14 px-4">
+              <Mail className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
+              <div className="text-sm font-medium">No replies here</div>
+              <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                {unreadOnly || mine || filter !== "all" ? "Nothing matches these filters." : "Inbound replies to your sequences land here. Turn on Autopilot to classify and act on them automatically."}
+              </p>
+            </div>
+          ) : (
+            replies.map((r) => {
+              const href = recordHref(r);
+              const unread = !r.readAt;
+              const seqName = r.sequenceId ? sequenceName.get(r.sequenceId) : null;
+              return (
+                <button key={r.id} onClick={() => open(r)}
+                  className="w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
+                  <span className="relative shrink-0">
+                    <ColorAvatar name={r.fromName || r.fromEmail} size="size-8" />
+                    {unread && <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background" style={{ backgroundColor: accent }} title="Unread" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className={cn("text-sm truncate flex items-center gap-1.5", unread ? "font-semibold" : "font-medium")}>
+                      {r.fromName || r.fromEmail}
+                      {r.handledAt && <Check className="size-3 shrink-0 text-emerald-500" />}
+                    </div>
+                    <div className="text-[12px] text-muted-foreground truncate">{r.subject || "(no subject)"} — {(r.bodyText || "").slice(0, 80)}</div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                      {r.campaignId ? <span className="rounded bg-violet-100 px-1 text-violet-800 dark:bg-violet-950/50 dark:text-violet-300">Revenue Engine</span>
+                        : r.sequenceId ? <span className="rounded bg-sky-100 px-1 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300">Sequence{seqName ? `: ${seqName}` : ""}</span> : null}
+                      <span>Next: {nextActionFor(r)}</span>
+                    </div>
+                  </div>
+                  {href && <Link href={href} onClick={(e) => e.stopPropagation()} className="shrink-0 text-muted-foreground hover:text-foreground" title="Open record"><Link2 className="size-3.5" /></Link>}
+                  <ClassChip cls={r.replyClass} />
+                  {r.meetingId && <span title="Meeting proposed"><CalendarClock className="size-3.5 text-emerald-500 shrink-0" /></span>}
+                  <div className="shrink-0 text-[11px] w-24 text-right tabular-nums text-muted-foreground">{fmtDate(r.receivedAt)}</div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </section>
+      </>)}
+
       {!isCalls && (isEmail
-        ? <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />
-        : <SocialDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} />)}
-    </Shell>
+        ? <ReplyDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} onMarkUnread={(r) => { setRead(r, false); setSelected(null); }} />
+        : <SocialDialog key={selected?.id} reply={selected} onClose={() => setSelected(null)} onChanged={invalidateAll} onMarkUnread={(r) => { setRead(r, false); setSelected(null); }} />)}
+    </div>
   );
 }
 
@@ -328,7 +387,7 @@ export default function ConversationsV2() {
  * transcript digest recorded by the answer bridge expands inline. Configure
  * agents in Settings → Voice agents; the operational view lives on /v2/calls.
  */
-function VoiceCallsChannel({ accent }: { accent: string }) {
+export function VoiceCallsChannel({ accent }: { accent: string }) {
   const calls = trpc.voiceAgents.listCalls.useQuery({ limit: 100 });
   const agents = trpc.voiceAgents.list.useQuery();
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -429,7 +488,7 @@ function VoiceCallsChannel({ accent }: { accent: string }) {
  * so this shows the AI verdict and lets the rep mark it read/handled. When a
  * meeting was auto-proposed, a shortcut to the Meetings tab is offered.
  */
-function SocialDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClose: () => void; onChanged: () => void }) {
+function SocialDialog({ reply, onClose, onChanged, onMarkUnread }: { reply: Reply | null; onClose: () => void; onChanged: () => void; onMarkUnread?: (r: Reply) => void }) {
   const markHandled = trpc.conversations.markSocialHandled.useMutation({
     onSuccess: () => { onChanged(); toast.success("Marked handled"); onClose(); },
     onError: (e) => toast.error(e.message),
@@ -472,6 +531,7 @@ function SocialDialog({ reply, onClose, onChanged }: { reply: Reply | null; onCl
             <Link href={`/are/campaigns/${reply.campaignId}`}><Button variant="outline"><Link2 className="size-3.5 mr-1.5" /> Open campaign</Button></Link>
           )}
           <div className="flex-1" />
+          {onMarkUnread && <Button variant="ghost" onClick={() => onMarkUnread(reply)}>Mark unread</Button>}
           <Button disabled={markHandled.isPending} onClick={() => markHandled.mutate({ id: reply.id })}>
             <CheckCheck className="size-3.5 mr-1.5" /> Mark handled
           </Button>
@@ -481,7 +541,7 @@ function SocialDialog({ reply, onClose, onChanged }: { reply: Reply | null; onCl
   );
 }
 
-function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClose: () => void; onChanged: () => void }) {
+function ReplyDialog({ reply, onClose, onChanged, onMarkUnread }: { reply: Reply | null; onClose: () => void; onChanged: () => void; onMarkUnread?: (r: Reply) => void }) {
   const utils = trpc.useUtils();
   const classify = trpc.conversations.classify.useMutation({
     onSuccess: () => { utils.conversations.list.invalidate(); utils.conversations.stats.invalidate(); onChanged(); },
@@ -568,6 +628,12 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
             </div>
             <Textarea aria-label="Reply" value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={4} className="text-[13px]" placeholder="Draft a reply with AI, or write your own…" />
           </div>
+          {/* Replying happens in the mailbox, through its own send path and
+              checks (F25): this opens the reply's thread there, where Reply,
+              Reply all and Forward are. The draft above can be copied in. */}
+          <Link href={`/v2/inbox?tab=mailbox&reply=${reply.id}`} className="inline-flex items-center gap-1.5 text-[12px] font-medium hover:underline" style={{ color: "#2563eb" }}>
+            <Mail className="size-3.5" /> Open the thread in Mailbox to reply, reply all or forward
+          </Link>
         </div>
 
         <DialogFooter className="flex-wrap gap-2">
@@ -579,6 +645,7 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
             <Button variant="outline" disabled={classify.isPending} onClick={() => classify.mutate({ id: reply.id })}>Re-classify</Button>
           )}
           <div className="flex-1" />
+          {onMarkUnread && <Button variant="ghost" onClick={() => onMarkUnread(reply)}>Mark unread</Button>}
           <Button variant="ghost" disabled={markHandled.isPending} onClick={() => markHandled.mutate({ id: reply.id })}>
             <CheckCheck className="size-3.5 mr-1.5" /> Mark handled
           </Button>

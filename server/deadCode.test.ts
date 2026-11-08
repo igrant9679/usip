@@ -261,6 +261,17 @@ describe("procedures with no caller (X6.2, G67)", () => {
     expect(client).toContain("trpc.conversations.markSocialRead.useMutation(");
   });
 
+  it("conversations.get, restored for the reply workspace's ?reply= link, reads only what the list shows", () => {
+    // Deleted here as uncalled, then called by batch CONA's reply workspace
+    // (merged 2026-11-07): back, with the list's genuine-reply scope, so a
+    // link cannot open a private mailbox message the list hides.
+    const src = read("server/routers/conversations.ts");
+    const at = src.indexOf("  get: workspaceProcedure");
+    expect(at).toBeGreaterThan(-1);
+    const block = src.slice(at, src.indexOf("  stats: workspaceProcedure", at));
+    expect(block).toContain("eq(emailReplies.workspaceId, ctx.workspace.id), genuineReplyScope()");
+  });
+
   it("the legacy campaigns router keeps only its list (the Broadcasts page was retired on 2026-10-27)", () => {
     expect(Object.keys(procs).filter((p) => p.startsWith("campaigns."))).toEqual(["campaigns.list"]);
   });
@@ -285,8 +296,10 @@ describe("the wired controls work from their screens", () => {
   });
 
   it("opening an unread reply marks it read, on its own channel", () => {
-    expect(conv).toContain("if (!r.readAt) (isEmail ? markRead : markSocialRead).mutate({ id: r.id });");
-    expect(conv).toContain("onClick={() => openReply(r)}");
+    // Batch CONA's reply workspace (merged 2026-11-07) wired the same, with a
+    // Mark unread beside it; this batch's version gave way to it at the merge.
+    expect(conv).toContain("const setRead = (r: Reply, read: boolean) => (isEmail ? markRead : markSocialRead).mutate({ id: r.id, read });");
+    expect(conv).toContain("if (!r.readAt) setRead(r, true);");
     expect(conv).not.toContain("onClick={() => setSelected(r)}");
   });
 });
@@ -298,17 +311,19 @@ describe("the wired controls work from their screens", () => {
  * /v2 prefix itself is kept: renaming breaks bookmarks, emailed links, help
  * articles and tour anchors for a cosmetic gain.
  */
+// /sequences, /inbox, /unified-inbox, /mailbox and /v2/conversations were
+// retired into the v2 editor and the one reply workspace by batch CONA
+// (merged 2026-11-07; client/src/lib/retiredRoutes.ts), so their pairs left.
 const ROUTE_PAIRS: Array<[string, string, string]> = [
   ["/tasks", "/v2/tasks", "which task page to keep is the owner's decision (R72)"],
   ["/dashboard", "/v2/home", "two homes, chosen per person with Set as home (G56, owner decision)"],
-  ["/sequences", "/v2/sequences", "legacy /sequences still holds capabilities the v2 editor lacks (HANDOFF, sequence editor inventory)"],
   ["/workflows", "/v2/workflows", "the rule builder and the Autonomy Center: different pages over one engine"],
-  ["/inbox", "/v2/conversations", "notifications inbox and the reply queue: different things that share a word"],
 ];
 
 describe("routes", () => {
   const app = read("client/src/App.tsx");
-  const routed = (p: string) => app.includes(`<Route path="${p}">`);
+  // A path that only redirects (RetiredRedirect) is retired, not a page that routes.
+  const routed = (p: string) => app.includes(`<Route path="${p}">`) && !app.includes(`<Route path="${p}"><AuthGate><RetiredRedirect`);
 
   it("every recorded pair still routes both ways; retire one and its entry goes", () => {
     for (const [a, b] of ROUTE_PAIRS) {

@@ -1162,7 +1162,9 @@ describe("the Emails page shows a draft whose send failed", () => {
 
 describe("enrolling into a held sequence says so (O1)", () => {
   it("every bulk-enrol screen tells the person nothing is sent until the sequence is activated", () => {
-    for (const p of ["components/usip/AddToMenu.tsx", "components/usip/people/SelectionToolbar.tsx", "pages/usip/Sequences.tsx"]) {
+    // 2026-11-07 (U14): legacy /sequences' enrol dialog moved, unchanged, into
+    // SequenceEnrollDialog, which the v2 editor's "Add contacts" now opens.
+    for (const p of ["components/usip/AddToMenu.tsx", "components/usip/people/SelectionToolbar.tsx", "components/usip/SequenceEnrollDialog.tsx"]) {
       const src = readFileSync(join(__dirname, "..", "client", "src", p), "utf8");
       expect(src, p).toContain("r.heldUntilActive");
       expect(src, p).toContain("r.skippedSuppressed");
