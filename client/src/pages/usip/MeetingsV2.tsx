@@ -336,7 +336,7 @@ export default function MeetingsV2() {
         {m.contactName && <span>{m.contactName}</span>}
         {m.company && <span className="inline-flex items-center gap-1"><Building2 className="size-3" /> {m.company}</span>}
         {href && <Link href={href} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> {m.relatedType}</Link>}
-        {m.sourceReplyId && <Link href={`/v2/conversations?reply=${m.sourceReplyId}`} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> the reply that booked this</Link>}
+        {m.sourceReplyId && <Link href={`/v2/inbox?reply=${m.sourceReplyId}`} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> the reply that booked this</Link>}
       </div>
     );
   };

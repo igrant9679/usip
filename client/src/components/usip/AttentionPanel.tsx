@@ -137,7 +137,7 @@ export function AttentionPanel() {
 
         {s.unhandledReplies.count > 0 && (
           <QueueCard icon={<MessageSquare className="size-4" />} tint="#8B5CF6" title="Replies to answer"
-            count={s.unhandledReplies.count} cta="Open conversations" href="/v2/conversations">
+            count={s.unhandledReplies.count} cta="Open replies" href="/v2/inbox">
             <ul className="space-y-1">
               {s.unhandledReplies.items.slice(0, 3).map((r, i) => (
                 <li key={i} className="text-xs text-muted-foreground truncate">
@@ -180,7 +180,7 @@ export function AttentionPanel() {
         )}
         {(s.socialReplies?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0A66C2" title="LinkedIn & social replies"
-            count={s.socialReplies.count} cta="Open Conversations" href="/v2/conversations?channel=social" />
+            count={s.socialReplies.count} cta="Open social replies" href="/v2/inbox?tab=social" />
         )}
         {(s.optimizationRecs?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#10B981" title="Optimisation recommendations"
