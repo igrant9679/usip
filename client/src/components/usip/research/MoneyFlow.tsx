@@ -1,10 +1,16 @@
 /**
  * How the money flows in a sector, drawn the way Downstream draws it: where it
- * comes from, who passes it on, and who receives it, joined by curves. Labels
- * wrap to two lines and keep their full text in a tooltip. Nothing to draw,
- * nothing rendered.
+ * comes from, who passes it on, and who receives it. Labels wrap to two lines
+ * and keep their full text in a tooltip. Nothing to draw, nothing rendered.
+ *
+ * Curves join only the links the research states (facts.moneyFlow.links,
+ * resolved by statedMoneyLinks). It joined every node of a column to every
+ * node of the next, so a picture of five sources and four intermediaries
+ * claimed twenty links nobody had found (audit 2026-10-20, U30). With none
+ * stated, it says so instead of drawing any.
  */
 import type { SectorContent } from "@shared/researchShape";
+import { statedMoneyLinks, type MoneyColumn } from "@shared/researchReports";
 
 type Node = { label: string; sub: string };
 type Flow = SectorContent["facts"]["moneyFlow"];
@@ -31,12 +37,21 @@ function wrap(text: string, max = 34): string[] {
 }
 
 export function MoneyFlow({ flow }: { flow: Flow }) {
-  const columns: { title: string; nodes: Node[]; tone: string }[] = [
-    { title: "Where the money comes from", nodes: flow.sources.filter((s) => s.trim()).slice(0, 8).map((s) => ({ label: s, sub: "" })), tone: "fill-teal-600/15 stroke-teal-600/50" },
-    { title: "Who passes it on", nodes: flow.intermediaries.filter((i) => i.name.trim()).slice(0, 8).map((i) => ({ label: i.name, sub: [i.count, i.role].filter(Boolean).join(" · ") })), tone: "fill-violet-500/15 stroke-violet-500/50" },
-    { title: "Who receives it", nodes: flow.recipients.filter((r) => r.type.trim()).slice(0, 8).map((r) => ({ label: r.type, sub: [r.approxCount, r.notes].filter(Boolean).join(" · ") })), tone: "fill-amber-500/15 stroke-amber-600/50" },
+  const columns: { kind: MoneyColumn; title: string; nodes: Node[]; tone: string }[] = [
+    { kind: 0 as const, title: "Where the money comes from", nodes: flow.sources.filter((s) => s.trim()).slice(0, 8).map((s) => ({ label: s, sub: "" })), tone: "fill-teal-600/15 stroke-teal-600/50" },
+    { kind: 1 as const, title: "Who passes it on", nodes: flow.intermediaries.filter((i) => i.name.trim()).slice(0, 8).map((i) => ({ label: i.name, sub: [i.count, i.role].filter(Boolean).join(" · ") })), tone: "fill-violet-500/15 stroke-violet-500/50" },
+    { kind: 2 as const, title: "Who receives it", nodes: flow.recipients.filter((r) => r.type.trim()).slice(0, 8).map((r) => ({ label: r.type, sub: [r.approxCount, r.notes].filter(Boolean).join(" · ") })), tone: "fill-amber-500/15 stroke-amber-600/50" },
   ].filter((c) => c.nodes.length > 0);
   if (columns.length === 0) return null;
+  // Where each drawn node sits, by column kind and label.
+  const at = (kind: MoneyColumn, label: string) => {
+    const ci = columns.findIndex((c) => c.kind === kind);
+    const ni = ci === -1 ? -1 : columns[ci].nodes.findIndex((n) => n.label.trim().toLowerCase() === label.trim().toLowerCase());
+    return ni === -1 ? null : { ci, ni };
+  };
+  const edges = statedMoneyLinks(flow).links
+    .map((l) => ({ a: at(l.from.col, l.from.label), b: at(l.to.col, l.to.label) }))
+    .filter((e): e is { a: { ci: number; ni: number }; b: { ci: number; ni: number } } => !!e.a && !!e.b);
 
   const rows = Math.max(...columns.map((c) => c.nodes.length));
   const height = TOP + rows * (NODE_H + GAP) + 6;
@@ -47,17 +62,14 @@ export function MoneyFlow({ flow }: { flow: Flow }) {
 
   return (
     <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${WIDTH} ${height}`} className="w-full min-w-[640px] h-auto" role="img" aria-label="How the money flows">
-        {columns.slice(0, -1).map((col, ci) =>
-          col.nodes.map((_, a) =>
-            columns[ci + 1].nodes.map((__, b) => {
-              const x1 = x(ci) + COL_W, y1 = y(ci, a) + NODE_H / 2;
-              const x2 = x(ci + 1), y2 = y(ci + 1, b) + NODE_H / 2;
-              const mid = (x1 + x2) / 2;
-              return <path key={`${ci}-${a}-${b}`} d={`M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`} className="fill-none stroke-muted-foreground/25" strokeWidth={1.2} />;
-            }),
-          ),
-        )}
+      <svg viewBox={`0 0 ${WIDTH} ${height}`} className="w-full min-w-[640px] h-auto" role="img" aria-label={`How the money flows: ${edges.length} stated link${edges.length === 1 ? "" : "s"}`}>
+        {/* Only the links the research states (U30). */}
+        {edges.map(({ a, b }) => {
+          const x1 = x(a.ci) + COL_W, y1 = y(a.ci, a.ni) + NODE_H / 2;
+          const x2 = x(b.ci), y2 = y(b.ci, b.ni) + NODE_H / 2;
+          const mid = (x1 + x2) / 2;
+          return <path key={`${a.ci}-${a.ni}-${b.ci}-${b.ni}`} d={`M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`} className="fill-none stroke-muted-foreground/40" strokeWidth={1.4} />;
+        })}
         {columns.map((col, ci) => (
           <g key={col.title}>
             <text x={x(ci) + COL_W / 2} y={16} textAnchor="middle" className="fill-muted-foreground text-[12px] font-medium">{col.title}</text>
@@ -79,6 +91,9 @@ export function MoneyFlow({ flow }: { flow: Flow }) {
           </g>
         ))}
       </svg>
+      {columns.length > 1 && edges.length === 0 && (
+        <p className="text-xs text-muted-foreground mt-1">The research states no links between these, so none are drawn. Add the ones it states under Market facts, Money flow links.</p>
+      )}
     </div>
   );
 }

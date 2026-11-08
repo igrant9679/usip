@@ -330,6 +330,9 @@ describe("research wiring", () => {
       expect(read(page), page).toContain("expectedRevision: draft.baseRevision");
     }
     const hook = read("client/src/components/usip/research/ResearchFields.tsx");
-    expect(hook).toContain("setDraft((d) => ({ value: { ...(d?.value ?? saved), ...p }, base: d?.base ?? revision }));");
+    // 2026-11-07 (audit U30): the draft also keeps the content it started
+    // from, for the per-part merge; the revision it names is still the one
+    // the edit started on.
+    expect(hook).toContain("setDraft((d) => ({ value: { ...(d?.value ?? saved), ...p }, base: d?.base ?? revision, baseValue: d?.baseValue ?? saved }));");
   });
 });

@@ -83,7 +83,18 @@ export type SectorContent = {
   messaging: { leadWith: string[]; avoid: string[]; vocabulary: string[]; sampleOpening: string };
   facts: {
     marketSize: { value: string; label: string; source: string }[];
-    moneyFlow: { sources: string[]; intermediaries: { name: string; role: string; count: string }[]; recipients: { type: string; approxCount: string; notes: string }[] };
+    moneyFlow: {
+      sources: string[];
+      intermediaries: { name: string; role: string; count: string }[];
+      recipients: { type: string; approxCount: string; notes: string }[];
+      /**
+       * Who pays whom, as the research states it: each end names a source,
+       * an intermediary or a recipient above. The diagram draws these and
+       * nothing else (audit 2026-10-20, U30: it joined every node of one
+       * column to every node of the next, links nobody had stated).
+       */
+      links: { from: string; to: string }[];
+    };
     programs: { name: string; agency: string; flow: string; purpose: string; typicalAward: string; url: string }[];
     buying: string[];
     obligations: string[];
@@ -295,6 +306,7 @@ export function cleanSectorContent(input: unknown): Cleaned<SectorContent> {
         sources: list(mf.sources, LINE, d, "facts.moneyFlow.sources"),
         intermediaries: rows(mf.intermediaries, { name: SHORT, role: LINE, count: SHORT }, "name", d, "facts.moneyFlow.intermediaries"),
         recipients: rows(mf.recipients, { type: SHORT, approxCount: SHORT, notes: LINE }, "type", d, "facts.moneyFlow.recipients"),
+        links: moneyLinks(mf.links, d),
       },
       programs: rows(f.programs, { name: SHORT, agency: SHORT, flow: LINE, purpose: LINE, typicalAward: SHORT, url: 1000 }, "name", d, "facts.programs")
         .map((p) => ({ ...p, url: url(p.url, d, "facts.programs.url") })),
@@ -307,6 +319,20 @@ export function cleanSectorContent(input: unknown): Cleaned<SectorContent> {
     sources: sources(o.sources, d),
   };
   return { content, dropped: d };
+}
+
+/** Stated money-flow links: both ends named, each link once (case aside). */
+function moneyLinks(value: unknown, dropped: Dropped): { from: string; to: string }[] {
+  const seen = new Set<string>();
+  const out: { from: string; to: string }[] = [];
+  for (const r of rows(value, { from: SHORT, to: SHORT }, "from", dropped, "facts.moneyFlow.links")) {
+    if (!r.to) continue;
+    const k = `${r.from.toLowerCase()}\u0000${r.to.toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ from: r.from, to: r.to });
+  }
+  return out;
 }
 
 export const emptyMarketContent = (name = ""): MarketContent => cleanMarketContent({ name }).content;
@@ -347,6 +373,49 @@ export function changedParts(before: unknown, after: unknown): string[] {
   return out;
 }
 
+/* ── A save that meets a newer one, part by part (audit U30) ────────────── */
+
+/** One top-level part in a save conflict: who changed it since the draft began, and whether both did, differently. */
+export type DraftPart = { part: string; mine: boolean; theirs: boolean; conflict: boolean };
+
+const sameValue = (x: unknown, y: unknown) => JSON.stringify(x ?? null) === JSON.stringify(y ?? null);
+
+/**
+ * What a person's draft and someone else's newer save each changed, part by
+ * part, against the version the draft started from. Only parts someone
+ * changed are listed, in page order.
+ */
+export function draftPartChanges(base: unknown, mine: unknown, theirs: unknown): DraftPart[] {
+  const a = obj(base), m = obj(mine), t = obj(theirs);
+  const order = Object.keys(RESEARCH_PART_LABEL);
+  const keys = Array.from(new Set([...Object.keys(a), ...Object.keys(m), ...Object.keys(t)]))
+    .sort((x, y) => (order.indexOf(x) === -1 ? 99 : order.indexOf(x)) - (order.indexOf(y) === -1 ? 99 : order.indexOf(y)));
+  const out: DraftPart[] = [];
+  for (const k of keys) {
+    const mineChanged = !sameValue(m[k], a[k]);
+    const theirsChanged = !sameValue(t[k], a[k]);
+    if (!mineChanged && !theirsChanged) continue;
+    out.push({ part: k, mine: mineChanged, theirs: theirsChanged, conflict: mineChanged && theirsChanged && !sameValue(m[k], t[k]) });
+  }
+  return out;
+}
+
+/**
+ * The draft rebuilt on the newer save (U30): their version of every part,
+ * except the parts only the person changed, which keep the person's, and the
+ * parts both changed that the person chose to keep (`keepMine`). Saving it
+ * then names the newer revision, so nobody's change is lost by default and
+ * nothing is taken all-or-nothing.
+ */
+export function mergeDraftParts<T>(base: T, mine: T, theirs: T, keepMine: readonly string[]): T {
+  const m = obj(mine);
+  const out: Record<string, unknown> = { ...obj(theirs) };
+  for (const p of draftPartChanges(base, mine, theirs)) {
+    if (p.mine && (!p.conflict || keepMine.includes(p.part))) out[p.part] = m[p.part];
+  }
+  return out as T;
+}
+
 /* ── Personas ───────────────────────────────────────────────────────────── */
 
 /** What the AI writers will need about a buyer, beyond who to search for. */
@@ -364,6 +433,34 @@ export function cleanPersonaResearch(input: unknown): Cleaned<PersonaResearch> {
     },
     dropped: d,
   };
+}
+
+/** The four things the AI writers use about a buyer, as a person reads them. */
+export const PERSONA_RESEARCH_PARTS = [
+  { key: "cares", label: "what they care about" },
+  { key: "pains", label: "pains" },
+  { key: "objections", label: "objections" },
+  { key: "angle", label: "the angle" },
+] as const;
+
+/**
+ * How much of a persona's research is filled in (audit 2026-10-20, U18). The
+ * writers pick a persona by job title only when it has some research
+ * (services/research/context.ts reads this), so a persona with none is
+ * passed over without a word; the Personas page shows this as a badge.
+ */
+export function personaResearchCompleteness(p: { cares?: string | null; pains?: unknown; objections?: unknown; angle?: string | null }): {
+  filled: number; of: number; missing: string[]; level: "complete" | "partial" | "none";
+} {
+  const has = {
+    cares: !!(p.cares ?? "").trim(),
+    pains: Array.isArray(p.pains) && p.pains.some((x) => typeof x === "string" && x.trim()),
+    objections: Array.isArray(p.objections) && p.objections.some((x) => typeof x === "string" && x.trim()),
+    angle: !!(p.angle ?? "").trim(),
+  };
+  const missing = PERSONA_RESEARCH_PARTS.filter((x) => !has[x.key]).map((x) => x.label);
+  const filled = PERSONA_RESEARCH_PARTS.length - missing.length;
+  return { filled, of: PERSONA_RESEARCH_PARTS.length, missing, level: filled === 0 ? "none" : missing.length === 0 ? "complete" : "partial" };
 }
 
 /* ── Accepting an AI research draft, part by part ───────────────────────── */
