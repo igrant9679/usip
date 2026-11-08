@@ -5354,6 +5354,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F36: "Record churn" keeps the day and the reason on the
+  // customer. Nullable: no existing customer gains a churn it did not have.
+  {
+    name: "0402_customer_churn_record.sql",
+    statements: [
+      "ALTER TABLE `customers` ADD COLUMN `churnedAt` timestamp NULL",
+      "ALTER TABLE `customers` ADD COLUMN `churnReason` varchar(200) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

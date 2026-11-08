@@ -27,6 +27,7 @@ import { opportunities } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { stageResolver } from "../_core/stageSemantics";
 import { forecastBuckets } from "@shared/forecastCategory";
+import { renewalStageFor } from "@shared/renewalStage";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -274,3 +275,35 @@ export function quotaPeriodRange(
 
 /** "YYYY-MM" an open deal is expected to close in, or null with no date. */
 export const closeMonthKey = (d: MetricDeal) => calendarMonthKey(d.closeDate);
+
+/* ── Customer revenue (audit 2026-10-20, U26 and F36) ───────────────────── */
+
+export type CustomerRevenueRow = {
+  arr: unknown;
+  renewalStage: string;
+  contractEnd: Date | string | null;
+  /** When the customer churned (recorded by cs.recordChurn), else null. */
+  churnedAt?: Date | string | null;
+};
+
+/**
+ * ARR, the one way (U26, F36): the Customers KPIs and the company page read
+ * this, and Record renewal / Record churn change the rows it sums. A churned
+ * customer is not ARR (R58) — their stored arr is the ARR that churned, and
+ * counts in `churnedArr` when they churned inside `range` (by churnedAt, or by
+ * the contract's end for a churn recorded before 0402). Summed in cents.
+ */
+export function customerArrTotals(
+  rows: CustomerRevenueRow[],
+  opts: { now?: Date; range?: Range } = {},
+): { arr: number; customers: number; churnedArr: number; churned: number } {
+  let arr = 0, customers = 0, churnedArr = 0, churned = 0;
+  for (const c of rows) {
+    const cents = Math.round(Number(c.arr ?? 0) * 100) || 0;
+    const stage = renewalStageFor({ current: c.renewalStage, contractEnd: c.contractEnd, now: opts.now });
+    if (stage !== "churned") { arr += cents; customers++; continue; }
+    const at = toDate(c.churnedAt) ?? toDate(c.contractEnd);
+    if (!opts.range || inRange(at, opts.range)) { churnedArr += cents; churned++; }
+  }
+  return { arr: dollars(arr), customers, churnedArr: dollars(churnedArr), churned };
+}

@@ -1352,6 +1352,13 @@ export const customers = mysqlTable(
       "renewed",
       "churned",
     ]).default("early").notNull(),
+    /**
+     * Migration 0402 (audit 2026-10-20, F36): when a churn was recorded with
+     * "Record churn", and why. NULL for every customer not recorded churned
+     * that way; a renewal clears both.
+     */
+    churnedAt: timestamp("churnedAt"),
+    churnReason: varchar("churnReason", { length: 200 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
