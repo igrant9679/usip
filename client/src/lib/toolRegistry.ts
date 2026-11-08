@@ -151,8 +151,6 @@ export const TOOLS: Tool[] = [
     description: "Every company record with its people and activity.", keywords: ["accounts"] },
   { href: "/leads", label: "Leads", icon: Target, group: "CRM", primary: true,
     description: "Scored, routable leads awaiting qualification." },
-  { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "CRM", primary: true,
-    description: "Deal autopilot, at-risk alerts and the working board.", keywords: ["pipeline", "opportunities"] },
   // Back on the rail (owner, 2026-09-20: "bring back the traditional Sales
   // Pipeline page"). It was never deleted — it simply had no entry here, and
   // the rail, Library and palette all render ONLY from this file, so it went
@@ -160,9 +158,11 @@ export const TOOLS: Tool[] = [
   // rather than folded into Deals because it is the only place you can create
   // an opportunity, run the weighted forecast, export the board, or switch
   // between configured pipelines.
+  // THE deal board since 2026-11-08 (audit U13): /v2/deals ("Deals") folded
+  // in here and redirects, so this one entry carries both names.
   { href: "/pipeline", label: "Sales Pipeline", icon: TrendingUp, group: "CRM", primary: true,
-    description: "The classic stage board — with the weighted forecast, CSV export, and where you add an opportunity.",
-    keywords: ["forecast", "opportunities", "stages", "pipeline", "weighted", "export"] },
+    description: "Every deal by stage — the Deal Autopilot and at-risk alerts, the weighted forecast, owner and close-date filters, CSV export, and where you add an opportunity.",
+    keywords: ["deals", "forecast", "opportunities", "stages", "pipeline", "weighted", "export", "autopilot", "kanban", "board"] },
   // Back on the rail (owner, 2026-09-04): both are daily working surfaces —
   // Lists feed the Add-existing wizard and targeting, Tasks carry the
   // Task Autopilot's proposals.
@@ -172,8 +172,8 @@ export const TOOLS: Tool[] = [
     description: "Your to-dos, including AI-proposed drafts." },
   // The alerts strip on Deals shows the same rows (phase 4); the route stays
   // for its in-page deal actions.
-  { href: "/v2/deals#alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
-    description: "Stuck-deal and at-risk warnings — the strip at the top of Deals.", keywords: ["stuck", "at risk"] },
+  { href: "/pipeline#alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
+    description: "Stuck-deal and at-risk warnings — the strip at the top of the deal board.", keywords: ["stuck", "at risk"] },
 
   /* ── Outreach — 1:1, sequenced, per-person copy; replies and meetings ── */
   { href: "/are", label: "Revenue Engine", icon: Bot, group: "Outreach", primary: true,

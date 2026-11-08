@@ -179,12 +179,12 @@ const WIDGETS: Record<string, WidgetDef> = {
       // read every deal and the default pipeline's stages only.
       const open = c.deals ?? [];
       return open.length === 0
-        ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>
+        ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/pipeline")}>View pipeline</Button></div>
         : (
           <div>{open.slice(0, 5).map((d: any) => (
             <MiniRow key={d.id} primary={d.name}
               secondary={[d.stage?.replace(/_/g, " "), d.value ? `$${Number(d.value).toLocaleString()}` : null].filter(Boolean).join(" · ")}
-              right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/deals")}>Open <ArrowRight className="size-3" /></Button>} />
+              right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/pipeline")}>Open <ArrowRight className="size-3" /></Button>} />
           ))}</div>
         );
     },

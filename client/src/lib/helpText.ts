@@ -96,11 +96,10 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/renewals": { body: "Contracts coming up for renewal, bucketed by how far off the contract end date is. Past due means the date has gone by with no outcome recorded; renewed and churned come from a contract amendment." },
   "/qbrs": { body: "Quarterly business reviews: the AI drafts the prep, you run the meeting." },
 
-  "/v2/deals": { body: "Open deals and what stage each is at, with the deal autopilot and the at-risk strip.", article: "managing-pipeline" },
   // Restored to the rail 2026-09-20 (owner: "bring back the traditional Sales
   // Pipeline page"). Distinct from Deals — say so here, because the two sit
   // side by side under CRM and the label alone will not explain the pair.
-  "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
+  "/pipeline": { body: "The deal board: every deal by stage, with the Deal Autopilot, the at-risk alerts, owner and close-date filters, the weighted forecast, CSV export and a switcher between configured pipelines.", article: "managing-pipeline" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
   "/proposals": { body: "Proposals, with their versioned pricing, and whether the client has opened, accepted or declined them." },
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },

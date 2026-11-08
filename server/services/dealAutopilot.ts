@@ -1,5 +1,5 @@
 /**
- * Deal Autopilot — autonomous pipeline manager behind /v2/deals.
+ * Deal Autopilot — autonomous pipeline manager behind the deal board (/pipeline).
  *
  * Keeps open opportunities moving toward close with no human step. For each open
  * deal it asks the workspace LLM (shared invokeLLM) for the single best next

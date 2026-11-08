@@ -144,6 +144,17 @@
  *                            the person (users.home_view, migration 0430); a
  *                            browser's old choice is carried over once.
  *                            Dashboard.tsx's page wrapper is kept, unrouted.
+ *   /v2/deals  → /pipeline   U13: one deal board. /pipeline took what only
+ *                            /v2/deals had: the Deal Autopilot dial and strip,
+ *                            Analyze with AI, the header numbers, the AI
+ *                            commentary, the at-risk alerts strip, a Move menu
+ *                            on every card and the won confetti; and gained
+ *                            owner and close-date filter controls, folding
+ *                            closed columns and "Show more" on them. It kept
+ *                            its own forecast, create, export, drag, AI card
+ *                            analysis and pipeline switcher. The hash rides
+ *                            along, so /v2/deals#alerts still opens the alerts.
+ *                            DealsV2.tsx is kept, unrouted.
  */
 
 /**
@@ -164,6 +175,7 @@ export const RETIRED_ROUTES = {
   "/quotes": "/proposals",
   "/tasks": "/v2/tasks",
   "/dashboard": "/v2/home?view=pipeline",
+  "/v2/deals": "/pipeline",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

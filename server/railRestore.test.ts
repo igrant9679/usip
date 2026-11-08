@@ -84,16 +84,16 @@ describe("what came back to the rail", () => {
     expect(existsSync(join(__dirname, "..", "client", "src", "pages", "usip", "Pipeline.tsx"))).toBe(true);
   });
 
-  it("Sales Pipeline ADDED a surface — Deals kept its own, and the pair says which is which", () => {
-    // The restore's one real risk was editing next to /v2/deals and dropping
-    // it. Two adjacent CRM rail rows over the same opportunities also need
-    // descriptions that name what each has: Deals the autopilot and the
-    // at-risk strip, Sales Pipeline the forecast, create and export.
-    expect(tool("/v2/deals").group).toBe("CRM");
-    expect(primaryHrefs.has("/v2/deals")).toBe(true);
-    expect(tool("/v2/deals").description).toMatch(/autopilot/i);
+  // 2026-11-08 (batch CONB, U13): the pair is one board now. /v2/deals folded
+  // into /pipeline (autopilot, alerts, Move menu came across) and redirects,
+  // so its rail row left; the one row says it has both halves.
+  it("Sales Pipeline is THE deal board: one CRM row with the autopilot, the alerts and the forecast", () => {
+    expect(TOOLS.some((t) => t.href === "/v2/deals")).toBe(false);
+    expect(tool("/pipeline").group).toBe("CRM");
+    expect(tool("/pipeline").description).toMatch(/autopilot/i);
+    expect(tool("/pipeline").description).toMatch(/alerts/i);
     expect(tool("/pipeline").description).toMatch(/forecast/i);
-    expect(tool("/pipeline").description).not.toBe(tool("/v2/deals").description);
+    expect(tool("/pipeline").keywords).toContain("deals");
   });
 });
 

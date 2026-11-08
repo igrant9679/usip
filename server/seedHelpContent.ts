@@ -1567,11 +1567,12 @@ export const TOURS: TourSeed[] = [
     description: "Move opportunities toward close, with the AI watching for stalls.",
     type: "feature",
     estimatedMinutes: 2,
-    pageKey: "deals",
-    route: "/v2/deals",
+    // The deal board is /pipeline since /v2/deals folded into it (U13, 2026-11-08).
+    pageKey: "pipeline",
+    route: "/pipeline",
     roleTags: ["sdr"],
     steps: [
-      { title: "Every open opportunity", bodyMarkdown: "This is the board of deals in flight. Stages come from your pipeline settings, so it matches how your team actually sells.", routeTo: "/v2/deals", targetDataTourId: "deals-board", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Every open opportunity", bodyMarkdown: "This is the board of deals in flight. Stages come from your pipeline settings, so it matches how your team actually sells.", routeTo: "/pipeline", targetDataTourId: "deals-board", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Deal Autopilot", bodyMarkdown: "Turned on, it watches for deals going quiet and proposes the next move. On Approve it drafts and waits for you; on Autonomous it acts. Set it in the Autonomy Control Center.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Closing a deal", bodyMarkdown: "Marking one Closed Won creates the customer record for you, so renewals and QBRs pick it up without a handoff.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],

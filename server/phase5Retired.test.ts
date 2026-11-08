@@ -59,7 +59,8 @@ describe("the retired v1 paths redirect (phase 5 item 2)", () => {
     // 2026-11-07 (U14, F25): the URL now carries the route's params and the
     // query string, and is built once; the hop still replaces history.
     expect(src).toContain("const to = retiredRedirectUrl(from, { params, search });");
-    expect(src).toContain("setLocation(to, { replace: true })");
+    // 2026-11-08 (CONB, U13): the hash rides along too (/v2/deals#alerts).
+    expect(src).toContain("setLocation(`${to}${hash}`, { replace: true })");
   });
 
   it("the pages are deleted and nothing imports them", () => {

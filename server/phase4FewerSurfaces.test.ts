@@ -27,7 +27,8 @@ describe("folded pages point INTO their absorbing page (registry direction)", ()
     expect(hrefOf("Data Health")).toBe("/v2/data-enrichment?tab=data-health-center");
     expect(hrefOf("Saved People")).toBe("/v2/lists?type=people");
     expect(hrefOf("Saved Companies")).toBe("/v2/lists?type=companies");
-    expect(hrefOf("Pipeline Alerts")).toBe("/v2/deals#alerts");
+    // 2026-11-08 (CONB, U13): the Deals board folded into /pipeline, strip and all.
+    expect(hrefOf("Pipeline Alerts")).toBe("/pipeline#alerts");
   });
   it("consumer-less libraries left the registry; the live Segment Rules page joined it", () => {
     expect(hrefOf("Email Builder")).toBeUndefined();
@@ -58,6 +59,8 @@ describe("old links survive the move (URL direction)", () => {
     expect(emails).toContain('useState(initial.get("status") || "all")');
     expect(emails).toContain('useState(initial.get("source") || "all")');
     expect(client("pages", "usip", "DealsV2.tsx")).toContain('<div id="alerts"');
+    // The one deal board carries it now (U13, 2026-11-08).
+    expect(client("pages", "usip", "Pipeline.tsx")).toContain('<div id="alerts"');
   });
   it("the editor pages are retired: their tools render inside the Emails drawer, the routes are gone", () => {
     // Phase 4's final step (2026-09-15): /email-drafts and /ai-pipeline no

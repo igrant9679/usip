@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, isNotNull, like, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -60,8 +60,8 @@ import {
 } from "../services/stageChange";
 import { normalizeCalendarDate } from "@shared/calendarDate";
 import {
-  addMonths, closedIn, closeMonthKey, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
-  monthKey, monthToDateRanges, openTotals, zonedYmd, type Range,
+  addMonths, CLOSE_RANGES, closeDateIn, closedIn, closeMonthKey, closeRangeBounds, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
+  monthKey, monthToDateRanges, openTotals, zonedYmd, type CloseRange, type Range,
 } from "../services/dealMetrics";
 import { leadCounts } from "../services/activityMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
@@ -2016,16 +2016,33 @@ export const leadsRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
-/** What a board shows: one pipeline, optionally one owner. */
-const BOARD_SCOPE = z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional();
+/**
+ * What a board shows: one pipeline, optionally one owner, optionally deals
+ * closing in one range (audit 2026-10-20, U13, batch CONB: the owner and
+ * close-date filters are controls on the one deal board, and every read the
+ * board makes — columns, counts, header numbers, forecast, export, AI
+ * snapshots — takes the same scope, so they keep counting the same deals).
+ */
+const BOARD_SCOPE_FIELDS = {
+  ownerUserId: z.number().optional(),
+  pipelineId: z.number().optional(),
+  closeRange: z.enum(CLOSE_RANGES).optional(),
+};
+export const BOARD_SCOPE = z.object(BOARD_SCOPE_FIELDS).optional();
 type BoardScope = z.infer<typeof BOARD_SCOPE>;
 /** Deals a won or lost column shows, latest first (X4.1); boardTotals counts them all. */
 export const BOARD_CLOSED_LIMIT = 50;
 const BOARD_SCOPE_WITH_LIMIT = z.object({
-  ownerUserId: z.number().optional(),
-  pipelineId: z.number().optional(),
+  ...BOARD_SCOPE_FIELDS,
   closedLimit: z.number().int().min(1).max(500).optional(),
 }).optional();
+
+/** The close-date range's bounds for this workspace: its day and its fiscal quarter. */
+async function closeBoundsFor(workspaceId: number, range: CloseRange | undefined) {
+  if (!range) return null;
+  const rs = await getRevenueSettings(workspaceId);
+  return closeRangeBounds(range, rs.timezone, new Date(), rs.fiscalYearStartMonth);
+}
 /** Deals opportunities.list returns when the caller names no limit (X4.1). */
 export const OPPORTUNITY_LIST_DEFAULT = 200;
 
@@ -2036,16 +2053,24 @@ export const OPPORTUNITY_LIST_DEFAULT = 200;
  */
 export async function boardScopeWhere(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
   const owner = scope?.ownerUserId ? eq(opportunities.ownerUserId, scope.ownerUserId) : undefined;
-  if (!scope?.pipelineId) return and(eq(opportunities.workspaceId, workspaceId), owner);
+  const b = await closeBoundsFor(workspaceId, scope?.closeRange);
+  const close = !b ? undefined
+    : b.none ? isNull(opportunities.closeDate)
+    // A deal with no close date is in no range but "none" (SQL's NULL < x is not true; said outright).
+    : and(isNotNull(opportunities.closeDate), b.from ? gte(opportunities.closeDate, b.from) : undefined, b.before ? lt(opportunities.closeDate, b.before) : undefined);
+  if (!scope?.pipelineId) return and(eq(opportunities.workspaceId, workspaceId), owner, close);
   const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
     .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
   if (!pipeline) return null;
-  return and(boardDealsWhere(workspaceId, pipeline), owner);
+  return and(boardDealsWhere(workspaceId, pipeline), owner, close);
 }
 
 /** Deal metrics for what a board shows (R39): the same pipeline and owner rule as boardScopeWhere. */
 async function scopedMetricDeals(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
-  const deals = await loadMetricDeals(db, workspaceId, { ownerUserId: scope?.ownerUserId ?? null });
+  const all = await loadMetricDeals(db, workspaceId, { ownerUserId: scope?.ownerUserId ?? null });
+  // The close-date range, the same bounds boardScopeWhere puts in SQL (U13).
+  const b = await closeBoundsFor(workspaceId, scope?.closeRange);
+  const deals = b ? all.filter((d) => closeDateIn(d.closeDate, b)) : all;
   if (!scope?.pipelineId) return deals;
   const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
     .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
@@ -2421,7 +2446,7 @@ export const opportunitiesRouter = router({
    * classification the Dashboard, Deals, Forecast and Quota read (R39).
    */
   forecast: workspaceProcedure
-    .input(z.object({ stages: z.array(z.string()).optional(), pipelineId: z.number().optional(), ownerUserId: z.number().optional() }).optional())
+    .input(z.object({ stages: z.array(z.string()).optional(), ...BOARD_SCOPE_FIELDS }).optional())
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

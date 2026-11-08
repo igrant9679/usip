@@ -89,6 +89,7 @@ const TasksV2 = lazyChunk(() => import("@/pages/usip/TasksV2"));
 const MeetingsV2 = lazyChunk(() => import("@/pages/usip/MeetingsV2"));
 // Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const ConversationsV2 = lazyChunk(() => import("@/pages/usip/ConversationsV2"));
+// Retired (U13, 2026-11-08): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const DealsV2 = lazyChunk(() => import("@/pages/usip/DealsV2"));
 const WorkflowsV2 = lazyChunk(() => import("@/pages/usip/WorkflowsV2"));
 const AnalyticsV2 = lazyChunk(() => import("@/pages/usip/AnalyticsV2"));
@@ -636,7 +637,8 @@ function Router() {
       <Route path="/v2/meetings"><AuthGate><MeetingsV2 /></AuthGate></Route>
       <Route path="/v2/conversations"><AuthGate><RetiredRedirect from="/v2/conversations" /></AuthGate></Route>
       <Route path="/v2/inbox"><AuthGate><InboxWorkspace /></AuthGate></Route>
-      <Route path="/v2/deals"><AuthGate><DealsV2 /></AuthGate></Route>
+      {/* One deal board (U13, X6.3; 2026-11-08): /v2/deals folded into /pipeline. See lib/retiredRoutes. */}
+      <Route path="/v2/deals"><AuthGate><RetiredRedirect from="/v2/deals" /></AuthGate></Route>
       <Route path="/v2/workflows"><AuthGate><WorkflowsV2 /></AuthGate></Route>
       <Route path="/v2/analytics"><AuthGate><AnalyticsV2 /></AuthGate></Route>
       <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>

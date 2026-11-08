@@ -128,9 +128,9 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Leads** (/leads) — inbound and engaged people awaiting qualification: score, owner, status new → working → qualified or unqualified → converted. **Convert** creates the account, contact and opportunity together.
 
-**Deals** (/v2/deals) — the kanban of open opportunities by stage with value, win probability, days in stage and next step; list and forecast views; the **Pipeline Alerts** strip for stale, low-probability, no-champion and slipped deals.
+**Sales Pipeline** (/pipeline) — the one deal board: every opportunity by stage with value, win probability and next step. Drag a deal or use its **Move** menu (a move to a lost stage asks why); filter by **Owner** and **Close date**; fold the won and lost columns, and **Show more** pages past their latest 50. The **Deal Autopilot** dial (Off, Approve, Autonomous) and **Analyze with AI** sit in the header; the **Pipeline Alerts** strip lists stale, low-probability, no-champion and slipped deals.
 
-**Sales Pipeline** (/pipeline) — the same opportunities on the classic stage board, and the one page that adds a weighted forecast with AI commentary, **New opportunity**, **Export CSV** and a switcher between your configured pipelines.
+The **Forecast** tab beside the board gives the weighted forecast with AI commentary; **New opportunity**, **Export CSV** and a switcher between your configured pipelines are in the header too.
 
 **Lists** (/v2/lists) — named static sets of people or companies for targeting and bulk actions. **Tasks** (/v2/tasks) — your queue, including AI-proposed draft tasks awaiting approval. Assign a task to a teammate when you create it (blank means you), see the owner on every queue row, and filter the queue by assignee; the assignee is notified when it is not you.
 
