@@ -142,7 +142,11 @@ describe("wiring", () => {
     expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetIndustries, "industry"), researched?.industries);');
     expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetGeographies, "geography"), researched?.geographies);');
     expect(fn).toContain("?? icp?.targetCompanySizeMin ?? undefined,");
-    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, ");
+    // 2026-11-07 (audit F37 remainder, batch ARES): the vendors take one
+    // researched sector's lists, or the combined ones when there are no
+    // sector groups (vendorTargeting); the ICP's size still goes to Apollo.
+    expect(engine).toContain(": { titles, industries, geos, keywords };");
+    expect(engine).toContain("discoverViaApollo(campaign, { ...vendorTargeting, overrides: size }, ");
   });
 
   it("the AI fit scorer is shown labels with weights, not raw JSON", () => {

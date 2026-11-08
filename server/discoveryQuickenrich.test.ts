@@ -170,7 +170,10 @@ describe("QuickEnrich page rotation is threaded through the engine", () => {
   });
 
   it("runDiscovery persists the advanced cursor WITHOUT clobbering it on a skipped pull", () => {
-    expect(engine).toContain("qe: quickenrichNextPage ?? persistedState.qe ?? null");
+    // 2026-11-07 (audit F37 rest, batch ARES): a skipped pull still keeps the
+    // stored cursor, both the shared one and each sector group's own.
+    expect(engine).toContain("qe: vendorGroup ? (persistedState.qe ?? null) : (quickenrichNextPage ?? persistedState.qe ?? null),");
+    expect(engine).toContain("qe: quickenrichNextPage ?? vendorCursors.qe ?? null,");
   });
 
   it("a failed request holds the cursor (nextQe null) rather than skipping unseen people", () => {

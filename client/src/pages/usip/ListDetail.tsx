@@ -149,6 +149,21 @@ export default function ListDetail() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // Every person on the list, for "Add all to…" — ids only.
   const memberProspectIds = membersQ.data?.prospectIds ?? [];
+  // Old CRM-contact members not matched to People: on the list, not shown (audit A55).
+  const unmatchedContacts = Number(membersQ.data?.unmatchedContacts ?? 0);
+  const resolveContactsMut = trpc.recordLists.resolveContactMembers.useMutation({
+    onSuccess: (r) => {
+      refreshMembers();
+      const moved = r.converted + r.duplicates;
+      const left = r.unresolved.length;
+      const reasons = Array.from(new Set(r.unresolved.map((u) => u.reason))).join("; ");
+      toast[left ? "warning" : "success"](
+        `${moved} matched to People${r.duplicates ? ` (${r.duplicates} already on the list as that person)` : ""}`
+        + (left ? `. ${left} couldn't be matched and stay on the list: ${reasons}.` : "."),
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   // Compact LinkedIn change indicators for the people on this page (batched —
   // returns only members with unacknowledged updates). Same component as the People tab.
@@ -277,6 +292,17 @@ export default function ListDetail() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+
+        {!isCompanies && unmatchedContacts > 0 && (
+          <div role="status" className="shrink-0 border-b border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 px-3 py-1.5 flex items-center gap-2 text-[12px]">
+            <span className="flex-1 min-w-0">
+              {unmatchedContacts} older {unmatchedContacts === 1 ? "entry on this list is a CRM contact" : "entries on this list are CRM contacts"} not matched to People, so {unmatchedContacts === 1 ? "it isn't" : "they aren't"} shown or counted. They stay on the list until matched.
+            </span>
+            <Button variant="outline" size="sm" className="h-7 shrink-0" disabled={resolveContactsMut.isPending} onClick={() => resolveContactsMut.mutate({ listId: id })}>
+              {resolveContactsMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Match to People
+            </Button>
+          </div>
+        )}
 
         {/* body */}
         <div className="flex-1 min-h-0 overflow-auto">

@@ -5,9 +5,9 @@
  * sectors. The fallback was the union of every sector's lists, so discovery's
  * rotating queries searched one sector's titles with another sector's
  * industries ("Superintendent Government Administration"). Now each sector's
- * titles are searched only with its own industries and places. Only the
- * rotating queries change: the vendor searches still take the combined lists,
- * which is the discovery fan-out another batch is moving.
+ * titles are searched only with its own industries and places. This file is
+ * the rotating queries; the vendor searches (one sector a run, in turn) are
+ * vendorSectorPairing.test.ts (2026-11-07, batch ARES).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

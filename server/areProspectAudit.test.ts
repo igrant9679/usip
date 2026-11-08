@@ -102,15 +102,18 @@ describe("exclusivity is enforced at every ingest seam", () => {
     expect(src).toContain("excludedOtherCampaign");
     // The seed select must not narrow to the campaign — that was the old
     // within-campaign-only dedup that let siblings double-claim a person.
+    // 2026-11-07 (audit A34, batch ARES): the seed is read per batch through
+    // the identity indexes, still workspace-wide and every campaign's rows.
     const seedAt = src.indexOf("Seed the dedup index");
-    const seed = src.slice(seedAt, src.indexOf(".orderBy(prospectQueue.id)", seedAt));
-    expect(seed).toContain("eq(prospectQueue.workspaceId, campaign.workspaceId)");
+    const seed = src.slice(seedAt, src.indexOf("let excludedOtherCampaign", seedAt));
+    expect(seed).toContain("await queueIdentityIndexFor(campaign.workspaceId, fresh, { liveCampaignsOnly: false });");
     expect(seed).not.toContain("eq(prospectQueue.campaignId");
   });
 
   it("saveScrapeJobAndQueue carries the belt for every other scrape caller", () => {
     const src = read("server/routers/are/scraper.ts");
-    expect(src).toContain("workspaceQueueIdentityIndex");
+    // 2026-11-07 (audit A34): the indexed lookup for this batch.
+    expect(src).toContain("queueIdentityIndexFor(workspaceId, prospects)");
     expect(src).toContain("existingClaim(index, p)");
   });
 
@@ -122,7 +125,8 @@ describe("exclusivity is enforced at every ingest seam", () => {
   it("importRows dedups against the whole workspace and reports the split", () => {
     const src = read("server/routers/are/prospects.ts");
     expect(src).toContain("skippedOtherCampaign");
-    expect(src).toContain("workspaceQueueIdentityIndex(ctx.workspace.id)");
+    // 2026-11-07 (audit A34): workspace-wide still, by index for this import's rows.
+    expect(src).toContain("const index = await queueIdentityIndexFor(ctx.workspace.id, input.rows.map((r) => ({");
   });
 
   it("one identity vocabulary — the engine imports it rather than keeping a copy", () => {

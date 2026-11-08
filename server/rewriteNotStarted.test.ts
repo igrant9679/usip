@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 const svc = readFileSync("server/services/are/rewriteNotStarted.ts", "utf8");
 const router = readFileSync("server/routers/are/campaigns.ts", "utf8");
 const engine = readFileSync("server/areEngine.ts", "utf8");
-const ctxSrc = readFileSync("server/_core/requestContext.ts", "utf8");
+const read = (p: string) => readFileSync(p, "utf8");
 
 const fnBody = (src: string, decl: string) => {
   const a = src.indexOf(decl);
@@ -82,14 +82,19 @@ describe("rewriting one prospect", () => {
 });
 
 describe("the job", () => {
-  const start = fnBody(svc, "export function startRewriteNotStarted(");
+  const start = fnBody(svc, "export async function startRewriteNotStarted(");
 
   it("one per workspace, detached from the request, sequential", () => {
-    expect(start).toContain("if (jobs.get(workspaceId)?.running) return false;");
-    expect(start).toContain("runOutsideRequestContext(() => {");
-    expect(start).toContain("for (const t of targets) {");
-    expect(start).toContain("const outcome = await rewriteOneNotStarted(workspaceId, t);");
-    expect(ctxSrc).toContain("export function runOutsideRequestContext(fn: () => void): void {\n  als.exit(fn);\n}");
+    // 2026-11-07 (audit F14, batch ARES): a persisted bulk_jobs job, not an
+    // in-memory loop. Still one per workspace (oneAtATime), still detached
+    // (the runner runs outside any request, background: true), still one
+    // prospect at a time. Executed in persistedJobsF14.test.ts.
+    expect(start).toContain("if (await activeJob(workspaceId, REWRITE_NOT_STARTED_JOB)) return false;");
+    expect(start).toContain("oneAtATime: true");
+    const step = svc.slice(svc.indexOf("registerJobKind<RewritePayload>(REWRITE_NOT_STARTED_JOB, {"));
+    expect(step).toContain("while (i < targets.length && Date.now() < until) {");
+    expect(step).toContain("const outcome = await rewriteOneNotStarted(job.workspaceId, t);");
+    expect(read("server/services/jobs/runner.ts")).toContain("runWithRequestContext({ feature: `job ${job.kind}`, background: true }");
   });
 
   it("the model calls on this path name their workspace (it runs with no request)", () => {

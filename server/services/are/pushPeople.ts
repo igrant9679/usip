@@ -16,7 +16,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import { areCampaigns, prospects, prospectQueue } from "../../../drizzle/schema";
-import { existingClaim, queueIdentityKeys, type QueueIdentityShape } from "./queueIdentity";
+import { existingClaim, queueIdentityColumns, queueIdentityKeys, type QueueIdentityShape } from "./queueIdentity";
 import { describeSuppression, findSuppression } from "../suppression";
 import type { ActiveSequenceHit } from "../crossEngineEnrollment";
 
@@ -123,9 +123,11 @@ export async function pushPeopleIntoCampaign(
     .from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, prospectIds)));
 
-  const { workspaceQueueIdentityIndex } = await import("./queueIdentity");
+  const { queueIdentityIndexFor } = await import("./queueIdentity");
   const { activeSequencesForProspects } = await import("../crossEngineEnrollment");
-  const index = await workspaceQueueIdentityIndex(workspaceId);
+  // Only the rows that share a key with these people, through the identity
+  // indexes (A34): this read the workspace's whole queue on every push.
+  const index = await queueIdentityIndexFor(workspaceId, people.map(identityShapeOfPerson));
   // The other engine's view: a person a Sequence is actively working must
   // not also be picked up by a campaign.
   const inSequence = await activeSequencesForProspects(workspaceId, people.map((p) => p.id));
@@ -154,6 +156,8 @@ export async function pushPeopleIntoCampaign(
       // The link back to People — what keeps enrichment, field history and
       // the drawer pointing at one person rather than a queue-only copy.
       personProspectId: p.id,
+      // Its stored keys, so the next check finds it by index (A34).
+      ...queueIdentityColumns(shape),
       // A routed person carries the router's fit so screening sees a real
       // score; a manual push stays 0 — the enrichment selector's "unscored,
       // let it through" escape hatch.

@@ -50,6 +50,8 @@ import {
 import { processRun, skippedCount, type PersistResult } from "./consolidate";
 import { alreadyInWorkspace, workspaceIdentityIndex } from "../prospectSources/dedupe";
 import { enqueueJob, findActiveJob, kickJobs, registerJobKind, withHeartbeat } from "../jobs/runner";
+import { CAMPAIGN_RUN_MAX_QUERIES, personLists, personQueries } from "@shared/discoveryQueries";
+export { CAMPAIGN_RUN_MAX_QUERIES, personLists, personQueries };
 
 /**
  * Real LinkedIn people search for Discovery v2 (replaces the old fabricating
@@ -66,28 +68,48 @@ type SourceOut = { raw: Array<Record<string, unknown>>; note?: string };
 
 async function discoverLinkedInPeople(
   workspaceId: number,
-  query: string,
+  queries: readonly string[],
 ): Promise<SourceOut> {
-  const res = await searchLinkedInProfiles({
-    workspaceId,
-    userId: 0,
-    isAdmin: true,
-    keywords: query,
-    limit: 25,
-    source: "discovery",
-  });
-  if (!res.ok) return { raw: [], note: res.message };
-  return {
-    raw: res.hits.map((h) => ({
-      firstName: h.firstName,
-      lastName: h.lastName,
-      title: h.headline,
-      companyName: h.company,
-      linkedinUrl: h.linkedinUrl,
-      sourceUrl: h.linkedinUrl,
-      geography: h.location,
-    })),
-  };
+  /**
+   * One search per query, in turn (audit 2026-10-20, A56: a campaign launch
+   * searches every title, industry and place it was given). Each search is
+   * one lookup against the workspace's LinkedIn allowance, checked by the
+   * lookup itself; the first refusal (today's allowance spent, an account on
+   * hold) ends the loop and says how far it got, so a launch never asks past
+   * the cap. A plain search is one query, as before.
+   */
+  const raw: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < queries.length; i++) {
+    const res = await searchLinkedInProfiles({
+      workspaceId,
+      userId: 0,
+      isAdmin: true,
+      keywords: queries[i],
+      limit: 25,
+      source: "discovery",
+    });
+    if (!res.ok) {
+      return queries.length === 1 || i === 0
+        ? { raw, note: res.message }
+        : { raw, note: `stopped after ${i} of ${queries.length} searches: ${res.message}` };
+    }
+    for (const h of res.hits) {
+      const key = String(h.linkedinUrl ?? "").toLowerCase();
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      raw.push({
+        firstName: h.firstName,
+        lastName: h.lastName,
+        title: h.headline,
+        companyName: h.company,
+        linkedinUrl: h.linkedinUrl,
+        sourceUrl: h.linkedinUrl,
+        geography: h.location,
+      });
+    }
+  }
+  return { raw };
 }
 
 /**
@@ -144,17 +166,17 @@ async function discoverViaApollo(
 
   const p = input as PersonSearchInput;
   const a = input as AccountSearchInput;
-  const titles = mode === "person" && p.jobTitle ? [p.jobTitle] : [];
-  const industry = (mode === "person" ? p.industry : a.industry) ?? "";
-  const location = (mode === "person" ? p.location : a.location) ?? "";
+  // Every title, industry and place given (A56), in the one search Apollo
+  // takes them in: a list is OR within its field, so this is still one call.
+  const lists = mode === "person" ? personLists(p) : { titles: [], industries: a.industry ? [a.industry] : [], locations: a.location ? [a.location] : [] };
   const keywords = [...(input.keywords ?? [])];
   if (mode === "account" && a.companyName) keywords.push(a.companyName);
   if (mode === "person" && p.seniority) keywords.push(p.seniority);
 
   const res = await apolloSearchPeople(workspaceId, {
-    titles,
-    industries: industry ? [industry] : [],
-    locations: location ? [location] : [],
+    titles: lists.titles,
+    industries: lists.industries,
+    locations: lists.locations,
     keywords,
     perPage: Math.min(headroom, 25),
   }, "findProspects");
@@ -201,11 +223,13 @@ async function discoverViaQuickEnrich(
   // Industries must be validated against their controlled vocabulary — one
   // unrecognised value 422s the entire request (observed live 2026-08-24).
   // Lookup unavailable → the industry dimension is omitted, titles still search.
-  const allowedIndustries = input.industry ? await getQuickenrichIndustries(apiKey) : null;
+  // Every title, industry and place given (A56), in its one search.
+  const lists = personLists(input);
+  const allowedIndustries = lists.industries.length ? await getQuickenrichIndustries(apiKey) : null;
   const { body } = buildQuickenrichFilters({
-    titles: input.jobTitle ? [input.jobTitle] : [],
-    industries: input.industry ? [input.industry] : [],
-    geos: input.location ? [input.location] : [],
+    titles: lists.titles,
+    industries: lists.industries,
+    geos: lists.locations,
   }, allowedIndustries);
   if (!body) return { raw: [], note: "needs a job title, or an industry QuickEnrich knows, to search on" };
   const res = await quickenrichContactFinder(apiKey, body, { workspaceId, feature: "findProspects" });
@@ -215,7 +239,7 @@ async function discoverViaQuickEnrich(
   const kept = [...res.people]
     .sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail))
     .slice(0, headroom);
-  await recordPullLedger(workspaceId, "quickenrich", [input.jobTitle, input.industry, input.location].filter(Boolean).join(" · ") || "person search", kept.length);
+  await recordPullLedger(workspaceId, "quickenrich", [...lists.titles, ...lists.industries, ...lists.locations].join(" · ").slice(0, 400) || "person search", kept.length);
   return {
     raw: kept.map((p) => ({
       firstName: p.firstName,
@@ -239,7 +263,12 @@ export interface PersonSearchInput {
   keywords?: string[];
   seniority?: string;
   department?: string;
+  /** A campaign launch's whole targeting (A56): every title, industry and place, not only the first. */
+  jobTitles?: string[];
+  industries?: string[];
+  locations?: string[];
 }
+
 
 export interface AccountSearchInput {
   companyName?: string;
@@ -281,19 +310,58 @@ interface RunResult {
   alreadyInPeople?: number;
   /** Found and kept as raw finds, not saved: someone reviews them first (F38). */
   heldForReview?: boolean;
+  /** A campaign launch (A56): the saved people added to that campaign, and those it refused. */
+  addedToCampaign?: number;
+  notAddedToCampaign?: number;
+}
+
+/**
+ * A campaign launch's saved people go to that campaign as well as People
+ * (audit 2026-10-20, A56), through the one door into a campaign
+ * (pushPeopleIntoCampaign): it refuses another workspace's campaign, anyone
+ * already in a campaign or an active sequence, and anyone it cannot identify,
+ * and starts the usual enrich, then sequence, follow-up. Nothing is sent from
+ * here; what the campaign does with them is its own autonomy setting.
+ */
+async function addRunToCampaign(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  runId: number,
+  campaignId: number,
+  persist: PersistResult,
+): Promise<{ added: number; skipped: number }> {
+  const ids = Array.from(new Set((persist.saved ?? []).map((s) => s.prospectId)));
+  if (ids.length === 0) return { added: 0, skipped: 0 };
+  const { pushPeopleIntoCampaign } = await import("../are/pushPeople");
+  let added = 0, skipped = 0;
+  const reasons = new Map<string, number>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const r = await pushPeopleIntoCampaign(workspaceId, campaignId, ids.slice(i, i + 100));
+    added += r.added.length;
+    skipped += r.skipped.length;
+    for (const s of r.skipped) reasons.set(s.reason, (reasons.get(s.reason) ?? 0) + 1);
+  }
+  await db.update(discoveryRuns).set({ addedToCampaign: added, notAddedToCampaign: skipped } as never)
+    .where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+  const why = Array.from(reasons.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${n}: ${r}`).join("; ");
+  await emitLog(workspaceId, runId, "campaign.add", skipped && !added ? "warn" : "info",
+    `Added ${added} of ${ids.length} saved ${ids.length === 1 ? "person" : "people"} to campaign ${campaignId}${skipped ? ` (${skipped} not added — ${why})` : ""}`,
+    { campaignId, added, skipped });
+  return { added, skipped };
 }
 
 /** Build a single Google-style query string from a structured input. */
 function buildQuery(mode: SearchMode, input: DiscoveryInput): string {
   if (mode === "person") {
     const p = input as PersonSearchInput;
+    const l = personLists(p);
     return [
-      p.jobTitle,
+      ...l.titles,
       p.seniority,
       p.department,
       p.companyName,
-      p.industry,
-      p.location,
+      ...l.industries,
+      ...l.locations,
       ...(p.keywords ?? []),
     ].filter(Boolean).join(" ").trim();
   }
@@ -315,12 +383,13 @@ function buildQuery(mode: SearchMode, input: DiscoveryInput): string {
 function buildIcpContext(mode: SearchMode, input: DiscoveryInput): string {
   if (mode === "person") {
     const p = input as PersonSearchInput;
+    const l = personLists(p);
     return [
-      p.jobTitle && `Titles: ${p.jobTitle}`,
+      l.titles.length && `Titles: ${l.titles.join(", ")}`,
       p.seniority && `Seniority: ${p.seniority}`,
       p.department && `Department: ${p.department}`,
-      p.industry && `Industry: ${p.industry}`,
-      p.location && `Location: ${p.location}`,
+      l.industries.length && `Industry: ${l.industries.join(", ")}`,
+      l.locations.length && `Location: ${l.locations.join(", ")}`,
       p.companyName && `Company: ${p.companyName}`,
       p.keywords?.length && `Keywords: ${p.keywords.join(", ")}`,
     ].filter(Boolean).join("; ");
@@ -593,7 +662,7 @@ async function fanOutAndSave(
   startedAt: number,
   mode: SearchMode,
   input: DiscoveryInput,
-  opts?: { sources?: readonly string[] | null; holdForReview?: boolean },
+  opts?: { sources?: readonly string[] | null; holdForReview?: boolean; addToCampaignId?: number | null },
 ): Promise<RunResult> {
   const query = buildQuery(mode, input);
   const icpContext = buildIcpContext(mode, input);
@@ -630,7 +699,7 @@ async function fanOutAndSave(
   type SourceTask = { id: AreSourceId; run: () => Promise<{ source: string } & SourceOut> };
   const candidates: SourceTask[] = mode === "person"
     ? [
-      { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, query).then((r) => ({ source: "linkedin_people", ...r })) },
+      { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, personQueries(input as PersonSearchInput).queries).then((r) => ({ source: "linkedin_people", ...r })) },
       { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
       { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((r) => ({ source: "apollo", ...r })) },
       { id: "quickenrich", run: () => discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((r) => ({ source: "quickenrich", ...r })) },
@@ -760,10 +829,14 @@ async function fanOutAndSave(
   // it used to be stamped complete with nothing saved (P143).
   let persist: PersistResult = { prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
   let saveError: string | null = null;
+  let campaignPush: { added: number; skipped: number } | null = null;
   try {
     if (totalFinds > 0) {
       persist = await processRun(workspaceId, runId, mode);
       associateDiscoveredPeople(workspaceId, runId);
+      if (opts?.addToCampaignId != null && mode === "person") {
+        campaignPush = await addRunToCampaign(db, workspaceId, runId, opts.addToCampaignId, persist);
+      }
     }
   } catch (e) {
     saveError = `Saving the finds failed: ${String((e as Error)?.message ?? e).slice(0, 500)}. The raw finds are kept; Re-score tries again.`;
@@ -797,6 +870,7 @@ async function fanOutAndSave(
 
   return {
     runId, rawFindCount: totalFinds, perSource, ...persistResult, alreadyInPeople,
+    ...(campaignPush ? { addedToCampaign: campaignPush.added, notAddedToCampaign: campaignPush.skipped } : {}),
     status: saveError ? "failed" : "complete",
     ...(saveError ? { errorMessage: saveError } : {}),
   };
@@ -830,6 +904,8 @@ export type DiscoveryJobPayload = {
   sources: string[] | null;
   fingerprint: string;
   holdForReview?: boolean;
+  /** A campaign launch (A56): add the saved people to this campaign too. */
+  addToCampaign?: boolean;
 };
 
 export type QueuedRun = { runId: number; jobId: number; status: "running"; joinedRunning?: boolean; heldForReview?: boolean };
@@ -845,9 +921,9 @@ export async function queueDiscovery(
   mode: SearchMode,
   input: DiscoveryInput,
   campaignId?: number | null,
-  opts?: { sources?: readonly string[] | null; holdForReview?: boolean },
+  opts?: { sources?: readonly string[] | null; holdForReview?: boolean; addToCampaign?: boolean },
 ): Promise<QueuedRun> {
-  const fingerprint = discoveryFingerprint(workspaceId, mode, input, campaignId, opts?.sources) + (opts?.holdForReview ? "|held" : "");
+  const fingerprint = discoveryFingerprint(workspaceId, mode, input, campaignId, opts?.sources) + (opts?.holdForReview ? "|held" : "") + (opts?.addToCampaign ? "|campaign" : "");
   const pending = queueing.get(fingerprint);
   if (pending) return pending.then((r) => ({ ...r, joinedRunning: true }));
   const p = (async (): Promise<QueuedRun> => {
@@ -865,6 +941,7 @@ export async function queueDiscovery(
       runId: created.id, mode, input, campaignId: campaignId ?? null,
       sources: opts?.sources?.length ? Array.from(opts.sources) : null, fingerprint,
       ...(opts?.holdForReview ? { holdForReview: true } : {}),
+      ...(opts?.addToCampaign && campaignId != null ? { addToCampaign: true } : {}),
     };
     const { job } = await enqueueJob({ workspaceId, userId, kind: DISCOVERY_JOB, payload, total: 1 });
     await emitLog(workspaceId, created.id, "discovery.queued", "info", `Queued as background job ${job.id}; it starts within seconds.`);
@@ -893,7 +970,10 @@ export async function runQueuedDiscovery(workspaceId: number, p: DiscoveryJobPay
   }
   const startedAt = Date.now();
   try {
-    return await fanOutAndSave(db, workspaceId, p.runId, startedAt, p.mode, p.input, { sources: p.sources, holdForReview: p.holdForReview });
+    return await fanOutAndSave(db, workspaceId, p.runId, startedAt, p.mode, p.input, {
+      sources: p.sources, holdForReview: p.holdForReview,
+      addToCampaignId: p.addToCampaign && p.campaignId != null ? p.campaignId : null,
+    });
   } catch (e) {
     const message = String((e as Error)?.message ?? e).slice(0, 2000);
     await db.update(discoveryRuns).set({
