@@ -1356,6 +1356,8 @@ export const qbrs = mysqlTable(
     scheduledAt: timestamp("scheduledAt"),
     completedAt: timestamp("completedAt"),
     status: mysqlEnum("status", ["scheduled", "completed", "cancelled"]).default("scheduled").notNull(),
+    /** Set when scheduled at a time; null for a day-only QBR (migration 0370, audit U27). */
+    durationMinutes: int("durationMinutes"),
     aiPrep: json("aiPrep"), // {wins, risks, asks, agenda}
     notes: text("notes"),
     nextActions: json("nextActions"),

@@ -431,7 +431,9 @@ describe("the client fixes", () => {
     ];
     for (const [f, call] of pins) expect(read(f), f).toContain(call);
     // The list query is the scope, so a new filter cannot be left out of it.
-    expect(read("client/src/pages/usip/People.tsx")).toContain("trpc.prospects.list.useQuery(listQuery)");
+    // 2026-11-07 (CRMP, U28): the same listQuery is still the whole query; it
+    // now also keeps the previous page on screen while the next one loads.
+    expect(read("client/src/pages/usip/People.tsx")).toContain("trpc.prospects.list.useQuery(listQuery, { placeholderData: (prev) => prev })");
     const hook = read("client/src/hooks/useClearOnChange.ts");
     expect(hook).toContain("if (seen.current === key) return;");
   });

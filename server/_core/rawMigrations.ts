@@ -5168,6 +5168,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, U27: a QBR can be scheduled at a time, for a length.
+  // Nullable: every existing QBR stays a day-only one, as it was scheduled.
+  {
+    name: "0370_qbr_time.sql",
+    statements: [
+      "ALTER TABLE `qbrs` ADD COLUMN `durationMinutes` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
