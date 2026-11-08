@@ -477,7 +477,9 @@ export async function runAreEngine(scope?: { workspaceId: number }): Promise<Are
         } catch (e) {
           console.error(`[AreEngine] campaign ${campaign.id} tick failed:`, e);
         }
-      });
+      // A person's tick of their own workspace leaves the schedule's turn and
+      // carry-over alone: it sees one workspace, the schedule sees them all.
+      }, { remember: !scope });
       if (run.deferred.length > 0) {
         console.log(`[AreEngine] tick budget spent after ${run.ran.length} campaign(s); ${run.deferred.length} go first next tick`);
       }
@@ -687,12 +689,13 @@ export function fairCampaignOrder<T extends { id: number; workspaceId: number }>
 export async function runCampaignsFairly<T extends { id: number; workspaceId: number }>(
   campaigns: T[],
   tick: (c: T) => Promise<void>,
-  opts: { budgetMs?: number; now?: () => number } = {},
+  opts: { budgetMs?: number; now?: () => number; remember?: boolean } = {},
 ): Promise<{ ran: number[]; deferred: number[] }> {
   const now = opts.now ?? Date.now;
   const until = now() + (opts.budgetMs ?? ENGINE_TICK_BUDGET_MS);
+  const remember = opts.remember !== false;
   const order = fairCampaignOrder(campaigns, fairCursor.turn, fairCursor.deferred);
-  fairCursor.turn++;
+  if (remember) fairCursor.turn++;
   const ran: number[] = [];
   let i = 0;
   for (; i < order.length; i++) {
@@ -701,8 +704,9 @@ export async function runCampaignsFairly<T extends { id: number; workspaceId: nu
     await tick(order[i]);
     ran.push(order[i].id);
   }
-  fairCursor.deferred = order.slice(i).map((c) => c.id);
-  return { ran, deferred: fairCursor.deferred.slice() };
+  const deferred = order.slice(i).map((c) => c.id);
+  if (remember) fairCursor.deferred = deferred;
+  return { ran, deferred };
 }
 
 /**

@@ -73,6 +73,17 @@ describe("one busy workspace cannot starve another", () => {
     expect(next.ran).toEqual([7]);
   });
 
+  it("a person's tick of one workspace leaves the schedule's turn and carry-over alone", async () => {
+    let clock = 0;
+    await runCampaignsFairly(campaigns, async () => { clock += 20 * 60_000; }, { now: () => clock, budgetMs: 8 * 60_000 });
+    // Scoped: B only. It runs, and the schedule still owes A's leftovers first.
+    await runCampaignsFairly(campaigns.filter((c) => c.workspaceId === B), async () => {}, { remember: false });
+    expect(fairCampaignOrder(campaigns, 1, [7, 2, 3, 4, 5, 6]).map((c) => c.id)[0]).toBe(7);
+    const next = await runCampaignsFairly(campaigns, async () => { clock += 20 * 60_000; }, { now: () => clock, budgetMs: 8 * 60_000 });
+    expect(next.ran).toEqual([7]);
+    expect(read("server/areEngine.ts")).toContain("}, { remember: !scope });");
+  });
+
   it("the engine ticks its campaigns through the fair scheduler, under the budget", () => {
     const eng = read("server/areEngine.ts");
     const fn = eng.slice(eng.indexOf("export async function runAreEngine("), eng.indexOf("/* ─── Global enrichment pass"));
