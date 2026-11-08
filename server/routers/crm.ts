@@ -39,6 +39,7 @@ import {
   stageApprovals,
   pipelineAlerts,
   contactAccountLinks,
+  opportunityForecastChanges,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
@@ -64,6 +65,8 @@ import {
 } from "../services/dealMetrics";
 import { leadCounts } from "../services/activityMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { getRevenueSettings } from "../services/workspaceRevenue";
+import { buildForecastCall, FORECAST_PERIODS, recordForecastChange } from "../services/forecastCall";
 import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
@@ -244,6 +247,8 @@ async function cascadeDeleteOpportunityDependents(
   await db.delete(opportunityIntelligence).where(and(eq(opportunityIntelligence.workspaceId, workspaceId), inArray(opportunityIntelligence.opportunityId, oppIds)));
   await db.delete(stageApprovals).where(and(eq(stageApprovals.workspaceId, workspaceId), inArray(stageApprovals.opportunityId, oppIds)));
   await db.delete(pipelineAlerts).where(and(eq(pipelineAlerts.workspaceId, workspaceId), inArray(pipelineAlerts.opportunityId, oppIds)));
+  // Its forecast-category history goes with its stage history (F29).
+  await db.delete(opportunityForecastChanges).where(and(eq(opportunityForecastChanges.workspaceId, workspaceId), inArray(opportunityForecastChanges.opportunityId, oppIds)));
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -2273,6 +2278,13 @@ export const opportunitiesRouter = router({
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     // R38: a large change of amount is an alert (it was named, never raised).
     if (patch.value != null) await noteAmountChange(db, ctx.workspace.id, before, Number(before.value ?? 0), Number(patch.value));
+    // A forecast call that changed is on the record: who, when, from what (F29).
+    if (patch.forecastCategory !== undefined) {
+      await recordForecastChange(db, {
+        workspaceId: ctx.workspace.id, opportunityId: input.id, from: before.forecastCategory ?? null, to: patch.forecastCategory ?? null,
+        actorUserId: ctx.user.id, ownerUserId: before.ownerUserId ?? null,
+      });
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     // Stage is refused above, so this can never double with stage_changed.
     void import("../services/workflowEngine")
@@ -2457,8 +2469,9 @@ export const opportunitiesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Scoped like the board it heads (R39); unscoped, the workspace.
       const deals = await scopedMetricDeals(db, ctx.workspace.id, input);
-      const tz = await getWorkspaceTimezone(ctx.workspace.id);
-      const r = currentRanges(tz);
+      // "This quarter" is the workspace's fiscal quarter (F29, R41).
+      const rs = await getRevenueSettings(ctx.workspace.id);
+      const r = currentRanges(rs.timezone, new Date(), rs.fiscalYearStartMonth);
       return {
         open: openTotals(deals),
         won: closedIn(deals, "won"),
@@ -2690,7 +2703,9 @@ export const opportunitiesRouter = router({
     if (!db) return [];
     const seesTeam = rankOf(ctx.member.role) >= ROLE_RANK.manager;
     const deals = await loadMetricDeals(db, ctx.workspace.id, seesTeam ? {} : { ownerUserId: ctx.user.id });
-    const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
+    // The workspace's fiscal quarter (F29): calendar unless an admin set another start.
+    const rs = await getRevenueSettings(ctx.workspace.id);
+    const quarter = currentRanges(rs.timezone, new Date(), rs.fiscalYearStartMonth).quarter;
     // Grouped first, then totalled by the same functions every page uses — so
     // the per-rep rows add up to the Pipeline and Deals totals exactly.
     const byOwner = new Map<string, { ownerUserId: number | null; deals: typeof deals }>();
@@ -2713,6 +2728,68 @@ export const opportunitiesRouter = router({
       };
     });
   }),
+
+  /**
+   * The forecast call (audit 2026-10-20, F29): one fiscal period's Closed,
+   * Commit, Best case, Pipeline and Omitted per rep, and the deals behind
+   * them with each one's last category change. A rep sees their own deals;
+   * a manager the team's, or one rep's. Computed in services/forecastCall
+   * from the deal metrics every revenue number reads.
+   */
+  forecastCall: workspaceProcedure
+    .input(z.object({ period: z.enum(FORECAST_PERIODS).default("quarter"), ownerUserId: z.number().int().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const seesTeam = rankOf(ctx.member.role) >= ROLE_RANK.manager;
+      const owner = seesTeam ? (input?.ownerUserId ?? null) : ctx.user.id;
+      const out = await buildForecastCall(db, { workspaceId: ctx.workspace.id, ownerUserId: owner, kind: input?.period ?? "quarter" });
+      return { ...out, seesTeam };
+    }),
+
+  /**
+   * Put a deal in a forecast category (F29). The owner sets their own call;
+   * a manager may set anyone's, and that is recorded as an override of the
+   * owner — who, when, from what, and why if they say. Null returns the deal
+   * to "by win %".
+   */
+  setForecastCategory: repProcedure
+    .input(z.object({ id: z.number(), category: z.enum(FORECAST_CATEGORIES).nullable(), note: z.string().max(500).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select({ id: opportunities.id, ownerUserId: opportunities.ownerUserId, forecastCategory: opportunities.forecastCategory })
+        .from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      const isManager = rankOf(ctx.member.role) >= ROLE_RANK.manager;
+      if (!isManager && before.ownerUserId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only the deal's owner or a manager can change its forecast category." });
+      }
+      if ((before.forecastCategory ?? null) === input.category) return { ok: true, changed: false };
+      await db.update(opportunities).set({ forecastCategory: input.category } as never)
+        .where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+      await recordForecastChange(db, {
+        workspaceId: ctx.workspace.id, opportunityId: input.id, from: before.forecastCategory ?? null, to: input.category,
+        actorUserId: ctx.user.id, ownerUserId: before.ownerUserId ?? null, note: input.note,
+      });
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id,
+        before: { forecastCategory: before.forecastCategory }, after: { forecastCategory: input.category, override: before.ownerUserId !== ctx.user.id },
+      });
+      return { ok: true, changed: true };
+    }),
+
+  /** A deal's forecast-category changes, newest first (F29). */
+  forecastHistory: workspaceProcedure
+    .input(z.object({ opportunityId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db.select().from(opportunityForecastChanges)
+        .where(and(eq(opportunityForecastChanges.workspaceId, ctx.workspace.id), eq(opportunityForecastChanges.opportunityId, input.opportunityId)))
+        .orderBy(desc(opportunityForecastChanges.createdAt), desc(opportunityForecastChanges.id))
+        .limit(20);
+    }),
 
   stageFunnel: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();

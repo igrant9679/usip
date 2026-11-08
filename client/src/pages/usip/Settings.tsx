@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { isAdminRole } from "@shared/roleRank";
+import { CURRENCY_OPTIONS, MONTH_NAMES } from "@shared/revenueSettings";
 import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWindow, normalizeSendWindow, parseSendDays } from "@shared/sendWindow";
 
 /**
@@ -29,6 +30,50 @@ import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWi
  * adjust the sending window (setting within each workspace)"). Everything
  * Velocity sends to prospects on its own waits for it; see @shared/sendWindow.
  */
+/**
+ * The fiscal calendar and the currency (audit 2026-10-20, F29/R41). The
+ * Forecast, Quota and every "this quarter" figure count in the fiscal quarters
+ * these make; every amount on screen shows in the currency. January and USD
+ * until an admin changes them — calendar quarters and dollars, as before.
+ */
+function RevenueCalendarSection({ settings, save, canEdit }: { settings: any; save: (v: any) => void; canEdit: boolean }) {
+  const [fyStart, setFyStart] = useState<number>(1);
+  const [currency, setCurrency] = useState<string>("USD");
+  useEffect(() => {
+    if (settings?.fiscalYearStartMonth) setFyStart(Number(settings.fiscalYearStartMonth));
+    if (settings?.currency) setCurrency(String(settings.currency));
+  }, [settings?.fiscalYearStartMonth, settings?.currency]);
+  const changed = fyStart !== Number(settings?.fiscalYearStartMonth ?? 1) || currency !== String(settings?.currency ?? "USD");
+  return (
+    <Section
+      title="Fiscal calendar & currency"
+      description="When your fiscal year starts decides the quarters the Forecast and Quota count in; the currency is how every amount is shown."
+      right={canEdit ? (
+        <Button size="sm" disabled={!changed} onClick={() => save({ fiscalYearStartMonth: fyStart, currency })}>Save</Button>
+      ) : null}
+    >
+      <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="fiscal-start">Fiscal year starts in</Label>
+          <select id="fiscal-start" aria-label="Fiscal year starts in" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={fyStart}
+            disabled={!canEdit} onChange={(e) => setFyStart(Number(e.target.value))}>
+            {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}{i === 0 ? " (calendar quarters)" : ""}</option>)}
+          </select>
+          <div className="text-xs text-muted-foreground">A fiscal year is named by the year it ends in. Changing this re-reads stored quarterly targets under the new quarters.</div>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="ws-currency">Currency</Label>
+          <select id="ws-currency" aria-label="Currency" className="h-9 w-full rounded-md border bg-background px-2 text-sm" value={currency}
+            disabled={!canEdit} onChange={(e) => setCurrency(e.target.value)}>
+            {CURRENCY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div className="text-xs text-muted-foreground">How amounts are shown. Stored values are not converted.</div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (v: any) => void; canEdit: boolean }) {
   const [startHour, setStartHour] = useState(DEFAULT_SEND_WINDOW.startHour);
   const [endHour, setEndHour] = useState(DEFAULT_SEND_WINDOW.endHour);
@@ -182,8 +227,15 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
   const usage = trpc.usage.currentMonth.useQuery(undefined, { enabled: tab === "billing" && canBilling });
   const utils = trpc.useUtils();
   const save = trpc.settings.save.useMutation({
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       utils.settings.get.invalidate();
+      // The fiscal calendar or currency changed (F29): every quarter and
+      // amount re-reads them.
+      if (vars.fiscalYearStartMonth !== undefined || vars.currency !== undefined) {
+        utils.settings.revenue.invalidate();
+        utils.opportunities.invalidate();
+        utils.quota.invalidate();
+      }
       toast.success("Settings saved");
     },
     onError: (e) => toast.error(e.message),
@@ -466,6 +518,8 @@ function GeneralTab({
           </div>
         </div>
       </Section>
+
+      <RevenueCalendarSection settings={settings} save={save} canEdit={canEdit} />
 
       <SendWindowSection settings={settings} save={save} canEdit={canEdit} />
 

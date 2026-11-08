@@ -5364,6 +5364,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F29 and R41: a fiscal calendar and a workspace currency.
+  // The defaults are January and USD — calendar quarters and dollars, what
+  // every workspace showed before — so nothing moves until an admin chooses.
+  // And a deal's forecast-category history: who set it, when, from what, and
+  // whether it was a manager overriding the deal's owner. New table, additive.
+  {
+    name: "0403_fiscal_calendar_currency_forecast_history.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `fiscalYearStartMonth` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `currency` varchar(3) NOT NULL DEFAULT 'USD'",
+      "CREATE TABLE IF NOT EXISTS `opportunity_forecast_changes` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `opportunityId` int NOT NULL, `fromCategory` varchar(16) NULL, `toCategory` varchar(16) NULL, `changedByUserId` int NULL, `ownerUserId` int NULL, `isOverride` boolean NOT NULL DEFAULT false, `note` varchar(500) NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY `ix_ofc_opp` (`workspaceId`, `opportunityId`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

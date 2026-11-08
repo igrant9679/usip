@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { ConfirmButton } from "@/components/usip/Common";
 import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
+import { formatAmount } from "@shared/money";
 import { pressable } from "@/lib/pressable";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
@@ -394,7 +395,7 @@ function DealAlertGroup({ group, onChange }: { group: { opportunityId: number; o
           {o?.name ?? `Opp #${group.opportunityId}`}
         </Link>
         {o?.stage && <Badge variant="secondary" className="text-xs capitalize">{o.stage}</Badge>}
-        {o?.value && <span className="text-xs text-muted-foreground">${Number(o.value).toLocaleString()}</span>}
+        {o?.value && <span className="text-xs text-muted-foreground">{formatAmount(o.value)}</span>}
         <Badge variant="outline" className="ml-auto text-xs">{group.alerts.length} alert{group.alerts.length === 1 ? "" : "s"}</Badge>
       </div>
       <div className="p-2 space-y-2">

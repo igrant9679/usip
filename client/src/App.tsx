@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
+import { WorkspaceCurrencySync } from "@/components/usip/WorkspaceCurrencySync";
 import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
@@ -467,7 +468,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // gate too: someone with no workspace to work in gets a screen that says
   // why, on every page (audit 2026-10-20, G35). The enforce2fa gate lives here
   // so it covers every authed page; in Shell it missed the settings hub (G66).
-  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceProvider>;
+  // The workspace currency (F29) sits here for the same reason.
+  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceCurrencySync><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceCurrencySync></WorkspaceProvider>;
 }
 
 function PageLoading() {

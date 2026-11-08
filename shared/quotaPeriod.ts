@@ -13,3 +13,17 @@ export function quotaPeriodLabel(period: string): string {
   if (part.startsWith("Q")) return `${part} ${year}`;
   return `${MONTHS[Number(part) - 1]} ${year}`;
 }
+
+/**
+ * The same in a workspace's fiscal calendar (audit 2026-10-20, F29): a fiscal
+ * year that does not start in January is named by the year it ends in, so
+ * "2027-Q1" reads "Q1 FY2027" and "2027-FY" reads "FY2027". With a January
+ * start it is quotaPeriodLabel. A separate function, not a second parameter,
+ * so `.map(quotaPeriodLabel)` never passes an index as the start month.
+ */
+export function fiscalQuotaPeriodLabel(period: string, fyStart: number): string {
+  if (fyStart === 1) return quotaPeriodLabel(period);
+  const m = /^(\d{4})-(Q[1-4]|FY)$/.exec(period);
+  if (!m) return quotaPeriodLabel(period);
+  return m[2] === "FY" ? `FY${m[1]}` : `${m[2]} FY${m[1]}`;
+}

@@ -12,7 +12,8 @@ import { Progress } from "@/components/ui/progress";
 import { Pencil, Plus, Trash2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmButton } from "@/components/usip/Common";
-import { quotaPeriodLabel } from "@shared/quotaPeriod";
+import { fiscalQuotaPeriodLabel, quotaPeriodLabel } from "@shared/quotaPeriod";
+import { useRevenueSettings } from "@/components/usip/WorkspaceCurrencySync";
 import { formatAmount } from "@shared/money";
 
 // The shared money format (R98).
@@ -222,6 +223,8 @@ function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any)
   // The target's OWN period: a quarterly target is stored once for its quarter
   // ("2026-Q4") and measured over all three months, whichever one is picked.
   const { data: progress } = trpc.quota.progress.useQuery({ userId: target.userId, period: target.period });
+  // Quarters and years are the workspace's fiscal ones (F29).
+  const fyStart = useRevenueSettings().data?.fiscalYearStartMonth ?? 1;
 
   return (
     <Card>
@@ -233,7 +236,7 @@ function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any)
             {/* Asks first (R76, R102): one click removed the target. */}
             <ConfirmButton ariaLabel="Delete quota" variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600"
               title={`Delete ${name}'s ${target.periodType} target?`}
-              description={`The ${quotaPeriodLabel(target.period)} target is removed and its attainment stops showing here. Deals and activities are not touched.`}
+              description={`The ${fiscalQuotaPeriodLabel(target.period, fyStart)} target is removed and its attainment stops showing here. Deals and activities are not touched.`}
               confirmLabel="Delete" onConfirm={onRemove}><Trash2 className="h-3.5 w-3.5" /></ConfirmButton>
           </div>
         </div>

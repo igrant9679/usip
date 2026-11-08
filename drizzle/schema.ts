@@ -419,6 +419,29 @@ export const opportunities = mysqlTable(
 );
 export type Opportunity = typeof opportunities.$inferSelect;
 
+/**
+ * Every change of a deal's forecast category (migration 0403, audit
+ * 2026-10-20, F29): who set it, when, from what, and whether it was someone
+ * other than the deal's owner — a manager's override of the rep's call.
+ */
+export const opportunityForecastChanges = mysqlTable(
+  "opportunity_forecast_changes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    fromCategory: varchar("fromCategory", { length: 16 }),
+    toCategory: varchar("toCategory", { length: 16 }),
+    changedByUserId: int("changedByUserId"),
+    ownerUserId: int("ownerUserId"),
+    isOverride: boolean("isOverride").default(false).notNull(),
+    note: varchar("note", { length: 500 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byOpp: index("ix_ofc_opp").on(t.workspaceId, t.opportunityId) }),
+);
+export type OpportunityForecastChange = typeof opportunityForecastChanges.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    CRM polish (migration 0081): notes + multi-pipeline support
    ────────────────────────────────────────────────────────────────────────── */
@@ -1875,6 +1898,13 @@ export type LeadRoutingRule = typeof leadRoutingRules.$inferSelect;
 export const workspaceSettings = mysqlTable("workspace_settings", {
   workspaceId: int("workspaceId").primaryKey(),
   timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
+  /**
+   * Migration 0403 (audit 2026-10-20, F29, R41): the month the fiscal year
+   * starts (1 = January: calendar quarters, what every workspace had) and the
+   * currency amounts are shown in. Read through services/workspaceRevenue.
+   */
+  fiscalYearStartMonth: int("fiscalYearStartMonth").default(1).notNull(),
+  currency: varchar("currency", { length: 3 }).default("USD").notNull(),
   // The send window (Migration 0191): everything Velocity sends to prospects on
   // its own waits for [start, end) on these weekdays, in `timezone`. See
   // @shared/sendWindow. Days are JS weekday numbers, 0 = Sunday.
