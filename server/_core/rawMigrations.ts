@@ -5168,6 +5168,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // The authenticator secret is stored encrypted (services/totpSecret.ts,
+  // follow-up to the final pass, 2026-11-07): iv:tag:ciphertext in hex is
+  // about 122 characters, so the column widens from 64. Widening a varchar
+  // keeps every value; the boot pass in secretBackfill.ts encrypts the old
+  // plaintext rows and checks each write read back whole.
+  {
+    name: "0350_totp_secret_encrypted.sql",
+    statements: [
+      "ALTER TABLE `users` MODIFY COLUMN `mfa_totp_secret` varchar(255) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -44,7 +44,8 @@ export const users = mysqlTable("users", {
   elsieEnabled: boolean("elsie_enabled"),
   /** TOTP MFA (migration 0116): base32 secret + activation time. A secret
    *  with NULL enabled-at = enrollment started but not yet confirmed. */
-  mfaTotpSecret: varchar("mfa_totp_secret", { length: 64 }),
+  // Encrypted at rest (services/totpSecret.ts, migration 0350): iv:tag:ciphertext hex.
+  mfaTotpSecret: varchar("mfa_totp_secret", { length: 255 }),
   mfaTotpEnabledAt: timestamp("mfa_totp_enabled_at"),
   /**
    * Forgot-password (migration 0142). The SHA-256 HASH of the reset token, not
