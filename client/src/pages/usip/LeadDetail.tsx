@@ -20,6 +20,7 @@ import { EditLeadDialog } from "@/components/usip/EditLeadDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Target, Mail, Phone, Briefcase, Zap, Building2, Pencil } from "lucide-react";
+import { invalidateLeadReads } from "@/lib/entityCache";
 
 export default function LeadDetail() {
   const { id: idStr } = useParams<{ id: string }>();
@@ -33,7 +34,7 @@ export default function LeadDetail() {
   // The lead's own page can edit it (R81); it was read-only.
   const [editing, setEditing] = useState(false);
   const afterConvert = ({ accountId, contactId, opportunityId }: { accountId: number; contactId: number; opportunityId: number | null }) => {
-    utils.leads.get.invalidate({ id });
+    invalidateLeadReads(utils);
     if (opportunityId) setLocation(`/opportunities/${opportunityId}`);
     else if (contactId) setLocation(`/contacts/${contactId}`);
     else if (accountId) setLocation(`/accounts/${accountId}`);

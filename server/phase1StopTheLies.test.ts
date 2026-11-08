@@ -61,7 +61,10 @@ describe("the Autonomy Center's engine dial is real", () => {
 
   it("the dial and both bulk setters go through it", () => {
     expect(page).toContain("trpc.are.campaigns.setAllAutonomy.useMutation");
-    expect(page).toContain('onValueChange={(v) => setAllEngineAutonomy.mutate({ mode: v as "full" | "batch_approval" })}');
+    // 2026-11-08 (audit U5): Full autonomy asks first; batch approval, the
+    // safe direction, still goes straight through. Both still set the dial.
+    expect(page).toContain('}, () => setAllEngineAutonomy.mutate({ mode: "full" }))');
+    expect(page).toContain(': setAllEngineAutonomy.mutate({ mode: "batch_approval" }))}');
     // 2026-11-06 (audit G62): both bulk setters now go through runBulk, which
     // awaits each change; "Turn on full autonomy" is setAll("approval"). The
     // engine is still set to batch approval on every bulk change.

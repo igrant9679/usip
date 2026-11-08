@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/usip/Common";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 export function RoutingSuggestions() {
   const utils = trpc.useUtils();
@@ -18,9 +19,7 @@ export function RoutingSuggestions() {
   const acceptAll = trpc.are.campaigns.acceptAllRoutingSuggestions.useMutation({
     onSuccess: (r) => {
       toast.success(`${r.accepted} accepted — ${r.added} added to campaigns${r.skipped ? `, ${r.skipped} skipped (already in outreach)` : ""}`);
-      utils.are.campaigns.listRoutingSuggestions.invalidate();
-      utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -28,9 +27,7 @@ export function RoutingSuggestions() {
     onSuccess: (r, vars) => {
       if (vars.decision === "accept") toast.success(r.added > 0 ? "Added to the campaign — the engine will enrich and write their emails" : "Nothing added (already in outreach)");
       else toast.info("Dismissed");
-      utils.are.campaigns.listRoutingSuggestions.invalidate();
-      utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -45,6 +42,7 @@ export function RoutingSuggestions() {
           <span className="text-[11px] text-muted-foreground">{rows.length} suggested · <Link href="/v2/workflows" className="hover:underline">routing dial</Link></span>
           <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1 text-xs" disabled={acceptAll.isPending || decide.isPending}
             title={`Add all ${rows.length} suggested ${rows.length === 1 ? "person" : "people"} to their campaigns?`}
+            count={{ n: rows.length, one: "person", many: "people" }}
             description="Each person joins the campaign the engine picked for them and is enriched and written to as that campaign's next batch. People already in outreach are skipped. Nothing sends until that campaign's batch is approved."
             confirmLabel="Add all" onConfirm={() => acceptAll.mutate()}>
             <Check className="size-3" /> Add all ({rows.length})

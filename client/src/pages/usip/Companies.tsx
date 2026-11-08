@@ -35,6 +35,10 @@ import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
+import { urlParam, useUrlState } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
+import { RecordCards } from "@/components/usip/RecordCards";
+import { invalidateCompanyReads } from "@/lib/entityCache";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -128,8 +132,7 @@ function DuplicateReview() {
         await merge.mutateAsync({ primaryAccountId: primaryId, duplicateAccountId: d.id });
       }
       toast.success(`Merged ${dups.length} duplicate${dups.length === 1 ? "" : "s"} into the surviving account`);
-      utils.companies.duplicates.invalidate();
-      utils.companies.search.invalidate();
+      invalidateCompanyReads(utils);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -210,21 +213,25 @@ export default function Companies() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  // filters
-  const [searchInput, setSearchInput] = useState("");
-  const [q, setQ] = useState("");
-  const [industries, setIndustries] = useState<Set<string>>(new Set());
-  const [locations, setLocations] = useState<Set<string>>(new Set());
-  const [hasContacts, setHasContacts] = useState(false);
+  // filters, sort and page, all in the address (audit 2026-10-20, U6): a
+  // refresh keeps the view and a copied link opens the same one.
+  const [q, setQ] = useUrlState("q", urlParam.string());
+  const [searchInput, setSearchInput] = useState(q);
+  const [industries, setIndustries] = useUrlState("industry", urlParam.set());
+  const [locations, setLocations] = useUrlState("location", urlParam.set());
+  const [hasContacts, setHasContacts] = useUrlState("hasContacts", urlParam.bool());
   // Archived companies, where a restore starts (R64).
-  const [archivedOnly, setArchivedOnly] = useState(false);
-  const [minRating, setMinRating] = useState<"" | "fair" | "good" | "excellent">("");
-  const [empMin, setEmpMin] = useState(""); const [empMax, setEmpMax] = useState("");
+  const [archivedOnly, setArchivedOnly] = useUrlState("archived", urlParam.bool());
+  const [minRating, setMinRating] = useUrlState("rating", urlParam.oneOf(["", "fair", "good", "excellent"] as const, ""));
+  const [empMin, setEmpMin] = useUrlState("empMin", urlParam.string()); const [empMax, setEmpMax] = useUrlState("empMax", urlParam.string());
   // Research (2026-10-16): companies sourced by Research, or in a research sector.
-  const [research, setResearch] = useState<"" | "sourced" | "in_sector">("");
-  const [researchSectors, setResearchSectors] = useState<Set<string>>(new Set());
-  const [sort, setSort] = useState<{ field: any; direction: "asc" | "desc" }>({ field: "contactCount", direction: "desc" });
-  const [page, setPage] = useState(1);
+  const [research, setResearch] = useUrlState("research", urlParam.oneOf(["", "sourced", "in_sector"] as const, ""));
+  const [researchSectors, setResearchSectors] = useUrlState("sector", urlParam.set());
+  const [sortField, setSortField] = useUrlState("sort", urlParam.string("contactCount"));
+  const [sortDir, setSortDir] = useUrlState("dir", urlParam.oneOf(["asc", "desc"] as const, "desc"));
+  const sort = useMemo(() => ({ field: sortField as any, direction: sortDir }), [sortField, sortDir]);
+  const setSort = (s: { field: string; direction: "asc" | "desc" }) => { setSortField(s.field); setSortDir(s.direction); };
+  const [page, setPage] = useUrlState("page", urlParam.int(1));
   const perPage = 50;
 
   const [hideFilters, setHideFilters] = useState(false);
@@ -236,7 +243,10 @@ export default function Companies() {
   const toggleGroup = (g: string) => setOpenGroups((p) => { const n = new Set(p); n.has(g) ? n.delete(g) : n.add(g); return n; });
   const toggleIn = (s: Set<string>, setter: (x: Set<string>) => void, v: string) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); setter(n); setPage(1); };
 
-  useEffect(() => { const t = setTimeout(() => { setQ(searchInput); setPage(1); }, 300); return () => clearTimeout(t); }, [searchInput]);
+  // The box already says what the address does (first render, a restored
+  // view): nothing to apply, and the page the address names stays (U6).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (searchInput === q) return; const t = setTimeout(() => { setQ(searchInput); setPage(1); }, 300); return () => clearTimeout(t); }, [searchInput]);
 
   // Industry / location options with counts, counted on the server.
   const { data: facets } = trpc.companies.facets.useQuery(undefined, { staleTime: 60_000 });
@@ -278,7 +288,7 @@ export default function Companies() {
     const j = matchingJobQ.data;
     if (!j || matchingJob == null || j.id !== matchingJob || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Enrich ${j.status}${j.message ? `: ${j.message}` : ""}.`);
-    utils.companies.search.invalidate();
+    invalidateCompanyReads(utils);
     setMatchingJob(null);
   }, [matchingJobQ.data, matchingJob]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = (data?.data ?? []) as any[];
@@ -301,11 +311,11 @@ export default function Companies() {
     onError: (e) => toast.error(e.message),
   });
   const merge = trpc.companies.merge.useMutation({
-    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); setMergePair(null); utils.companies.search.invalidate(); },
+    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); setMergePair(null); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const backfill = trpc.companies.backfill.useMutation({
-    onSuccess: (r) => { toast.success(`Synced companies — ${r.created} created, ${r.linked} linked from prospects`); utils.companies.search.invalidate(); },
+    onSuccess: (r) => { toast.success(`Synced companies — ${r.created} created, ${r.linked} linked from prospects`); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -337,7 +347,7 @@ export default function Companies() {
         // grinding through the rest.
         if (r.sweep.failed > 0) {
           toast.error(`Brand lookup is not answering — ${r.sweep.failed} search${r.sweep.failed === 1 ? "" : "es"} failed. Check the Brandfetch key in Settings → Data sources.`, { id: t });
-          utils.companies.search.invalidate();
+          invalidateCompanyReads(utils);
           return;
         }
         // Nothing searched means every remaining account is negative-cached or
@@ -349,7 +359,7 @@ export default function Companies() {
         prev = r.remainingWithoutDomain;
       }
       toast.success(`Brands resolved — ${filled + applied} companies got a domain, ${renamed} names repaired (${searched} searches over ${passes} passes)`, { id: t });
-      utils.companies.search.invalidate();
+      invalidateCompanyReads(utils);
     } catch (e) {
       toast.error((e as Error).message || "Brand resolution failed", { id: t });
     } finally {
@@ -378,6 +388,8 @@ export default function Companies() {
           <Building2 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find companies</h1>
           <div className="flex-1" />
+          {/* On a phone these fold into a More menu (audit U8). */}
+          <HeaderActions keep={0} label="More company actions">
           <DuplicateReview />
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})} title="Create/link companies from uploaded prospects">
             <RefreshCw className={`size-3.5 ${backfill.isPending ? "animate-spin" : ""}`} /> Sync from prospects
@@ -388,6 +400,7 @@ export default function Companies() {
             </Button>
           )}
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
+          </HeaderActions>
         </div>
 
         <div className="flex flex-1 min-h-0">
@@ -499,7 +512,7 @@ export default function Companies() {
                 <span className="font-medium">{matchingAll ? `All ${total.toLocaleString()} matching` : checked.size} selected</span>
                 <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={bulkEnrich.isPending || enrichMatching.isPending || matchingJob != null}
                   onClick={() => (matchingAll
-                    ? confirmAction({ title: `Enrich ${total.toLocaleString()} companies?`, description: `Everyone matching the filters: ${total.toLocaleString()} ${total === 1 ? "company" : "companies"}. Enrichment reads the evidence already on file and calls no paid source. It runs on the server in the background.`, confirmLabel: `Enrich ${total.toLocaleString()}` },
+                    ? confirmAction({ title: `Enrich ${total.toLocaleString()} companies?`, count: { n: total, one: "company", many: "companies" }, description: `Everyone matching the filters: ${total.toLocaleString()} ${total === 1 ? "company" : "companies"}. Enrichment reads the evidence already on file and calls no paid source. It runs on the server in the background.`, confirmLabel: `Enrich ${total.toLocaleString()}` },
                       () => enrichMatching.mutate({ action: "enrich", filters, expectedTotal: total }))
                     : bulkEnrich.mutate({ accountIds: [...checked] }))}>
                   {matchingJob != null ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Enrich
@@ -536,6 +549,40 @@ export default function Companies() {
                   {activeCount ? <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear filters</Button>
                     : <Button size="sm" className="mt-3 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})}><Sparkles className="size-4" /> Sync companies from prospects</Button>}
                 </div>
+              ) : phone ? (
+                // One card per company on a phone (audit U8): the same columns, stacked.
+                <RecordCards
+                  label="Companies"
+                  rows={rows}
+                  rowKey={(a) => a.id}
+                  busy={isPlaceholderData}
+                  primary={(a) => (
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CompanyAvatar name={a.name} domain={a.domain} logoUrl={a.logo?.url} faviconUrl={a.logo?.faviconUrl} size="md" />
+                      <div className="min-w-0">
+                        <span className="block truncate">{a.name}{isResearchSource(a.sourceType) ? <span className="ml-1.5 rounded-full bg-violet-500/15 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:text-violet-300">Research</span> : null}</span>
+                        {a.domain && <span className="block truncate text-[11px] font-normal text-muted-foreground">{a.domain}</span>}
+                      </div>
+                    </div>
+                  )}
+                  fields={[
+                    { key: "contacts", label: "Contacts", render: (a) => (a.contactCount > 0 ? a.contactCount : "—") },
+                    { key: "employees", label: "Employees", render: (a) => (a.employeeCount ? a.employeeCount.toLocaleString() : (a.employeeBand || "—")) },
+                    { key: "score", label: "Score", render: (a) => (a.accountRating ? <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${RATING_STYLE[a.accountRating] ?? RATING_STYLE.not_a_fit}`}>{a.accountScore != null ? Math.round(a.accountScore) : "–"}</span> : "—") },
+                    { key: "industry", label: "Industry", render: (a) => a.industry ?? "—" },
+                    { key: "location", label: "Location", render: (a) => [a.hqCity, a.hqState, a.hqCountry].filter(Boolean).join(", ") || a.region || "—" },
+                  ]}
+                  footer={(a) => (
+                    <>
+                      {a.domain && <a href={`https://${a.domain}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"><Globe className="size-3.5" /> Website</a>}
+                      {a.linkedinCompanyUrl && <a href={a.linkedinCompanyUrl.startsWith("http") ? a.linkedinCompanyUrl : `https://${a.linkedinCompanyUrl}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"><Link2 className="size-3.5" /> LinkedIn</a>}
+                    </>
+                  )}
+                  onOpen={(a) => setLocation(`/v2/companies/${a.id}`)}
+                  checked={(a) => checked.has(a.id)}
+                  onCheck={(a) => setChecked((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })}
+                  checkLabel="Select company"
+                />
               ) : (
                 <table className={cn("w-full text-sm transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">

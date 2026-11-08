@@ -57,6 +57,8 @@ import {
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmButton } from "@/components/usip/Common";
+import { invalidateProposalReads } from "@/lib/entityCache";
+import { urlParam, useUrlState } from "@/lib/urlState";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -147,9 +149,11 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
     }));
   }, [linkedAccount]);
 
+  const utils = trpc.useUtils();
   const createMutation = trpc.proposals.create.useMutation({
     onSuccess: (data) => {
       toast.success("Proposal created");
+      invalidateProposalReads(utils);
       onCreated(data.id);
       handleClose();
     },
@@ -480,6 +484,8 @@ function EngagementBadge({ score }: { score: number }) {
 }
 
 // ── Main list page ────────────────────────────────────────────────────────────
+/** The dashboard's ?expiryFilter= cohorts, as this page's status filter. */
+const LEGACY_EXPIRY_STATUS: Record<string, string> = { expired: "expired_cohort", accepted: "accepted_cohort", active: "active_cohort" };
 export default function Proposals() {
   const [, navigate] = useLocation();
   const searchStr = useSearch();
@@ -489,30 +495,27 @@ export default function Proposals() {
   const { timezone, isLoading: zoneLoading } = useWorkspaceTimezone();
   const today = zonedDayKey(timezone, Date.now());
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>(() => {
-    const params = new URLSearchParams(searchStr);
-    const ef = params.get("expiryFilter");
-    if (ef === "expired") return "expired_cohort";
-    if (ef === "accepted") return "accepted_cohort";
-    if (ef === "active") return "active_cohort";
-    return "all";
-  });
-  const [expiryWindow, setExpiryWindow] = useState<number | null>(() => {
-    const params = new URLSearchParams(searchStr);
-    const w = params.get("window");
-    return w ? parseInt(w) : null;
-  });
+  // Search, status, expiry window and sort live in the address (audit
+  // 2026-10-20, U6), so a refresh keeps the view and a link shares it. The
+  // dashboard's ?expiryFilter= and ?window= links keep working: expiryFilter
+  // picks the status until one is chosen here, which takes its place.
+  void searchStr;
+  const [search, setSearch] = useUrlState("q", urlParam.string());
+  const [statusParam, setStatusParam] = useUrlState("status", urlParam.string());
+  const [legacyExpiry, setLegacyExpiry] = useUrlState("expiryFilter", urlParam.string());
+  const statusFilter = statusParam || LEGACY_EXPIRY_STATUS[legacyExpiry] || "all";
+  const setStatusFilter = (s: string) => { setLegacyExpiry(""); setStatusParam(s === "all" ? "" : s); };
+  const [expiryWindow, setExpiryWindow] = useUrlState("window", urlParam.id());
   const [extMgmtOpen, setExtMgmtOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkExpiryOpen, setBulkExpiryOpen] = useState(false);
   const [bulkExpiryDate, setBulkExpiryDate] = useState("");
-  const [sortBy, setSortBy] = useState<"none" | "expires_asc" | "expires_desc">("none");
+  const [sortBy, setSortBy] = useUrlState("sort", urlParam.oneOf(["none", "expires_asc", "expires_desc"] as const, "none"));
 
   const utils = trpc.useUtils();
   const removeProposal = trpc.proposals.delete.useMutation({
     onSuccess: () => {
-      utils.proposals.list.invalidate();
+      invalidateProposalReads(utils);
       toast.success("Proposal deleted");
     },
     onError: (e) => toast.error("Failed to delete proposal", { description: e.message }),
@@ -710,7 +713,8 @@ export default function Proposals() {
       )}
 
       {/* Stats bar */}
-      <div className="grid grid-cols-4 gap-4 px-6 py-4 border-b border-border shrink-0">
+      {/* Two across on a phone, four from sm up (audit U8). */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 px-4 sm:px-6 py-4 border-b border-border shrink-0">
         {[
           { label: "Total", value: counts.total, color: "text-foreground" },
           { label: "Accepted", value: counts.accepted, color: "text-emerald-600" },
@@ -725,7 +729,7 @@ export default function Proposals() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-2 px-6 py-3 border-b border-border shrink-0">
+      <div className="flex flex-col gap-2 px-4 sm:px-6 py-3 border-b border-border shrink-0">
         <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input aria-label="Search proposals"
@@ -822,7 +826,7 @@ export default function Proposals() {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
         {isLoading ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
@@ -875,8 +879,8 @@ export default function Proposals() {
                 >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium text-foreground truncate">{p.title}</span>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                      <span className="font-medium text-foreground truncate max-w-full">{p.title}</span>
                       <StatusBadge status={p.status as ProposalStatus} />
                       {(p as any).engagementScore > 0 && (
                         <EngagementBadge score={(p as any).engagementScore} />
@@ -1026,6 +1030,8 @@ export default function Proposals() {
               <div className="flex justify-end">
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" disabled={approveAllExtMutation.isPending || zoneLoading}
                   title={`Approve all ${extensionPending.length} extension request${extensionPending.length === 1 ? "" : "s"}?`}
+                  count={{ n: extensionPending.length, one: "extension request" }}
+                  consequence={{ kind: "sends", channel: "email", n: extensionPending.length }}
                   description="Each proposal's expiry moves 7 days past its current date and the client is emailed the new date, exactly as a single approval would."
                   confirmLabel="Approve all"
                   onConfirm={() => approveAllExtMutation.mutate({ items: extensionPending.map((req) => ({ proposalId: req.id, newExpiresAt: extendedExpiry(req.expiresAt, timezone) })) })}>

@@ -28,6 +28,10 @@ import { pressable } from "@/lib/pressable";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { csvCell } from "@shared/csvCell";
 import { scoredAgo } from "@/lib/leadScoreText";
+import { invalidateLeadReads } from "@/lib/entityCache";
+import { HeaderActions } from "@/components/usip/HeaderActions";
+import { RecordCards } from "@/components/usip/RecordCards";
+import { useIsMobile } from "@/hooks/useMobile";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 /** leads.sendAdHocEmailBulk's cap (server/routers/crm.ts LEAD_BULK_SEND_MAX). */
@@ -60,6 +64,7 @@ function tierBadge(grade: string | null | undefined): { label: string; cls: stri
 
 /* ─── Send Email Modal ──────────────────────────────────────────────────── */
 function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; leadIds: number[]; onComplete: () => void }) {
+  const utils = trpc.useUtils();
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -79,13 +84,25 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
       if (r.sent === 0) { toast.error(failed[0]?.error ?? "Nothing was sent"); return; }
       if (failed.length) toast.warning(`Sent to ${r.sent} of ${r.results.length}. ${failed.length} not sent: ${failed[0]?.error ?? "failed"}`);
       setSent(true);
+      invalidateLeadReads(utils);
       onComplete();
     },
     onError: (e: any) => toast.error(e.message),
   });
   const sending = send.isPending;
   function sendAll() {
-    send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });
+    const go = () => send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });
+    // One lead is the composer's own Send; several are a bulk send, said
+    // first with the number (audit U5, X1.8).
+    if (leadIds.length <= 1) { go(); return; }
+    confirmAction({
+      title: `Email ${leadIds.length} leads?`,
+      description: `"${subject}" goes to each of them separately.`,
+      count: { n: leadIds.length, one: "lead" },
+      consequence: { kind: "sends", channel: "email", n: leadIds.length },
+      confirmLabel: `Send ${leadIds.length}`,
+      destructive: false,
+    }, go);
   }
   function reset() { setSubject(""); setBody(""); setAiPrompt(""); setUseAi(false); setSent(false); }
   return (
@@ -176,27 +193,27 @@ export default function Leads() {
     const j = deleteJobQ.data;
     if (!j || deleteJob == null || j.id !== deleteJob || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Delete ${j.status}${j.message ? `: ${j.message}` : ""}.`);
-    utils.leads.invalidate();
+    invalidateLeadReads(utils);
     setDeleteJob(null);
   }, [deleteJobQ.data, deleteJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
-    onSuccess: () => utils.leads.invalidate(),
+    onSuccess: () => invalidateLeadReads(utils),
     onError: (e: any) => toast.error(e.message),
   });
   const rescore = trpc.leadScoring.recompute.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); toast.success("Re-scored"); },
+    onSuccess: () => { invalidateLeadReads(utils); toast.success("Re-scored"); },
     onError: (e: any) => toast.error("Re-score failed", { description: e.message }),
   });
   // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
   const [convertingId, setConvertingId] = useState<number | null>(null);
   const deleteMut = trpc.leads.delete.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); toast.success("Lead deleted"); },
+    onSuccess: () => { invalidateLeadReads(utils); toast.success("Lead deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
   const bulkDeleteMut = trpc.leads.bulkDelete.useMutation({
     onSuccess: (res) => {
-      utils.leads.invalidate();
+      invalidateLeadReads(utils);
       setSelectedIds(new Set());
       toast.success(`${res.deleted} lead${res.deleted === 1 ? "" : "s"} deleted`);
     },
@@ -222,12 +239,49 @@ export default function Leads() {
     });
   }
 
+  // A lead's row actions: the table's last column and a phone card's footer (U8).
+  const renderLeadActions = (l: NonNullable<typeof data>[number]) => (
+    <>
+      <Button size="sm" variant="ghost" onClick={() => rescore.mutate({ leadId: l.id })} disabled={rescore.isPending}><Sparkles className="size-3.5" /> AI score</Button>
+      {l.status !== "converted" && (
+        <Button size="sm" variant="outline" className="bg-card" onClick={() => setConvertingId(l.id)}><UserCheck className="size-3.5" /> Convert</Button>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label="Lead actions" variant="ghost" size="icon" className="size-7">
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setEditLead(l)}>
+            <Pencil className="size-4 mr-2" />Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` })}>
+            <Target className="size-4 mr-2" />View details
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([l.id])); setSendEmailOpen(true); }}>
+            <Send className="size-4 mr-2" />Send Email
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?`, description: "This lead will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); }}>
+            <Trash2 className="size-4 mr-2" />Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  );
+  const phone = useIsMobile();
+
   return (
     <Shell title="Leads">
       <PageHeader title="Leads" description="Inbound enquiries (chat, booking pages, forms) waiting to be qualified; converting one creates the company, contact and deal. Every person you have imported or sourced is in People, the person database. Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules. A–D scores are worked out by the hourly re-score as leads engage or go stale, and at once when you click AI score. Leads are not enriched automatically." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
-        <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
+        {/* On a phone: the search and New lead stay, the rest fold into More (audit U8). */}
+        <HeaderActions keep={1} label="More lead actions"
+          pinned={<Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>}>
+        <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-40 sm:w-56" />
         {someSelected && (
           <>
             {/* At most LEAD_BULK_SEND_MAX per send (R5): not offered on all matching. */}
@@ -253,13 +307,13 @@ export default function Leads() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 if (matchingAll) {
-                  confirmAction({ title: `Delete all ${total.toLocaleString()} matching leads?`, description: `Every lead the search matches: ${total.toLocaleString()}. This cannot be undone.`, confirmLabel: `Delete ${total.toLocaleString()}` }, () => {
+                  confirmAction({ title: `Delete all ${total.toLocaleString()} matching leads?`, count: { n: total, one: "lead" }, description: `Every lead the search matches: ${total.toLocaleString()}. This cannot be undone.`, confirmLabel: `Delete ${total.toLocaleString()}` }, () => {
                     deleteMatching.mutate({ action: "delete", filter: { search: query || undefined }, expectedTotal: total });
                   });
                   return;
                 }
                 const ids = Array.from(selectedIds);
-                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, description: "This cannot be undone.", confirmLabel: "Delete" }, () => {
+                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, count: { n: ids.length, one: "lead" }, consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => {
                   bulkDeleteMut.mutate({ ids });
                 });
               }}
@@ -284,7 +338,7 @@ export default function Leads() {
           {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export CSV
         </Button>
         )}
-        <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
+        </HeaderActions>
       </PageHeader>
       <div className="p-4 md:p-5">
         {error ? (
@@ -307,6 +361,27 @@ export default function Leads() {
                 )}
               </div>
             )}
+            {phone ? (
+              // One card per lead on a phone, with the row's own actions (audit U8).
+              <RecordCards
+                label="Leads"
+                rows={data!}
+                rowKey={(l) => l.id}
+                primary={(l) => <Link href={`/leads/${l.id}`} onClick={(e) => e.stopPropagation()} className="underline-offset-2 hover:underline">{l.firstName} {l.lastName}</Link>}
+                fields={[
+                  { key: "title", label: "Title", render: (l) => [l.title, l.company].filter(Boolean).join(" · ") || "—" },
+                  { key: "email", label: "Email", render: (l) => l.email || "—" },
+                  { key: "source", label: "Source", render: (l) => l.source || "—" },
+                  { key: "score", label: "Score", render: (l) => <><span className="font-mono tabular-nums">{l.score}</span> <span className={`ml-1 inline-block px-1.5 rounded text-xs ${l.grade ? GRADE_TONE[l.grade] ?? NEUTRAL_TONE : NEUTRAL_TONE}`}>{l.grade ?? "—"}</span> <span className="text-[10px] text-muted-foreground">{scoredAgo(l.scoredAt)}</span></> },
+                  { key: "status", label: "Status", render: (l) => l.status },
+                ]}
+                footer={renderLeadActions}
+                onOpen={(l) => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` })}
+                checked={(l) => matchingAll || selectedIds.has(l.id)}
+                onCheck={(l) => toggleOne(l.id)}
+                checkLabel="Select lead"
+              />
+            ) : (
             <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                 <tr>
@@ -371,38 +446,13 @@ export default function Leads() {
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{l.status}</td>
                     <td className="px-3 py-2 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                      <Button size="sm" variant="ghost" onClick={() => rescore.mutate({ leadId: l.id })} disabled={rescore.isPending}><Sparkles className="size-3.5" /> AI score</Button>
-                      {l.status !== "converted" && (
-                        <Button size="sm" variant="outline" className="bg-card" onClick={() => setConvertingId(l.id)}><UserCheck className="size-3.5" /> Convert</Button>
-                      )}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button aria-label="Lead actions" variant="ghost" size="icon" className="size-7">
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setEditLead(l)}>
-                            <Pencil className="size-4 mr-2" />Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` })}>
-                            <Target className="size-4 mr-2" />View details
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([l.id])); setSendEmailOpen(true); }}>
-                            <Send className="size-4 mr-2" />Send Email
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?`, description: "This lead will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); }}>
-                            <Trash2 className="size-4 mr-2" />Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {renderLeadActions(l)}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table></div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
               <span>{(page - 1) * PAGE_SIZE + 1}–{(page - 1) * PAGE_SIZE + data!.length} of {total.toLocaleString()}</span>
               <div className="flex items-center gap-1">
@@ -435,7 +485,7 @@ function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [pending, setPending] = useState<null | { firstName: string; lastName: string; email?: string; company?: string; title?: string; source: string }>(null);
   const [checking, setChecking] = useState(false);
   const create = trpc.leads.create.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); onOpenChange(false); setDupes(null); setPending(null); toast.success("Lead created"); },
+    onSuccess: () => { invalidateLeadReads(utils); onOpenChange(false); setDupes(null); setPending(null); toast.success("Lead created"); },
     onError: (e) => toast.error("Failed to create lead", { description: e.message }),
   });
   const submitLead = async (v: NonNullable<typeof pending>) => {

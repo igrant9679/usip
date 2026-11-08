@@ -28,6 +28,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -216,6 +217,7 @@ export function AddExistingProspectsDialog({
   // Errors are handled at the mutateAsync call (try/catch → toast); per-person
   // refusals come back in the RESULT (skipped[]) and render inline.
   const push = trpc.are.prospects.pushExisting.useMutation();
+  const utils = trpc.useUtils();
   const submit = async () => {
     const ids = toAdd.map((r) => r.prospectId);
     if (ids.length === 0) { toast.error("Nothing to add"); return; }
@@ -234,6 +236,7 @@ export function AddExistingProspectsDialog({
           `${added.length} ${added.length === 1 ? "person" : "people"} added to ${campaignName ? `"${campaignName}"` : "the campaign"}` +
           (generate ? " — enriching, then generating sequences" : " — enriching"),
         );
+        invalidateCampaignReads(utils);
         onPushed?.();
       } else {
         toast.error("No one was added — see the reasons below");
@@ -241,7 +244,7 @@ export function AddExistingProspectsDialog({
     } catch (e) {
       toast.error((e as Error).message || "Could not add those prospects");
       // A later batch failed after earlier ones landed: show what did happen.
-      if (added.length > 0) { setResult({ added, skipped }); onPushed?.(); }
+      if (added.length > 0) { setResult({ added, skipped }); invalidateCampaignReads(utils); onPushed?.(); }
     } finally {
       setSubmitting(false);
     }

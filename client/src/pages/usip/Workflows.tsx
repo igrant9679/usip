@@ -152,6 +152,7 @@ export default function Workflows() {
             <div className="flex items-center gap-2">
               <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={applyAllSuggestions.isPending || applySuggestion.isPending}
                 title={`Add all ${sugList.length} suggested rule${sugList.length === 1 ? "" : "s"}?`}
+                count={{ n: sugList.length, one: "suggested rule" }}
                 description="Each suggestion becomes a workflow rule, switched off. Nothing fires until you open a rule, check it and turn it on."
                 confirmLabel="Add all" onConfirm={() => applyAllSuggestions.mutate()}>
                 <Check className="size-3.5" /> Add all

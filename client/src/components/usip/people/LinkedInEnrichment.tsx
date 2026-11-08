@@ -34,6 +34,7 @@ import {
   ArrowRight,
   Sparkles,
 } from "lucide-react";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 /* ───────────────────── one-click enrich hook + button ─────────────────── */
 
@@ -100,8 +101,7 @@ export function useEnrichJob() {
       // The job wrote photos/companies/titles onto the prospects themselves —
       // without these, the People table keeps its stale rows until a manual
       // reload and enrichment looks like it "didn't stick".
-      utils.prospects.list.invalidate();
-      utils.prospects.get.invalidate();
+      invalidatePeopleReads(utils);
       setJobId(null);
     }
   }, [jobQ.data?.status, jobQ.error, jobQ.isFetching]); // eslint-disable-line react-hooks/exhaustive-deps

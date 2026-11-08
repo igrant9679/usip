@@ -24,6 +24,7 @@ import {
 import { useParams, useLocation, Link } from "wouter";
 import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 import { EMAIL_STATUS_VALUES as STATUS_VALUES, segmentFieldsFor, type SegmentSubject } from "@shared/segmentRules";
+import { invalidateListReads } from "@/lib/entityCache";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type RuleField =
@@ -286,11 +287,11 @@ function SegmentBuilderModal({
   const [previewing, setPreviewing] = useState(false);
 
   const createMut = trpc.segments.create.useMutation({
-    onSuccess: () => { utils.segments.list.invalidate(); onSaved(); toast.success("Segment created"); },
+    onSuccess: () => { invalidateListReads(utils); onSaved(); toast.success("Segment created"); },
     onError: (e) => toast.error(e.message),
   });
   const updateMut = trpc.segments.update.useMutation({
-    onSuccess: () => { utils.segments.list.invalidate(); onSaved(); toast.success("Segment updated"); },
+    onSuccess: () => { invalidateListReads(utils); onSaved(); toast.success("Segment updated"); },
     onError: (e) => toast.error(e.message),
   });
   const evalMut = trpc.segments.evaluate.useMutation({
@@ -552,14 +553,14 @@ function SegmentIndex() {
   const utils = trpc.useUtils();
 
   const deleteMut = trpc.segments.delete.useMutation({
-    onSuccess: () => { utils.segments.list.invalidate(); toast.success("Segment deleted"); setConfirmDelete(null); },
+    onSuccess: () => { invalidateListReads(utils); toast.success("Segment deleted"); setConfirmDelete(null); },
     onError: (e) => toast.error(e.message),
   });
 
   // The page said segments update automatically while a card's count changed
   // only on save, and this had no button (audit 2026-10-20, P53).
   const refreshMut = trpc.segments.refresh.useMutation({
-    onSuccess: () => { utils.segments.list.invalidate(); toast.success("Segment counts refreshed"); },
+    onSuccess: () => { invalidateListReads(utils); toast.success("Segment counts refreshed"); },
     onError: (e) => toast.error(e.message),
   });
 

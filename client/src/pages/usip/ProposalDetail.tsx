@@ -85,6 +85,7 @@ import { FileDown, FileType2, PenLine } from "lucide-react";
 import { ProposalPricing } from "@/components/usip/ProposalPricing";
 import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { invalidateProposalReads } from "@/lib/entityCache";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -1373,6 +1374,10 @@ export default function ProposalDetail() {
     { id: proposalId },
     { enabled: !!current && proposalId > 0 },
   );
+  // A change on any tab refreshes every screen showing the proposal (the
+  // list, the deal that links it), not only this one (audit X1.7).
+  const utils = trpc.useUtils();
+  const refreshProposal = () => invalidateProposalReads(utils);
 
   const deleteProposal = trpc.proposals.delete.useMutation({
     onSuccess: () => {
@@ -1590,16 +1595,16 @@ export default function ProposalDetail() {
 
         <div className="flex-1 overflow-y-auto p-6">
           <TabsContent value="overview" className="mt-0">
-            <OverviewTab proposal={proposal} onRefetch={refetch} />
+            <OverviewTab proposal={proposal} onRefetch={refreshProposal} />
           </TabsContent>
           <TabsContent value="content" className="mt-0 h-full">
-            <ContentTab proposal={proposal} sections={sections} onRefetch={refetch} />
+            <ContentTab proposal={proposal} sections={sections} onRefetch={refreshProposal} />
           </TabsContent>
           <TabsContent value="pricing" className="mt-0">
             <ProposalPricing proposalId={proposal.id} />
           </TabsContent>
           <TabsContent value="timeline" className="mt-0">
-            <TimelineTab proposal={proposal} milestones={milestones} onRefetch={refetch} />
+            <TimelineTab proposal={proposal} milestones={milestones} onRefetch={refreshProposal} />
           </TabsContent>
           <TabsContent value="feedback" className="mt-0">
             <FeedbackTab feedback={feedback} />
@@ -1608,7 +1613,7 @@ export default function ProposalDetail() {
             <HistoryTab proposalId={proposal.id} />
           </TabsContent>
           <TabsContent value="share" className="mt-0">
-            <ShareTab proposal={proposal} onRefetch={refetch} />
+            <ShareTab proposal={proposal} onRefetch={refreshProposal} />
           </TabsContent>
         </div>
       </Tabs>
@@ -1627,7 +1632,7 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
   const linkOpp = trpc.proposals.linkOpportunity.useMutation({
     onSuccess: () => {
       toast.success("Opportunity linked");
-      utils.proposals.get.invalidate({ id: proposal.id });
+      invalidateProposalReads(utils);
       onRefetch();
       setLinkDialogOpen(false);
     },
@@ -1636,7 +1641,7 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
   const unlinkOpp = trpc.proposals.linkOpportunity.useMutation({
     onSuccess: () => {
       toast.success("Opportunity unlinked");
-      utils.proposals.get.invalidate({ id: proposal.id });
+      invalidateProposalReads(utils);
       onRefetch();
     },
     onError: (e) => toast.error(e.message),
@@ -1787,8 +1792,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
       setApproveOpen(false);
       setApproveDate("");
       setApproveNote("");
-      utils.proposals.listActivity.invalidate({ proposalId });
-      utils.proposals.get.invalidate({ id: proposalId });
+      invalidateProposalReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -1797,7 +1801,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
       toast.success("Extension request declined");
       setDenyOpen(false);
       setDenyReason("");
-      utils.proposals.listActivity.invalidate({ proposalId });
+      invalidateProposalReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2052,8 +2056,7 @@ function ExpandedRevision({ rev, proposalId, onRestored }: { rev: any; proposalI
   const restore = trpc.proposals.restoreRevision.useMutation({
     onSuccess: (data) => {
       toast.success(`Section "${data.sectionKey.replace(/_/g, " ")}" restored`);
-      utils.proposals.get.invalidate({ id: proposalId });
-      utils.proposals.listRevisions.invalidate({ proposalId });
+      invalidateProposalReads(utils);
       setConfirmOpen(false);
       onRestored();
     },

@@ -18,6 +18,7 @@ import {
   overridesWithTargeting, sameTargeting, targetingFromOverrides, targetingProblem,
   type CampaignTargeting,
 } from "@shared/campaignTargeting";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 const sizeValue = (v: string): number | null => {
   const n = Number(v);
@@ -46,7 +47,7 @@ export function CampaignTargetingCard({ campaign }: { campaign: { id: number; ic
     onSuccess: () => {
       toast.success("Targeting saved");
       setDraft(null);
-      utils.are.campaigns.get.invalidate({ id: campaign.id });
+      invalidateCampaignReads(utils);
     },
   });
   // The Settings tab's one Save writes this draft too (U11).

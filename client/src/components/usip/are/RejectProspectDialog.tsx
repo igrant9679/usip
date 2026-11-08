@@ -12,6 +12,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -55,8 +56,10 @@ export function RejectProspectDialog({ target, presets, onClose, onChanged }: {
   onChanged: () => void;
 }) {
   const [reason, setReason] = useState("");
+  // Every screen showing the prospect refreshes (X1.7); onChanged is the page's own extra.
+  const utils = trpc.useUtils();
   const restore = trpc.are.prospects.restore.useMutation({
-    onSuccess: () => { toast.success("Back in the review queue"); onChanged(); },
+    onSuccess: () => { toast.success("Back in the review queue"); invalidateCampaignReads(utils); onChanged(); },
     onError: (e) => toast.error(e.message),
   });
   const reject = trpc.are.prospects.reject.useMutation({
@@ -68,6 +71,7 @@ export function RejectProspectDialog({ target, presets, onClose, onChanged }: {
       });
       setReason("");
       onClose();
+      invalidateCampaignReads(utils);
       onChanged();
     },
     onError: (e) => toast.error(e.message),

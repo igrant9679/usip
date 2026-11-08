@@ -74,7 +74,10 @@ vi.mock("@/lib/trpc", () => {
     invalidate: () => { h.invalidated.push(path); },
     fetch: async (input: unknown) => h.fetchers[path]?.(input),
   });
-  const utils = new Proxy({}, { get: (_t, r: string) => new Proxy({}, { get: (_u, p: string) => leaf(`${r}.${p}`) }) });
+  // 2026-11-08 (audit X1.7): the family helpers invalidate whole routers
+  // (recorded as "segments.*") and some reads three deep.
+  const deep = (path: string): any => new Proxy(leaf(path), { get: (t: any, k: string) => (k in t ? t[k] : deep(`${path}.${k}`)) });
+  const utils = new Proxy({}, { get: (_t, r: string) => new Proxy({ invalidate: () => { h.invalidated.push(`${r}.*`); } } as any, { get: (u: any, p: string) => (p in u ? u[p] : deep(`${r}.${p}`)) }) });
   const trpc = new Proxy({ useUtils: () => utils } as Record<string, unknown>, {
     get: (t, r: string) => (r in t ? t[r] : new Proxy({}, { get: (_u, p: string) => proc(`${r}.${p}`) })),
   });
@@ -251,7 +254,8 @@ describe("segments say they read CRM contacts, not People (P21), and counts can 
     refresh.onClick();
     expect(h.calls).toEqual([{ path: "segments.refresh", vars: {} }]);
     h.mutations["segments.refresh"][0].onSuccess();
-    expect(h.invalidated).toContain("segments.list");
+    // The list family's helper refreshes every segment read (X1.7).
+    expect(h.invalidated).toContain("segments.*");
   });
 
   it("refresh recounts every segment from the contacts table", async () => {
@@ -488,7 +492,7 @@ describe("the Segment Auto-Enroll page", () => {
     await render();
     const [runNow] = h.mutations["segmentRules.runEnrollment"];
     runNow.onSuccess({ ok: true, enrolled: 2, peopleSkipped: 3, rulesRefused: 1, rules: 3 });
-    expect(h.invalidated).toContain("segmentRules.list");
+    expect(h.invalidated).toContain("segmentRules.*");
     // 2026-11-07 (audit P21): rules enrol People or contacts, so the toast says "skipped" without naming either.
     expect(h.toasts.map((t) => t.msg)).toEqual(["Enrollment complete — 2 enrolled · 3 skipped · 1 rule refused (see its row)"]);
   });

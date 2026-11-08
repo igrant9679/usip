@@ -127,7 +127,7 @@ export default function ResearchRun() {
       >
         <RunStatusBadge status={run.status} outcome={run.outcome} />
         {working && ownsRun && (
-          <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate({ id })}>
+          <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => confirmAction({ title: "Stop this research run?", consequence: { kind: "stops", what: "The run", kept: "It cannot be resumed; start a new run to research it again" }, confirmLabel: "Stop" }, () => cancel.mutate({ id }))}>
             <Square className="size-3.5 mr-1" /> Stop
           </Button>
         )}

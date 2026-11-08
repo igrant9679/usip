@@ -108,9 +108,11 @@ describe("notes (A49)", () => {
 
   it("the page opens ?prospect=, sends picked ids and asks before deleting a note", () => {
     const detail = read("client/src/pages/usip/ARECampaignDetail.tsx");
-    expect(detail).toContain('.get("prospect"));');
+    // 2026-11-08 (audit U6): ?prospect= is read through the shared URL-state
+    // hook, and the open dossier IS the parameter (opening writes it).
+    expect(detail).toContain('const [linkedProspectId, setLinkedProspectId] = useUrlState("prospect", urlParam.id());');
     expect(detail).toContain("const [selectedProspectId, setSelectedProspectId] = useState<number | null>(linkedProspectId);");
-    expect(detail).toContain("const [dossierOpen, setDossierOpen] = useState(linkedProspectId !== null);");
+    expect(detail).toContain("const dossierOpen = linkedProspectId !== null;");
     expect(detail).toContain("mentionUserIds: Array.from(mentioned.entries())");
     expect(detail).not.toContain("onClick={() => deleteNote.mutate({ noteId: note.id })}");
     expect(detail).toContain('{ title: "Delete this note?"');

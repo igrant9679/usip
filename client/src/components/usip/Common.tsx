@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { formatAmount } from "@shared/money";
+import { confirmFactLines, type ConfirmFacts } from "@shared/confirmFacts";
 import { ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 /* ─────────────────────── promise-based confirm ──────────────────────────
@@ -30,13 +31,32 @@ import { ReactNode, createContext, useCallback, useContext, useEffect, useRef, u
  * so that failure mode cannot be written.
  * ---------------------------------------------------------------------- */
 
-export type ConfirmOptions = {
+/**
+ * `count`, `cost` and `consequence` are typed facts (audit 2026-10-20, U5,
+ * X1.8): how many it touches, what it spends (@shared/spendPreview) and what
+ * happens after. The dialog words them (@shared/confirmFacts) under the
+ * description, so a bulk change states its number and a paid action its
+ * price the same way on every screen. `description` stays for context the
+ * facts do not cover.
+ */
+export type ConfirmOptions = ConfirmFacts & {
   title: string;
   description?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
 };
+
+/** The facts block every confirmation shows: one sentence per fact given. */
+export function ConfirmFactList({ count, cost, consequence }: ConfirmFacts) {
+  const lines = confirmFactLines({ count, cost, consequence });
+  if (lines.length === 0) return null;
+  return (
+    <ul data-confirm-facts="" className="space-y-1 text-left text-sm text-muted-foreground">
+      {lines.map((l, i) => <li key={i}>{l}</li>)}
+    </ul>
+  );
+}
 
 type ConfirmFn = (opts: ConfirmOptions, onAccept: () => void) => void;
 
@@ -92,6 +112,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           <AlertDialogHeader>
             <AlertDialogTitle>{opts?.title}</AlertDialogTitle>
             {opts?.description && <AlertDialogDescription>{opts.description}</AlertDialogDescription>}
+            {opts && <ConfirmFactList count={opts.count} cost={opts.cost} consequence={opts.consequence} />}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => settle(false)}>{opts?.cancelLabel ?? "Cancel"}</AlertDialogCancel>
@@ -135,8 +156,11 @@ export function ConfirmButton({
   disabled,
   className,
   ariaLabel,
+  count,
+  cost,
+  consequence,
   children,
-}: {
+}: ConfirmFacts & {
   onConfirm: () => void;
   title?: string;
   description?: ReactNode;
@@ -162,6 +186,7 @@ export function ConfirmButton({
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           {description && <AlertDialogDescription>{description}</AlertDialogDescription>}
+          <ConfirmFactList count={count} cost={cost} consequence={consequence} />
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>

@@ -47,10 +47,12 @@ import {
   AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2, User,
 } from "lucide-react";
 import { confirmAction, ConfirmButton } from "@/components/usip/Common";
+import { HeaderActions } from "@/components/usip/HeaderActions";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
 import { bucketTasks, recentlyClosed, seesAllTasks, taskDueState } from "@shared/taskRules";
+import { invalidateTaskReads } from "@/lib/entityCache";
 
 type Task = {
   id: number;
@@ -195,12 +197,11 @@ export default function TasksV2() {
   const autopilot = trpc.tasks.getAutopilotSettings.useQuery();
 
   const invalidateAll = () => {
-    utils.tasks.list.invalidate();
-    utils.tasks.stats.invalidate();
+    invalidateTaskReads(utils);
   };
 
   const setMode = trpc.tasks.setAutopilotSettings.useMutation({
-    onSuccess: () => { utils.tasks.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
+    onSuccess: () => { invalidateTaskReads(utils); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const generate = trpc.tasks.generateDrafts.useMutation({
@@ -211,6 +212,17 @@ export default function TasksV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // Generate with AI drafts up to 10 tasks, one AI call each, and a failed
+  // call moves on to the next prospect (services/taskAutopilot.ts, which reads
+  // five candidates per task): the cost is said first (audit U5).
+  const askGenerate = () => confirmAction({
+    title: "Draft up to 10 tasks with AI?",
+    description: "Each is a draft for you to review here; nothing is sent.",
+    count: { n: 10, one: "task", upTo: true },
+    cost: { kind: "ai", calls: 10, what: "(one per task drafted; a failed call moves on to the next prospect, up to 50 in all)" },
+    confirmLabel: "Generate",
+    destructive: false,
+  }, () => generate.mutate({ limit: 10 }));
   const approveDraft = trpc.tasks.approveDraft.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const dismissDraft = trpc.tasks.dismissDraft.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const approveAll = trpc.tasks.approveAllDrafts.useMutation({
@@ -282,10 +294,10 @@ export default function TasksV2() {
   const chatFollowUps = approvalQ.data?.chatFollowUps ?? [];
   const socialInvites = approvalQ.data?.socialInvites ?? [];
   const approvalIds = useMemo(() => new Set([...chatFollowUps, ...socialInvites].map((r) => r.id)), [chatFollowUps, socialInvites]);
-  const sendFollowUp = trpc.tasks.sendChatFollowUp.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
-  const sendAllFollowUps = trpc.tasks.sendAllChatFollowUps.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.sent} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
-  const sendInvite = trpc.tasks.sendSocialInvite.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
-  const sendAllInvites = trpc.tasks.sendAllSocialInvites.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.sent} invite${r.sent === 1 ? "" : "s"} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
+  const sendFollowUp = trpc.tasks.sendChatFollowUp.useMutation({ onSuccess: (r) => { invalidateAll(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
+  const sendAllFollowUps = trpc.tasks.sendAllChatFollowUps.useMutation({ onSuccess: (r) => { invalidateAll(); toast[r.failed.length ? "warning" : "success"](`${r.sent} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
+  const sendInvite = trpc.tasks.sendSocialInvite.useMutation({ onSuccess: (r) => { invalidateAll(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
+  const sendAllInvites = trpc.tasks.sendAllSocialInvites.useMutation({ onSuccess: (r) => { invalidateAll(); toast[r.failed.length ? "warning" : "success"](`${r.sent} invite${r.sent === 1 ? "" : "s"} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
   const s = stats.data ?? { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
 
   // Queue: open / in_progress / snoozed, sorted by due date (nulls last).
@@ -384,7 +396,8 @@ export default function TasksV2() {
             {t.source === "ai" && <Sparkles className="size-3 shrink-0" style={{ color: "#7c3aed" }} />}
             {t.status === "snoozed" && <Clock className="size-3 shrink-0 text-muted-foreground" />}
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          {/* The record, owner and due date wrap on a phone (audit U8). */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
             {href
               ? <Link href={href} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> {t.relatedType}</Link>
               : <span>No linked record</span>}
@@ -505,6 +518,9 @@ export default function TasksV2() {
           <ListTodo className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Tasks</h1>
           <div className="flex-1" />
+          {/* On a phone the autopilot dial and Generate fold into More; New task stays (audit U8). */}
+          <HeaderActions keep={0} label="More task actions"
+            pinned={<Button size="sm" className="h-7 gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New task</Button>}>
           <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
             <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
@@ -516,10 +532,10 @@ export default function TasksV2() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 10 })}>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending} onClick={askGenerate}>
             <Sparkles className="size-3.5" /> {generate.isPending ? "Generating…" : "Generate with AI"}
           </Button>
-          <Button size="sm" className="h-7 gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New task</Button>
+          </HeaderActions>
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
@@ -562,6 +578,8 @@ export default function TasksV2() {
                     <span className="text-[12px] font-medium">Chat follow-up emails ({chatFollowUps.length})</span>
                     <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={sendAllFollowUps.isPending}
                       title={`Send all ${chatFollowUps.length} chat follow-up${chatFollowUps.length === 1 ? "" : "s"}?`}
+                      count={{ n: chatFollowUps.length, one: "chat follow-up" }}
+                      consequence={{ kind: "sends", channel: "email", n: chatFollowUps.length }}
                       description="Each suggested email is sent to its visitor now, one per second, and the task closes as sent. Emails with no recipient on file are skipped and reported."
                       confirmLabel="Approve & send all" onConfirm={() => sendAllFollowUps.mutate()}>
                       <CheckCheck className="size-3.5" /> Approve & send all
@@ -592,6 +610,8 @@ export default function TasksV2() {
                     <span className="text-[12px] font-medium">LinkedIn invites ({socialInvites.length})</span>
                     <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={sendAllInvites.isPending}
                       title={`Send all ${socialInvites.length} LinkedIn invite${socialInvites.length === 1 ? "" : "s"}?`}
+                      count={{ n: socialInvites.length, one: "LinkedIn invite" }}
+                      consequence={{ kind: "sends", channel: "LinkedIn invitation", n: socialInvites.length }}
                       description="Each invite goes out from the owning rep's connected LinkedIn account (or the workspace's account when that rep has none connected), with an AI-written note, within the account's daily limits; it stops when a limit is reached. Tasks close as sent."
                       confirmLabel="Approve & send all" onConfirm={() => sendAllInvites.mutate()}>
                       <CheckCheck className="size-3.5" /> Approve & send all
@@ -626,6 +646,7 @@ export default function TasksV2() {
                 <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={approveAll.isPending}
                   onClick={() => confirmAction({
                     title: `Approve all ${draftTasks.length} AI draft task${draftTasks.length === 1 ? "" : "s"}?`,
+                    count: { n: draftTasks.length, one: "draft task" },
                     description: "Every draft becomes an open task in your queue. Nothing is sent to anyone.",
                     confirmLabel: "Approve all", destructive: false,
                   }, () => approveAll.mutate())}>
@@ -747,7 +768,7 @@ export default function TasksV2() {
                     Create a task, or let AI find the next best actions for your top prospects.
                   </p>
                   <div className="flex items-center justify-center gap-2 mt-3">
-                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 10 })}><Sparkles className="size-3.5" /> Generate with AI</Button>
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending} onClick={askGenerate}><Sparkles className="size-3.5" /> Generate with AI</Button>
                     <Button size="sm" className="gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New task</Button>
                   </div>
                 </div>

@@ -360,11 +360,9 @@ export default function OpportunityDetail() {
 
   // A line changes the deal's amount, so the header and the boards re-read too.
   const lineItemsChanged = () => {
-    utils.opportunities.listLineItems.invalidate({ opportunityId: id });
-    utils.opportunities.getWithRelated.invalidate({ id });
-    utils.opportunities.board.invalidate();
+    invalidateDealReads(utils);
   };
-  const rolesChanged = () => utils.opportunities.getWithRelated.invalidate({ id });
+  const rolesChanged = () => invalidateDealReads(utils);
 
   const related = (
     <div className="space-y-6">

@@ -31,8 +31,8 @@ import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
-import { enrichFullyText } from "@shared/spendPreview";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,6 +118,24 @@ import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
+import { hasAnyParam, urlParam, useUrlState } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
+import { RecordCards } from "@/components/usip/RecordCards";
+import { SORT_FIELD_VALUES } from "@/components/usip/people/savedSearchConfig";
+
+/**
+ * The view in the address (audit 2026-10-20, U6): every filter, the sort, the
+ * page and the open person, so a refresh keeps the view and a copied link
+ * opens it for someone else. The first five keys are the deep links other
+ * pages already send (Data Health's cards, a company's "Open in People",
+ * the /contacts/:id redirect), unchanged.
+ */
+const PEOPLE_URL_KEYS = [
+  "emailStatus", "hasEmail", "missingEmail", "q", "companyId",
+  "verification", "promoted", "page", "title", "company", "location", "industry", "education", "linkedin",
+  "enrolled", "hasPhone", "hasLinkedin", "tier", "seniority", "sort", "dir", "person",
+] as const;
+const VIEW_FILTER_KEYS = PEOPLE_URL_KEYS.filter((k) => k !== "page" && k !== "person");
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -225,20 +243,17 @@ export default function People() {
   // Data Health's "Fix now" cards use these (they pointed at the retired
   // Contacts page before 2026-08-17).
   const urlParams = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
-  const [emailStatus, setEmailStatus] = useState<string>(urlParams?.get("emailStatus") ?? ""); // "" = any
-  const [hasEmail, setHasEmail] = useState(urlParams?.get("hasEmail") === "1");
-  const [missingEmail, setMissingEmail] = useState(urlParams?.get("missingEmail") === "1");
-  const [verification, setVerification] = useState<string>(""); // verified | needs_review | rejected
-  const [promoted, setPromoted] = useState<"all" | "promoted" | "not">("all");
+  const [emailStatus, setEmailStatus] = useUrlState("emailStatus", urlParam.string()); // "" = any
+  const [hasEmail, setHasEmail] = useUrlState("hasEmail", urlParam.bool());
+  const [missingEmail, setMissingEmail] = useUrlState("missingEmail", urlParam.bool());
+  const [verification, setVerification] = useUrlState("verification", urlParam.oneOf<string>(["", "verified", "needs_review", "rejected"], ""));
+  const [promoted, setPromoted] = useUrlState("promoted", urlParam.oneOf(["all", "promoted", "not"] as const, "all"));
   // One company's people: /v2/people?companyId=42, the company page's "Open in
   // People" (audit 2026-10-20, F36). A saved search can keep it, like any pill.
-  const [companyId, setCompanyId] = useState<number | null>(() => {
-    const n = Number(urlParams?.get("companyId") ?? "");
-    return Number.isInteger(n) && n > 0 ? n : null;
-  });
+  const [companyId, setCompanyId] = useUrlState("companyId", urlParam.id());
   const companyRecordQ = trpc.accounts.get.useQuery({ id: companyId ?? 0 }, { enabled: companyId != null, staleTime: 60_000 });
   const companyName = (companyRecordQ.data as { name?: string } | null | undefined)?.name ?? (companyId ? `Company #${companyId}` : "");
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useUrlState("page", urlParam.int(1));
   const perPage = 50;
 
   // ── client refinement filters (narrow the loaded page) ──
@@ -246,25 +261,22 @@ export default function People() {
   // redirect when a contact has no linked person yet — it lands here with the
   // name searched rather than dead-ending — and by anything else that wants
   // to deep-link into a filtered People list.
-  const [search, setSearch] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return new URLSearchParams(window.location.search).get("q") ?? "";
-  });
-  const [titleQ, setTitleQ] = useState("");
-  const [companyQ, setCompanyQ] = useState("");
-  const [locationQ, setLocationQ] = useState("");
-  const [industryQ, setIndustryQ] = useState("");
-  const [educationQ, setEducationQ] = useState("");
-  const [linkedinQ, setLinkedinQ] = useState("");
-  const [enrolled, setEnrolled] = useState<"all" | "yes" | "no">("all");
-  const [hasPhone, setHasPhone] = useState(false);
-  const [hasLinkedin, setHasLinkedin] = useState(false);
-  const [tiers, setTiers] = useState<Set<string>>(new Set());
-  const [seniorities, setSeniorities] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useUrlState("q", urlParam.string());
+  const [titleQ, setTitleQ] = useUrlState("title", urlParam.string());
+  const [companyQ, setCompanyQ] = useUrlState("company", urlParam.string());
+  const [locationQ, setLocationQ] = useUrlState("location", urlParam.string());
+  const [industryQ, setIndustryQ] = useUrlState("industry", urlParam.string());
+  const [educationQ, setEducationQ] = useUrlState("education", urlParam.string());
+  const [linkedinQ, setLinkedinQ] = useUrlState("linkedin", urlParam.string());
+  const [enrolled, setEnrolled] = useUrlState("enrolled", urlParam.oneOf(["all", "yes", "no"] as const, "all"));
+  const [hasPhone, setHasPhone] = useUrlState("hasPhone", urlParam.bool());
+  const [hasLinkedin, setHasLinkedin] = useUrlState("hasLinkedin", urlParam.bool());
+  const [tiers, setTiers] = useUrlState("tier", urlParam.set());
+  const [seniorities, setSeniorities] = useUrlState("seniority", urlParam.set());
 
   // ── sort (field + direction, applied by the Sort popover) ──
-  const [sortField, setSortField] = useState<SortField>("relevance");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [sortField, setSortField] = useUrlState<SortField>("sort", urlParam.oneOf(SORT_FIELD_VALUES, "relevance"));
+  const [sortDir, setSortDir] = useUrlState<SortDir>("dir", urlParam.oneOf(["asc", "desc"] as const, "desc"));
 
   // ── view / column state ──
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
@@ -284,7 +296,8 @@ export default function People() {
   // sent the user here promised. Seeding `viewRestored` true is how the
   // one-shot restore below is skipped without a second flag.
   const [viewRestored, setViewRestored] = useState(
-    !!(urlParams?.get("emailStatus") || urlParams?.get("missingEmail") || urlParams?.get("hasEmail") || urlParams?.get("q") || urlParams?.get("companyId")),
+    // Any view filter in the address counts: a shared or refreshed view (U6).
+    hasAnyParam(urlParams?.toString() ?? "", VIEW_FILTER_KEYS),
   );
 
   // ── view state ──
@@ -292,7 +305,8 @@ export default function People() {
   // Below md the filter rail is a sheet the toolbar's Filters button opens.
   const phone = useIsMobile();
   const [filtersSheet, setFiltersSheet] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // The open person is in the address too (?person=), so a link opens them.
+  const [selectedId, setSelectedId] = useUrlState("person", urlParam.id());
   const [photoBatchOpen, setPhotoBatchOpen] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
@@ -326,15 +340,19 @@ export default function People() {
 
   // Debounce the text filters so server queries fire after typing settles
   // (not per keystroke). Changing any text filter resets to page 1.
-  const [qText, setQText] = useState({
-    search: "", titleQ: "", companyQ: "", locationQ: "", industryQ: "", educationQ: "", linkedinQ: "",
-  });
+  // Seeded from the address, so a restored view's first query is the right one.
+  const [qText, setQText] = useState(() => ({ search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ }));
   useEffect(() => {
+    const next = { search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ };
+    // Unchanged (the first render, or a restored page): keep the page the
+    // address names instead of resetting it to 1 (U6).
+    if (JSON.stringify(next) === JSON.stringify(qText)) return;
     const t = setTimeout(() => {
-      setQText({ search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ });
+      setQText(next);
       setPage(1);
     }, 300);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, titleQ, companyQ, locationQ, industryQ, educationQ, linkedinQ]);
 
   // ── server query ──
@@ -394,7 +412,11 @@ export default function People() {
   // ignored them — a filter either narrows the whole view or it lies.
   const rows = pageRows;
 
-  const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
+  const onPage = useMemo(() => rows.find((r) => r.id === selectedId) ?? pageRows.find((r) => r.id === selectedId) ?? null, [rows, pageRows, selectedId]);
+  // A shared ?person= link names someone who may not be on this page: read
+  // them by id so the panel still opens on them (U6).
+  const linkedPersonQ = trpc.prospects.get.useQuery({ id: selectedId ?? 0 }, { enabled: selectedId != null && !onPage });
+  const selected = onPage ?? ((selectedId != null && linkedPersonQ.data ? linkedPersonQ.data : null) as Prospect | null);
 
   // Compact LinkedIn change indicators for the visible rows (batched — returns
   // only prospects that have unacknowledged updates, so the table stays light).
@@ -643,7 +665,12 @@ export default function People() {
   };
   const removeSavedSearch = (v: SavedView) => {
     if (v.system) return;
-    removeView.mutate({ id: Number(v.id) });
+    confirmAction({
+      title: `Delete the saved view "${v.name}"?`,
+      description: "The people in it are not affected.",
+      consequence: { kind: "permanent" },
+      confirmLabel: "Delete view",
+    }, () => removeView.mutate({ id: Number(v.id) }));
   };
 
   // One-shot restore: come back to the search you were last on. Derived from
@@ -1031,13 +1058,16 @@ export default function People() {
 
               <div className="flex-1" />
 
-              <ResearchAiMenu />
-              <CreateWorkflowMenu />
-              <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
-              <SortMenu current={{ field: sortField, dir: sortDir }} onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
-                <Settings2 className="size-4" /> Search settings
-              </Button>
+              {/* On a phone these fold into one More menu (audit U8). */}
+              <HeaderActions bare keep={0} label="More people actions">
+                <ResearchAiMenu />
+                <CreateWorkflowMenu />
+                <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
+                <SortMenu current={{ field: sortField, dir: sortDir }} onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
+                  <Settings2 className="size-4" /> Search settings
+                </Button>
+              </HeaderActions>
             </div>
 
             {/* selection action bar */}
@@ -1102,6 +1132,29 @@ export default function People() {
                   <p className="text-sm text-muted-foreground mt-1">Try loosening the filters on the left.</p>
                   <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear all filters</Button>
                 </div>
+              ) : phone ? (
+                // One card per person on a phone, from the table's own cells (audit U8).
+                <RecordCards
+                  label="People"
+                  rows={rows}
+                  rowKey={(p) => p.id}
+                  busy={isPlaceholderData}
+                  primary={(p) => COLUMN_REGISTRY.name.cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id), enrollments: enrollmentMap })}
+                  fields={visibleColumns.filter((k) => k !== "name").map((k) => ({
+                    key: k,
+                    label: COLUMN_REGISTRY[k].label,
+                    render: (p: Prospect) => COLUMN_REGISTRY[k].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id), enrollments: enrollmentMap }),
+                  }))}
+                  onOpen={(p) => setSelectedId(p.id)}
+                  selected={(p) => selectedId === p.id}
+                  checked={(p) => matchingAll || checked.has(p.id)}
+                  onCheck={(p) => (setMatchingAll(false), setChecked((prev) => {
+                    const next = new Set(prev);
+                    next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+                    return next;
+                  }))}
+                  checkLabel="Select person"
+                />
               ) : (
                 <table className={cn("w-full border-separate border-spacing-0 text-[13px] transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   {/* Sticky axes live on the CELLS (not thead/tr): every th is
@@ -1265,8 +1318,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
       );
       if (r.queuedLinkedInJob) toast("LinkedIn profile lookup queued — profile fields land shortly");
       // The person the run was for, from its own input (R95).
-      utils.prospects.get.invalidate({ id: vars.prospectId });
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
       utils.linkedinEnrichment.getProspectEnrichment.invalidate({ prospectId: vars.prospectId });
     },
     onError: (e2) => toast.error(e2.message),
@@ -1445,7 +1497,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           className="w-full gap-1.5"
           disabled={enrichFull.isPending}
           // What it can spend, said first (audit 2026-10-20, F8).
-          onClick={() => confirmAction({ title: `Enrich ${fullName || "this person"} fully?`, description: enrichFullyText(1, enrichBudgets.data), confirmLabel: "Spend and enrich" }, () => enrichFull.mutate({ prospectId: p.id }))}
+          onClick={() => confirmAction({ title: `Enrich ${fullName || "this person"} fully?`, cost: { kind: "enrichFully", people: 1, budgets: enrichBudgets.data }, confirmLabel: "Spend and enrich" }, () => enrichFull.mutate({ prospectId: p.id }))}
         >
           {enrichFull.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
           {enrichFull.isPending ? "Enriching…" : "Enrich fully (all sources)"}

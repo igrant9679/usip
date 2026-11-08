@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { ConfirmButton, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { pressable } from "@/lib/pressable";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type StepType = "email" | "wait" | "task";
@@ -194,7 +195,7 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                     <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600" title="They replied: pause them and file a task to follow up" onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })} disabled={pauseOnReply.isPending}>Mark replied</Button>
                   )}
                   {(e.status === "active" || e.status === "paused") && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => exit.mutate({ id: e.id })} disabled={exit.isPending}>Exit</Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => confirmAction({ title: "Take them out of this sequence?", consequence: { kind: "stops", what: "Their remaining steps", kept: "Steps already sent stay in their history" }, confirmLabel: "Exit" }, () => exit.mutate({ id: e.id }))} disabled={exit.isPending}>Exit</Button>
                   )}
                 </div>
               </li>
@@ -565,8 +566,7 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 
   const updateMeta = trpc.sequences.updateMeta.useMutation({
     onSuccess: () => {
-      utils.sequences.list.invalidate();
-      utils.sequences.get.invalidate({ id: seq.id });
+      invalidateSequenceReads(utils);
       toast.success("Sequence settings saved");
     },
     onError: (e) => toast.error(e.message),
@@ -574,8 +574,7 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
 
   const updateSteps = trpc.sequences.updateSteps.useMutation({
     onSuccess: () => {
-      utils.sequences.list.invalidate();
-      utils.sequences.get.invalidate({ id: seq.id });
+      invalidateSequenceReads(utils);
       // Clear the local dirty flag so the next live-query refresh
       // (carrying the just-saved data) hydrates the dialog. Without
       // this, the user's edits would stay frozen as "in-progress" and
@@ -730,23 +729,23 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
   );
 
   const createVariant = trpc.sequenceAb.create.useMutation({
-    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setAddOpen(false); toast.success("Variant added"); },
+    onSuccess: () => { invalidateSequenceReads(utils); setAddOpen(false); toast.success("Variant added"); },
     onError: (e) => toast.error(e.message),
   });
   const updateVariant = trpc.sequenceAb.update.useMutation({
-    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setEditVariant(null); toast.success("Variant updated"); },
+    onSuccess: () => { invalidateSequenceReads(utils); setEditVariant(null); toast.success("Variant updated"); },
     onError: (e) => toast.error(e.message),
   });
   const deleteVariant = trpc.sequenceAb.delete.useMutation({
-    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); toast.success("Variant deleted"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Variant deleted"); },
     onError: (e) => toast.error(e.message),
   });
   const promoteWinner = trpc.sequenceAb.promoteWinner.useMutation({
-    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); toast.success("Winner promoted!"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Winner promoted!"); },
     onError: (e) => toast.error(e.message),
   });
   const setMinSends = trpc.sequenceAb.setMinSends.useMutation({
-    onSuccess: () => { utils.sequenceAb.list.invalidate(); utils.sequenceAb.getStats.invalidate(); setMinSendsEditing(null); toast.success("Min-sends threshold saved"); },
+    onSuccess: () => { invalidateSequenceReads(utils); setMinSendsEditing(null); toast.success("Min-sends threshold saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -879,7 +878,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                             </Button>
                           )}
                           <Button aria-label="Edit variant" size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
-                          <Button aria-label="Delete variant" size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
+                          <Button aria-label="Delete variant" size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => confirmAction({ title: "Delete this variant?", description: "Its results so far go with it.", consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => deleteVariant.mutate({ id: v.id }))}><Trash2 className="size-3" /></Button>
                         </div>
                       </td>
                     </tr>
@@ -1160,18 +1159,18 @@ export default function Sequences() {
   const utils = trpc.useUtils();
   const { data, isLoading, isError, error } = trpc.sequences.list.useQuery();
   const create = trpc.sequences.create.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); setOpen(false); toast.success("Sequence created"); },
+    onSuccess: () => { invalidateSequenceReads(utils); setOpen(false); toast.success("Sequence created"); },
     onError: (e) => toast.error("Failed to create sequence", { description: e.message }),
   });
   // The detail pane reads sequences.get, so a status change invalidates it
   // too; it used to refresh only the list and the pane kept the old status (O37).
   const setStatus = trpc.sequences.setStatus.useMutation({
-    onSuccess: (_d, vars) => { utils.sequences.list.invalidate(); utils.sequences.get.invalidate({ id: vars.id }); },
+    onSuccess: (_d, vars) => { invalidateSequenceReads(utils); },
     onError: (e) => toast.error("Failed to change status", { description: e.message }),
   });
   const remove = trpc.sequences.delete.useMutation({
     onSuccess: (_d, vars) => {
-      utils.sequences.list.invalidate();
+      invalidateSequenceReads(utils);
       // Clear the right-pane selection if we just deleted what was open.
       if (selected === vars.id) setSelected(null);
       toast.success("Sequence deleted");
@@ -1262,7 +1261,7 @@ export default function Sequences() {
                       {detail.data.status === "active" ? <><Pause className="size-3.5" /> Pause</> : <><Play className="size-3.5" /> Activate</>}
                     </Button>
                     <Button size="sm" variant="ghost"
-                      onClick={() => setStatus.mutate({ id: detail.data!.id, status: "archived" })}>
+                      onClick={() => confirmAction({ title: `Archive "${detail.data!.name}"?`, description: "Everyone still enrolled is taken out for good. The sequence can be put back to draft, but they are not re-enrolled.", confirmLabel: "Archive" }, () => setStatus.mutate({ id: detail.data!.id, status: "archived" }))}>
                       <Power className="size-3.5" /> Archive
                     </Button>
                   </div>

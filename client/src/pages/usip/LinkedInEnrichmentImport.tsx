@@ -20,6 +20,7 @@ import { Shell } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
 import { confirmAction } from "@/components/usip/Common";
+import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -519,7 +520,14 @@ export default function LinkedInEnrichmentImport() {
                   size="sm"
                   className="h-7 gap-1.5"
                   disabled={!isManager || runMut.isPending || batchLive || (batchQ.data?.status === "completed")}
-                  onClick={() => runMut.mutate({ batchId })}
+                  onClick={() => confirmPaidLookup({
+                    title: `Look up ${counts.pending.toLocaleString()} LinkedIn profile${counts.pending === 1 ? "" : "s"}?`,
+                    vendor: "LinkedIn",
+                    count: counts.pending,
+                    unit: "profile lookup",
+                    note: "Lookups run at the pace the LinkedIn limits allow; what does not fit today continues tomorrow.",
+                    confirmLabel: "Run enrichment",
+                  }, () => runMut.mutate({ batchId }))}
                 >
                   {runMut.isPending || batchLive ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}
                   {batchQ.data?.status === "completed" ? "Completed" : batchLive ? "Running" : "Run enrichment"}

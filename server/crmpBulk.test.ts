@@ -157,8 +157,10 @@ describe("People's Enrich fully runs on the server (R66)", () => {
     expect(enrich).toContain("else enrichFullBulk.mutate({ ids: selectedIds });");
     expect(enrich).not.toContain("findContactInfoBatch");
     expect(enrich).not.toContain("const CHUNK = 10;");
-    // The spend is stated first, as before (F8).
-    expect(enrich).toContain("description: `${enrichFullyText(n, budgets.data)} It runs on the server in the background; you can leave this page.`,");
+    // The spend is stated first, as before (F8). 2026-11-08 (audit U5): as a
+    // typed cost the confirm words through enrichFullyText, with the count.
+    expect(enrich).toContain("cost: { kind: \"enrichFully\", people: n, budgets: budgets.data },");
+    expect(enrich).toContain("count: { n, one: \"person\", many: \"people\" },");
   });
 });
 

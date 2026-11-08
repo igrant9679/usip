@@ -29,6 +29,9 @@ import { Loader2, X } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ROLE_RANK, rankOf } from "@shared/roleRank";
 import { bulkActionNeedsManager } from "@shared/areProspectViews";
+import type { ConfirmFacts } from "@shared/confirmFacts";
+import { ConfirmFactList } from "@/components/usip/Common";
+import { invalidateCampaignReads, invalidateListReads } from "@/lib/entityCache";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
@@ -41,7 +44,13 @@ export interface BulkActionDef {
   label: string;
   icon?: ReactNode;
   variant?: "default" | "outline" | "secondary" | "ghost" | "destructive";
-  confirm?: { title: string; body: string; cta?: string };
+  /**
+   * `facts` adds the typed cost and consequence for n selected (audit U5); the
+   * count is always the selection. An action with neither `confirm` nor
+   * `params` runs on one click, so which ones may is pinned by a test
+   * (server/destructiveConfirm.test.ts).
+   */
+  confirm?: { title: string; body: string; cta?: string; facts?: (n: number) => Omit<ConfirmFacts, "count"> };
   params?: "reason" | "list" | "task" | "suppress" | "regenerate" | "timeline";
   /** Quick-pick chips for the reason prompt. */
   presets?: string[];
@@ -159,24 +168,8 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: pending?.params === "list" });
 
   const refreshAll = () => {
-    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-    utils.are.prospects.listSequences.invalidate();
-    utils.are.prospects.getRejectionStats.invalidate();
-    utils.are.execution.getQueue.invalidate();
-    utils.are.execution.getStepStates.invalidate();
-    utils.are.execution.getSignalLog.invalidate();
-    utils.are.engine.getLogs.invalidate();
-    utils.are.campaigns.get.invalidate({ id: campaignId });
-    utils.recordLists.list.invalidate();
-    // What a mass approve, reject or enrich also moves, and nothing refreshed
-    // (audit 2026-10-20, A74): "Approve all (N)", the stall panel, the step
-    // table, the signal badge, rows read by id, and the attention badge.
-    utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
-    utils.are.campaigns.stallReasons.invalidate({ campaignId });
-    utils.are.prospects.byIds.invalidate({ campaignId });
-    utils.are.prospects.getAbVariants.invalidate({ campaignId });
-    utils.are.execution.getSignalCounts.invalidate({ campaignId });
-    utils.attention.summary.invalidate();
+    invalidateCampaignReads(utils);
+    invalidateListReads(utils);
   };
   // A background run (LLM-backed actions above a small batch) finishes rows
   // one by one after the call returns; keep the tab fresh for a few minutes.
@@ -288,6 +281,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
           <AlertDialogHeader>
             <AlertDialogTitle>{pending?.confirm?.title}</AlertDialogTitle>
             <AlertDialogDescription>{pending?.confirm?.body.replace("{n}", String(n))}</AlertDialogDescription>
+            <ConfirmFactList count={{ n, one: "prospect" }} {...pending?.confirm?.facts?.(n)} />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Not now</AlertDialogCancel>
@@ -305,6 +299,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
             <DialogTitle>{pending?.label} — {n} prospect{n === 1 ? "" : "s"}</DialogTitle>
           </DialogHeader>
           {pending?.confirm && <p className="text-xs text-muted-foreground -mt-1">{pending.confirm.body.replace("{n}", String(n))}</p>}
+          {pending?.confirm?.facts && <ConfirmFactList {...pending.confirm.facts(n)} />}
           <div className="space-y-3 py-1">
             {pending?.params === "reason" && (
               <div className="space-y-1.5">

@@ -35,6 +35,7 @@ import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { toast } from "sonner";
 import { Plus, Star, Trash2, KanbanSquare, ChevronUp, ChevronDown, Check, X } from "lucide-react";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { invalidateDealReads } from "@/lib/entityCache";
 
 export default function SettingsPipelines() {
   const utils = trpc.useUtils();
@@ -58,7 +59,7 @@ export default function SettingsPipelines() {
   const setDefault = trpc.crmPipelines.setDefault.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Default updated"); }, onError: (e) => toast.error(e.message) });
   const deletePipeline = trpc.crmPipelines.deletePipeline.useMutation({
     onSuccess: (r) => {
-      invalidateAll(); utils.opportunities.board.invalidate(); setSelectedId(null); setPipelineDeleteOpen(false);
+      invalidateAll(); invalidateDealReads(utils); setSelectedId(null); setPipelineDeleteOpen(false);
       toast.success(r.moved ? `Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved` : "Deleted");
     },
     onError: (e) => toast.error(e.message),
@@ -68,7 +69,7 @@ export default function SettingsPipelines() {
   // The label editor closes on a saved label, and stays open on a refusal.
   const renameStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => { invalidateAll(); setEditingId(null); }, onError: (e) => toast.error(e.message) });
   const deleteStage = trpc.crmPipelines.deleteStage.useMutation({
-    onSuccess: (r) => { invalidateAll(); utils.opportunities.board.invalidate(); setStageToDelete(null); if (r.moved) toast.success(`Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved`); },
+    onSuccess: (r) => { invalidateAll(); invalidateDealReads(utils); setStageToDelete(null); if (r.moved) toast.success(`Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved`); },
     onError: (e) => toast.error(e.message),
   });
   const reorderStages = trpc.crmPipelines.reorderStages.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });

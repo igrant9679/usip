@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 type Targeting = { targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[]; keywords?: string[] };
 
@@ -30,9 +31,7 @@ export function CampaignProposals() {
   const q = trpc.are.campaigns.listProposals.useQuery({ limit: 10 }, { retry: false });
   const routing = trpc.are.campaigns.getRoutingSettings.useQuery(undefined, { retry: false });
   const refresh = () => {
-    utils.are.campaigns.listProposals.invalidate();
-    utils.are.campaigns.list.invalidate();
-    utils.attention.summary.invalidate();
+    invalidateCampaignReads(utils);
   };
   const decide = trpc.are.campaigns.decideProposal.useMutation({
     onSuccess: (r, vars) => {
@@ -91,6 +90,7 @@ export function CampaignProposals() {
           {rows.length > 0 && (
             <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 text-xs gap-1.5" disabled={pending}
               title={`Create all ${rows.length} proposed campaign${rows.length === 1 ? "" : "s"}?`}
+              count={{ n: rows.length, one: "proposed campaign" }}
               description="Each proposal becomes a draft campaign with its people queued. Nothing sends until you activate a campaign and approve its first batch."
               confirmLabel="Create all" onConfirm={() => acceptAll.mutate()}>
               {acceptAll.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Create all ({rows.length})

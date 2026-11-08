@@ -24,6 +24,7 @@ import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
 import { recentlyClosed, seesAllTasks, taskDueState, WORKABLE_TASK_STATUSES } from "@shared/taskRules";
 import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
+import { invalidateTaskReads } from "@/lib/entityCache";
 
 type TaskRow = {
   id: number;
@@ -108,10 +109,10 @@ export function RelatedTasks({ entityType, entityId }: { entityType: string; ent
   const { data: tasks } = trpc.tasks.list.useQuery({ relatedType: entityType, relatedId: entityId });
   const { data: members } = trpc.team.list.useQuery();
   const memberOpts = useMemo(() => (members ?? []).map((m: any) => ({ userId: m.userId as number, name: m.name as string | null })), [members]);
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate({ relatedType: entityType, relatedId: entityId }), onError: (e) => toast.error(e.message) });
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => invalidateTaskReads(utils), onError: (e) => toast.error(e.message) });
   const [open, setOpen] = useState(false);
   const create = trpc.tasks.create.useMutation({
-    onSuccess: () => { utils.tasks.list.invalidate({ relatedType: entityType, relatedId: entityId }); setOpen(false); toast.success("Task created"); },
+    onSuccess: () => { invalidateTaskReads(utils); setOpen(false); toast.success("Task created"); },
     onError: (e) => toast.error(e.message),
   });
   return (
@@ -186,9 +187,9 @@ export default function Tasks() {
   // Done tasks, latest first (R72); this tab never held cancelled ones.
   const done = useMemo(() => recentlyClosed(filtered.filter((t) => t.status === "done")), [filtered]);
 
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => invalidateTaskReads(utils), onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
-    onSuccess: () => { utils.tasks.list.invalidate(); setOpen(false); setRelated(null); toast.success("Task created"); },
+    onSuccess: () => { invalidateTaskReads(utils); setOpen(false); setRelated(null); toast.success("Task created"); },
     onError: (e) => toast.error(e.message),
   });
 

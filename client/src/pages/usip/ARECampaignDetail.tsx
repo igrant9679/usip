@@ -165,6 +165,9 @@ import { toast } from "sonner";
 import { pressable } from "@/lib/pressable";
 import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
+import { invalidateCampaignReads } from "@/lib/entityCache";
+import { urlParam, useUrlState, type UrlParam } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -291,12 +294,21 @@ const APPROVAL_POLL_MS = 15_000;
 const REJECT_TEMPLATES: string[] = [...PERSON_REJECT_PRESETS];
 
 /* ── Mass-action catalogues per tab (what each tab offers; the server owns what each does) ── */
+/** One ICP score per prospect (scoreIcpMatch: one AI call). */
+const RE_EVALUATE_CONFIRM: BulkActionDef["confirm"] = {
+  title: "Re-evaluate",
+  body: "{n} prospects are scored against the campaign's ICP again, and can move into or out of review.",
+  cta: "Re-evaluate",
+  facts: (n) => ({ cost: { kind: "ai", calls: n, what: "(one ICP score each)" } }),
+};
 const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [
-  { key: "approve", label: "Approve", icon: <CheckCircle2 className="size-3 text-emerald-600" /> },
+  // Approve, Enrich and Re-evaluate ask first (audit U5, X1.8): approval moves
+  // people toward outreach, and the other two spend.
+  { key: "approve", label: "Approve", icon: <CheckCircle2 className="size-3 text-emerald-600" />, confirm: { title: "Approve", body: "{n} prospects are approved for this campaign's outreach. If the campaign is active, the engine enrols them on a later cycle, within its daily send cap; nothing sends while it is paused.", cta: "Approve" } },
   { key: "reject", label: "Reject", icon: <XCircle className="size-3 text-destructive" />, params: "reason", presets: REJECT_TEMPLATES, confirm: { title: "Reject", body: "{n} prospects are marked rejected and leave the review queue.", cta: "Reject" } },
   { key: "skip", label: "Skip", title: "Skip without a reason (kept, not sequenced)" },
-  { key: "enrich", label: "Enrich", icon: <Sparkles className="size-3" />, title: "Run the enrich agent on each (may spend credits)" },
-  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, title: "Re-score ICP fit" },
+  { key: "enrich", label: "Enrich", icon: <Sparkles className="size-3" />, title: "Run the enrich agent on each (may spend credits)", confirm: { title: "Enrich", body: "The enrich agent runs on {n} prospects.", cta: "Spend and enrich", facts: (n) => ({ cost: { kind: "areEnrich", people: n } }) } },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, title: "Re-score ICP fit", confirm: RE_EVALUATE_CONFIRM },
   { key: "generateSequence", label: "Generate sequences", icon: <Sparkles className="size-3" />, params: "regenerate" },
   { key: "addToList", label: "Add to list", params: "list" },
   { key: "createTasks", label: "Create tasks", params: "task" },
@@ -305,7 +317,7 @@ const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [
 ];
 const SEQUENCE_TAB_ACTIONS: BulkActionDef[] = [
   { key: "pauseSequence", label: "Pause", icon: <Pause className="size-3 text-amber-600" /> },
-  { key: "resumeSequence", label: "Resume", icon: <Play className="size-3 text-emerald-600" /> },
+  { key: "resumeSequence", label: "Resume", icon: <Play className="size-3 text-emerald-600" />, confirm: { title: "Resume sequences", body: "{n} sequences resume: their next steps go out on the campaign's cadence, within its daily send cap and send window.", cta: "Resume" } },
   { key: "cancelSequence", label: "Cancel sequence", variant: "destructive", icon: <X className="size-3" />, params: "reason", confirm: { title: "Cancel sequences", body: "{n} sequences stop; pending steps are dropped, sent steps stay in history.", cta: "Cancel sequences" } },
   { key: "generateSequence", label: "Regenerate", icon: <Sparkles className="size-3" />, params: "regenerate" },
   { key: "addToList", label: "Add to list", params: "list" },
@@ -351,7 +363,7 @@ function sequenceTabActions(filter: FilterKey): BulkActionDef[] {
 }
 const REJECTION_TAB_ACTIONS: BulkActionDef[] = [
   { key: "restore", label: "Restore to pending", icon: <RefreshCcw className="size-3" />, params: "reason", confirm: { title: "Restore", body: "{n} rejected prospects go back to pending and are screened again by the engine.", cta: "Restore" } },
-  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" /> },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, confirm: RE_EVALUATE_CONFIRM },
   { key: "addToList", label: "Add to list", params: "list" },
   { key: "createTasks", label: "Create tasks", params: "task" },
   { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity.", cta: "Suppress" } },
@@ -403,40 +415,17 @@ function IcpRing({ score }: { score: number }) {
  * Using React Query cache invalidation (already in use via @trpc/react-
  * query) instead of a separate Zustand/Redux store — the cache IS the
  * global store, and adding a second one would create the disconnected-
- * data problem we're trying to fix. */
-function useCampaignSync(campaignId: number) {
+ * data problem we're trying to fix.
+ *
+ * 2026-11-08 (audit X1.7): the set is now the campaign family's helper,
+ * which invalidates every `are` read and the attention panel, so the hub,
+ * the approvals queue and the campaign list refresh too, not only this
+ * page's tabs. `campaignId` stays in the signature for the callers. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function useCampaignSync(_campaignId: number) {
   const utils = trpc.useUtils();
   return {
-    invalidateAll: () => {
-      // Per-prospect data
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-      utils.are.prospects.listSequences.invalidate({ campaignId });
-      // Rows read by id: the dossier of someone off this page, the funnel's list.
-      utils.are.prospects.byIds.invalidate({ campaignId });
-      // Inline sequence-progress timelines (per-step representative rows)
-      utils.are.execution.getStepStates.invalidate({ campaignId });
-      // Step-performance tab (was never being invalidated — root cause of
-      // the "A/B tab out of sync" report)
-      utils.are.prospects.getAbVariants.invalidate({ campaignId });
-      utils.are.prospects.getDispatches.invalidate({ campaignId });
-      utils.are.metrics.stepFunnel.invalidate({ campaignId });
-      // Logs tab
-      utils.are.engine.getLogs.invalidate({ campaignId });
-      utils.are.engine.lastTick.invalidate({ campaignId });
-      // Campaign-level (header counters)
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      // Rejection stats (used by Rejections tab)
-      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      // "Approve all (N)", the stall panel's gates and the dossier: each
-      // changes with an approve, a reject, an enrich or a generate, and none
-      // was refreshed after one (audit 2026-10-20, A74).
-      utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.are.prospects.getIntelligence.invalidate();
-      utils.are.execution.getSignalLog.invalidate({ campaignId });
-      utils.are.execution.getSignalCounts.invalidate({ campaignId });
-      utils.attention.summary.invalidate();
-    },
+    invalidateAll: () => invalidateCampaignReads(utils),
   };
 }
 
@@ -631,14 +620,14 @@ function ProspectRow({
         {p.enrichmentStatus === "pending" && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
             title="Enrich"
-            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            onClick={() => confirmAction({ title: "Enrich this prospect?", cost: { kind: "areEnrich", people: 1 }, confirmLabel: "Spend and enrich", destructive: false }, () => enrich.mutate({ prospectId: p.id }))} disabled={enrich.isPending}>
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}
           </Button>
         )}
         {p.enrichmentStatus === "failed" && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-amber-600 hover:text-amber-700"
             title="Retry enrichment"
-            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            onClick={() => confirmAction({ title: "Enrich this prospect?", cost: { kind: "areEnrich", people: 1 }, confirmLabel: "Spend and enrich", destructive: false }, () => enrich.mutate({ prospectId: p.id }))} disabled={enrich.isPending}>
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
           </Button>
         )}
@@ -703,7 +692,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
   // and only while their @name is still in the note.
   const [mentioned, setMentioned] = useState<Map<number, string>>(new Map());
 
-  const invalidate = () => utils.are.prospects.listNotes.invalidate({ prospectId });
+  const invalidate = () => invalidateCampaignReads(utils);
 
   const addNote = trpc.are.prospects.addNote.useMutation({
     onSuccess: () => { setDraft(""); setMentioned(new Map()); invalidate(); },
@@ -1024,7 +1013,7 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
     await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
     toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
     setDrafts({});
-    await utils.are.campaigns.get.invalidate({ id: campaignId });
+    await invalidateCampaignReads(utils);
   };
   const save = async () => {
     try {
@@ -1109,6 +1098,16 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
 const FILTERS = ["all", "enrolled", "paused", "approved", "pending", "canceled", "completed", "replied"] as const;
 type FilterKey = typeof FILTERS[number];
 
+/** The campaign page's tabs, as ?tab= takes them (audit U6). */
+const CAMPAIGN_TABS = ["prospects", "scraper", "sequences", "ab", "signals", "settings", "rejections", "logs"] as const;
+type CampaignTab = typeof CAMPAIGN_TABS[number];
+const isCampaignTab = (t: string): t is CampaignTab => (CAMPAIGN_TABS as readonly string[]).includes(t);
+/** ?enrich= is one enrichment state, or absent for any. */
+const ENRICH_PARAM: UrlParam<EnrichmentState | null> = {
+  parse: (r) => ((ENRICHMENT_STATES as readonly string[]).includes(r ?? "") ? (r as EnrichmentState) : null),
+  format: (v) => v,
+};
+
 function StatusBadgeMini({ status }: { status: string }) {
   const s = STATUS_STYLE[status] ?? STATUS_STYLE.pending;
   return <Badge className={`text-[10px] ${s.cls}`}>{s.label}</Badge>;
@@ -1118,10 +1117,11 @@ function StatusBadgeMini({ status }: { status: string }) {
 type SequenceFocus = { prospectId: number; search: string; nonce: number };
 
 function SequencesTab({ campaignId, campaign, focus, onOpenSettings }: { campaignId: number; campaign: any; focus?: SequenceFocus | null; onOpenSettings?: () => void }) {
-  const [filter, setFilter] = useState<FilterKey>("enrolled");
-  const [search, setSearch] = useState("");
+  // The Sequences tab's filter, search and page in the address too (U6).
+  const [filter, setFilter] = useUrlState<FilterKey>("seq", urlParam.oneOf(FILTERS, "enrolled"));
+  const [search, setSearch] = useUrlState("seqq", urlParam.string());
   const searchQ = useDebouncedValue(search.trim());
-  const [seqPage, setSeqPage] = useState(1);
+  const [seqPage, setSeqPage] = useUrlState("seqpage", urlParam.int(1));
   useClearOnChange({ filter, searchQ }, () => setSeqPage(1));
   // A page of the filter, and the counts for every filter, from the server
   // (A44). This asked for 500 rows with every full sequence, then counted
@@ -1645,7 +1645,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   const follow = useFollowRun(runId, (run) => {
     const s = runSummary(run);
     if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });
-    utils.are.engine.getLogs.invalidate({ campaignId });
+    invalidateCampaignReads(utils);
     utils.discovery.getLogsForCampaign.invalidate({ campaignId });
   });
   const followed = follow.query.data as { id: number; status: string } | undefined;
@@ -2261,7 +2261,9 @@ function ARECampaignDetailPage() {
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
   // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
-  const [tab, setTab] = useState("prospects");
+  // In the address (?tab=, audit U6): a refresh or a link opens the same tab.
+  const [tab, setTabState] = useUrlState("tab", urlParam.oneOf(CAMPAIGN_TABS, "prospects"));
+  const setTab = (t: string) => setTabState(isCampaignTab(t) ? t : "prospects");
   /**
    * Each tab's queries start the first time it is opened (audit 2026-10-20,
    * U24). The page used to read the signal feed, the step table, every
@@ -2286,16 +2288,17 @@ function ARECampaignDetailPage() {
   // leaves the list instead of riding along with the next batch (tracker
   // 12). View, enrichment state and search are the server's (tracker 13,
   // A45): statusCounts counts what list returns for the same filter.
-  const [prospectView, setProspectView] = useState<ProspectView>("review");
-  const [enrichFilter, setEnrichFilter] = useState<EnrichmentState | null>(null);
-  const [prospectSearch, setProspectSearch] = useState("");
+  // View, enrichment state, search and page in the address (audit U6).
+  const [prospectView, setProspectView] = useUrlState<ProspectView>("view", urlParam.oneOf(PROSPECT_VIEW_KEYS, "review"));
+  const [enrichFilter, setEnrichFilter] = useUrlState<EnrichmentState | null>("enrich", ENRICH_PARAM);
+  const [prospectSearch, setProspectSearch] = useUrlState("q", urlParam.string());
   const prospectSearchQ = useDebouncedValue(prospectSearch.trim());
   const prospectFilter = {
     view: prospectView,
     ...(enrichFilter ? { enrichmentStatus: enrichFilter } : {}),
     ...(prospectSearchQ ? { search: prospectSearchQ } : {}),
   };
-  const [prospectPage, setProspectPage] = useState(1);
+  const [prospectPage, setProspectPage] = useUrlState("page", urlParam.int(1));
   useClearOnChange(prospectFilter, () => setProspectPage(1));
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
     { campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
@@ -2470,7 +2473,7 @@ function ARECampaignDetailPage() {
         : `Re-evaluated ${done} prospects — none met the threshold (${reEvalJob.threshold}).`,
     );
     if (j.status === "done" && done > 0 && j.requalified === 0) setShowIcpSuggestion(true);
-    utils.are.prospects.getReevalHistory.invalidate({ campaignId });
+    invalidateCampaignReads(utils);
     invalidateCampaign();
   }, [reEvalJobState]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hiding the button is UX; the boundary is the gate on the query itself.
@@ -2495,12 +2498,14 @@ function ARECampaignDetailPage() {
 
   // ?prospect=<id> opens that prospect's dossier (audit 2026-10-20, A49):
   // mention notices and /are/prospects/:id link here, and nothing read it.
-  const linkedProspectId = (() => {
-    const v = Number(new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("prospect"));
-    return Number.isInteger(v) && v > 0 ? v : null;
-  })();
+  // Since U6 the open dossier IS the parameter: opening one writes it, closing
+  // removes it, so a refresh or a copied link opens the same dossier.
+  const [linkedProspectId, setLinkedProspectId] = useUrlState("prospect", urlParam.id());
   const [selectedProspectId, setSelectedProspectId] = useState<number | null>(linkedProspectId);
-  const [dossierOpen, setDossierOpen] = useState(linkedProspectId !== null);
+  useEffect(() => { if (linkedProspectId !== null) setSelectedProspectId(linkedProspectId); }, [linkedProspectId]);
+  const dossierOpen = linkedProspectId !== null;
+  const setDossierOpen = (open: boolean) => setLinkedProspectId(open ? selectedProspectId : null);
+  const openDossier = (id: number) => { setSelectedProspectId(id); setLinkedProspectId(id); };
   // A prospect who is not on the loaded page (a link, the funnel, Rejections)
   // is read by id, so the dossier opens on them instead of "No prospect selected".
   const selectedOnPage = (prospects ?? []).some((p) => p.id === selectedProspectId);
@@ -2529,28 +2534,18 @@ function ARECampaignDetailPage() {
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
-  // URL-persisted reason filter
+  // URL-persisted reason and kind filters, through the shared hook since U6.
   const [location, setLocation] = useLocation();
-  const urlParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-  const [reasonFilter, setReasonFilterState] = useState<string | null>(
-    urlParams.get("reason") || null
-  );
+  const [reasonParam, setReasonParam] = useUrlState("reason", urlParam.string());
+  const reasonFilter = reasonParam || null;
   // One page of the rejected, for the reason picked (A44): the server
   // filters and pages; this tab used to render every rejection at once.
-  const [rejPage, setRejPage] = useState(1);
+  const [rejPage, setRejPage] = useUrlState("rpage", urlParam.int(1));
   // Who or what rejected them (F19), URL-persisted like the reason.
-  const [kindFilter, setKindFilterState] = useState<RejectionKind | null>(() => {
-    const k = urlParams.get("kind");
-    return isRejectionKind(k) ? k : null;
+  const [kindFilter, setKindFilter] = useUrlState<RejectionKind | null>("kind", {
+    parse: (k) => (isRejectionKind(k) ? k : null),
+    format: (k) => k,
   });
-  const setKindFilter = (k: RejectionKind | null) => {
-    setKindFilterState(k);
-    const params = new URLSearchParams(window.location.search);
-    if (k) params.set("kind", k);
-    else params.delete("kind");
-    const newSearch = params.toString();
-    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
-  };
   useClearOnChange({ reasonFilter, kindFilter }, () => setRejPage(1));
   const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
     { campaignId, reason: reasonFilter, kind: kindFilter, page: rejPage, perPage: REJECTION_PAGE },
@@ -2561,21 +2556,7 @@ function ARECampaignDetailPage() {
   // Mass-action selection over the rejections on this page.
   const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number }>).map((item) => item.id), [rejectionStats]);
   const rejSel = useRowSelection(rejectionIds);
-  const setReasonFilter = (r: string | null) => {
-    setReasonFilterState(r);
-    const params = new URLSearchParams(window.location.search);
-    if (r) params.set("reason", r);
-    else params.delete("reason");
-    const newSearch = params.toString();
-    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
-  };
-  // Sync reasonFilter from URL on mount
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const r = p.get("reason");
-    if (r !== reasonFilter) setReasonFilterState(r);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const setReasonFilter = (r: string | null) => setReasonParam(r ?? "");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
   // The dossier's "Open in Sequences" (U23).
   const [seqFocus, setSeqFocus] = useState<SequenceFocus | null>(null);
@@ -2628,7 +2609,7 @@ function ARECampaignDetailPage() {
   const saveCopy = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Copy settings saved");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
+      invalidateCampaignReads(utils);
       setCopyDraft(null);
       setFixedDraft(null);
     },
@@ -2643,12 +2624,7 @@ function ARECampaignDetailPage() {
   const updateCampaign = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Campaign settings saved");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      // The cap, the target and the sources are what the stall panel and the
-      // source health read (A74).
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
-      utils.are.campaigns.list.invalidate();
+      invalidateCampaignReads(utils);
       setThresholdDraft(undefined);
       setMinConfDraft(null);
       setS2oEnabled(null);
@@ -2668,11 +2644,7 @@ function ARECampaignDetailPage() {
       setRespacePlan(plan);
       if (plan.applied) {
         toast.success(`Moved ${plan.rowsMoved} pending step${plan.rowsMoved === 1 ? "" : "s"} across ${plan.prospectsTouched} prospect${plan.prospectsTouched === 1 ? "" : "s"} onto the ${plan.gapDays}-day cadence`);
-        utils.are.campaigns.get.invalidate({ id: campaignId });
-        utils.are.execution.getQueue.invalidate();
-        // Moved steps are what the Sequences tab's timelines draw (A74).
-        utils.are.execution.getStepStates.invalidate({ campaignId });
-        utils.are.campaigns.stallReasons.invalidate({ campaignId });
+        invalidateCampaignReads(utils);
       }
     },
     onError: (e) => toast.error(e.message),
@@ -2733,11 +2705,7 @@ function ARECampaignDetailPage() {
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: (_r, vars) => {
       toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate();
-      // "Campaign not active" is the stall panel's first answer (A74).
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.attention.summary.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
@@ -2753,24 +2721,21 @@ function ARECampaignDetailPage() {
   const archiveCampaign = trpc.are.campaigns.archive.useMutation({
     onSuccess: (r) => {
       toast.success(r.paused ? "Campaign paused and archived. Nothing more is sent from it." : "Campaign archived.");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const unarchiveCampaign = trpc.are.campaigns.unarchive.useMutation({
     onSuccess: () => {
       toast.success("Campaign unarchived. Activate it when you are ready.");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const cloneCampaign = trpc.are.campaigns.clone.useMutation({
     onSuccess: (r) => {
       toast.success(`"${r.name}" created as a draft. Nothing runs until you activate it.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       setLocation(`/are/campaigns/${r.id}`);
     },
     onError: (e) => toast.error(e.message),
@@ -2778,7 +2743,7 @@ function ARECampaignDetailPage() {
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: (r) => {
       toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       setLocation("/are/campaigns");
     },
     onError: (e) => toast.error(e.message),
@@ -2837,8 +2802,7 @@ function ARECampaignDetailPage() {
       toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
       invalidateCampaign();
       // The job it ran is the first row of "Recent scrape jobs" (A74).
-      utils.are.scraper.listJobs.invalidate({ campaignId });
-      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2935,7 +2899,8 @@ function ARECampaignDetailPage() {
               : `Window ${capAndWindow.data.sending.windowDescription} (${capAndWindow.data.sending.windowOpen ? "open now" : "closed now"})`}
           </span>
         )}
-        {campaign.status === "active" ? (
+        {/* On a phone Clone, Archive and Delete fold into More; the status button stays (audit U8). */}
+        <HeaderActions keep={0} label="More campaign actions" pinnedAt="start" pinned={campaign.status === "active" ? (
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
             onClick={() => setStatus.mutate({ id: campaignId, status: "paused" })}
             disabled={setStatus.isPending}>
@@ -2954,7 +2919,7 @@ function ARECampaignDetailPage() {
             {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
             Activate
           </Button>
-        )}
+        )}>
         {/* Lifecycle (F15): clone as a draft, archive instead of delete, delete for admins. */}
         <Button size="sm" variant="ghost" className="gap-1.5 text-xs" disabled={cloneCampaign.isPending}
           title="Copy this campaign's setup into a new draft"
@@ -2984,6 +2949,7 @@ function ARECampaignDetailPage() {
             <Trash2 className="size-3.5" />
           </Button>
         )}
+        </HeaderActions>
       </PageHeader>
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
@@ -3111,7 +3077,13 @@ function ARECampaignDetailPage() {
                 </Button>
                 <Button
                   size="sm" variant="outline" className="gap-1.5 text-xs"
-                  onClick={() => enrichBatch.mutate({ campaignId, limit: 20 })}
+                  onClick={() => confirmAction({
+                    title: `Enrich the next ${Math.min(20, pendingEnrich)} pending ${Math.min(20, pendingEnrich) === 1 ? "prospect" : "prospects"}?`,
+                    count: { n: Math.min(20, pendingEnrich), one: "prospect" },
+                    cost: { kind: "areEnrich", people: Math.min(20, pendingEnrich) },
+                    confirmLabel: "Spend and enrich",
+                    destructive: false,
+                  }, () => enrichBatch.mutate({ campaignId, limit: 20 }))}
                   disabled={enrichBatch.isPending || pendingEnrich === 0}
                 >
                   {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
@@ -3120,6 +3092,7 @@ function ARECampaignDetailPage() {
                 {(approvable.data?.count ?? 0) > 0 && (
                   <ConfirmButton size="sm" variant="default" destructive={false} className="gap-1.5 text-xs" disabled={approveAllPending.isPending}
                     title={`Approve all ${approvable.data?.count} enriched ${approvable.data?.count === 1 ? "person" : "people"} in this campaign?`}
+                    count={{ n: approvable.data?.count ?? 0, one: "person", many: "people" }}
                     description={campaign?.status === "active"
                       ? "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. The engine writes their sequences and starts sending on the campaign's cadence within its daily cap."
                       : "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. Nothing sends while the campaign is not active."}
@@ -3229,7 +3202,7 @@ function ARECampaignDetailPage() {
                       <ProspectRow
                         p={p}
                         campaignId={campaignId}
-                        onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); setDossierTab("intel"); }}
+                        onSelect={(id) => { openDossier(id); setDossierTab("intel"); }}
                         selected={selectedProspectId === p.id}
                         onReject={setRejectTarget}
                       />
@@ -4565,7 +4538,7 @@ function ARECampaignDetailPage() {
                   return (
                     <div key={r.id}
                       className={`px-3 py-2 flex items-center gap-2 text-xs hover:bg-muted/40 cursor-pointer ${funnelSel.isSelected(r.id) ? "bg-primary/5" : ""}`}
-                      {...pressable(() => { setSelectedProspectId(r.id); setDossierOpen(true); setDossierTab("intel"); })}
+                      {...pressable(() => { openDossier(r.id); setDossierTab("intel"); })}
                     >
                       <span onClick={(e) => e.stopPropagation()} className="shrink-0">
                         <Checkbox checked={funnelSel.isSelected(r.id)} onCheckedChange={() => funnelSel.toggle(r.id)} aria-label="Select" />

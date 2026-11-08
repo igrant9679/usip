@@ -25,6 +25,7 @@ import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { isAdminRole } from "@shared/roleRank";
 import { CURRENCY_OPTIONS, MONTH_NAMES } from "@shared/revenueSettings";
 import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWindow, normalizeSendWindow, parseSendDays } from "@shared/sendWindow";
+import { invalidateDealReads, invalidatePeopleReads } from "@/lib/entityCache";
 
 /**
  * The workspace send window (owner ask 2026-09-25: "give me the ability to
@@ -234,7 +235,7 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
       // amount re-reads them.
       if (vars.fiscalYearStartMonth !== undefined || vars.currency !== undefined) {
         utils.settings.revenue.invalidate();
-        utils.opportunities.invalidate();
+        invalidateDealReads(utils);
         utils.quota.invalidate();
       }
       toast.success("Settings saved");
@@ -1137,7 +1138,12 @@ function IntegrationsTab() {
                       <>
                         <Button size="sm" variant="outline" onClick={() => openConfig(provider)}>Configure</Button>
                         {row && (
-                          <Button aria-label={`Remove ${provider}`} size="sm" variant="ghost" className="text-destructive" onClick={() => removeMut.mutate({ provider })}>
+                          <Button aria-label={`Remove ${provider}`} size="sm" variant="ghost" className="text-destructive" onClick={() => confirmAction({
+                            title: `Remove ${meta.name}?`,
+                            description: "Its saved settings and keys are deleted; anything that uses it stops until it is configured again.",
+                            consequence: { kind: "permanent" },
+                            confirmLabel: "Remove",
+                          }, () => removeMut.mutate({ provider }))}>
                             <Trash2 className="size-3.5" />
                           </Button>
                         )}
@@ -1850,7 +1856,7 @@ function EnrichmentTab({ canEdit }: { canEdit: boolean }) {
   const utils = trpc.useUtils();
   const statusQ = trpc.prospects.sweepStatus.useQuery();
   const saveMut = trpc.prospects.setSweepSettings.useMutation({
-    onSuccess: () => { utils.prospects.sweepStatus.invalidate(); toast.success("Enrichment settings saved"); },
+    onSuccess: () => { invalidatePeopleReads(utils); toast.success("Enrichment settings saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -2174,7 +2180,15 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
               <Button
                 size="sm"
                 disabled={!transferUserId || transferMut.isPending}
-                onClick={() => transferMut.mutate({ newOwnerUserId: Number(transferUserId) })}
+                // Asked first, naming who (audit U5, X1.8).
+                onClick={() => {
+                  const to = activeMembers.find((m) => String(m.userId) === transferUserId);
+                  confirmAction({
+                    title: `Make ${to?.name ?? "this member"} the workspace owner?`,
+                    description: "They become the owner and a super admin straight away. You keep your own role.",
+                    confirmLabel: "Transfer ownership",
+                  }, () => transferMut.mutate({ newOwnerUserId: Number(transferUserId) }));
+                }}
               >
                 {transferMut.isPending ? <Loader2 className="size-4 animate-spin" /> : "Confirm"}
               </Button>

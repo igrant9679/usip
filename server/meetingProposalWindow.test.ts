@@ -158,7 +158,8 @@ describe("the queue is regenerated", () => {
 
   it("the page offers the attended pass and reports what is left", () => {
     expect(page).toContain("trpc.meetings.regenerateAllOutdated.useMutation");
-    expect(page).toContain("onClick={() => regenerateAllOutdated.mutate()}");
+    // 2026-11-08 (audit U5): behind a confirm that states its AI calls.
+    expect(page).toContain("onConfirm={() => regenerateAllOutdated.mutate()}");
     expect(page).toContain("still outdated — click again");
     expect(page).not.toContain("regenerateAllExpired");
   });

@@ -79,8 +79,10 @@ describe("U24: a tab's queries wait for the tab", () => {
     expect(p).toContain('const [openedTabs, setOpenedTabs] = useState<ReadonlySet<string>>(() => new Set(["prospects"]));');
     expect(p).toContain("const opened = (t: string) => validId && (tab === t || openedTabs.has(t));");
     // The tab state is declared before the first query that reads it.
-    expect(p.indexOf('const [tab, setTab] = useState("prospects");')).toBeLessThan(p.indexOf("trpc.are.prospects.list.useQuery("));
-    expect(p.indexOf('const [tab, setTab] = useState("prospects");')).toBeGreaterThan(-1);
+    // 2026-11-08 (audit U6): it is kept in ?tab= through the shared hook.
+    const firstQuery = p.indexOf("trpc.are.prospects.list.useQuery(");
+    expect(firstQuery).toBeGreaterThan(-1);
+    expect(p.slice(0, firstQuery)).toContain('const [tab, setTabState] = useUrlState("tab", urlParam.oneOf(CAMPAIGN_TABS, "prospects"));');
   });
 
   for (const [query, tabKey] of [
@@ -131,19 +133,16 @@ describe("U24: a tab's queries wait for the tab", () => {
 
 describe("A74: every action refreshes what it changed", () => {
   it("the one sync covers the counts, Approve all, the stall panel, rows by id and the dossier", () => {
-    const sync = block(detail(), "function useCampaignSync(campaignId: number) {", "/* ─── Prospect row");
-    for (const k of [
-      "utils.are.prospects.list.invalidate()",
-      "utils.are.prospects.statusCounts.invalidate()",
-      "utils.are.prospects.byIds.invalidate({ campaignId })",
-      "utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId })",
-      "utils.are.campaigns.stallReasons.invalidate({ campaignId })",
-      "utils.are.prospects.getIntelligence.invalidate()",
-      "utils.are.prospects.getDispatches.invalidate({ campaignId })",
-      "utils.are.metrics.stepFunnel.invalidate({ campaignId })",
-      "utils.are.execution.getSignalCounts.invalidate({ campaignId })",
-      "utils.attention.summary.invalidate()",
-    ]) expect(sync).toContain(k);
+    // 2026-11-08 (audit X1.7): the sync is the campaign family's helper. It
+    // invalidates every `are` read (the counts, Approve all, the stall panel,
+    // rows by id, the dossier, dispatches, the funnel, signals) and the
+    // attention panel, for every screen, not only this page's tabs.
+    const sync = block(detail(), "function useCampaignSync(_campaignId: number) {", "/* ─── Prospect row");
+    expect(sync).toContain("invalidateAll: () => invalidateCampaignReads(utils)");
+    const helper = read("client/src/lib/entityCache.ts");
+    const fn = block(helper, "export function invalidateCampaignReads(", "\n}\n");
+    expect(fn).toContain("utils.are.invalidate()");
+    expect(fn).toContain("utils.attention.summary.invalidate()");
   });
 
   it("approve all, re-evaluate, enrich batch, import, add existing and scrape go through it", () => {
@@ -155,23 +154,26 @@ describe("A74: every action refreshes what it changed", () => {
     expect(p).toContain("onPushed={invalidateCampaign}");
     const scrape = block(p, "const scrape = trpc.are.scraper.run.useMutation({", "onError:");
     expect(scrape).toContain("invalidateCampaign();");
-    expect(scrape).toContain("utils.are.scraper.listJobs.invalidate({ campaignId });");
+    // 2026-11-08 (audit X1.7): scrape jobs are an `are` read the helper covers.
+    expect(scrape).toContain("invalidateCampaignReads(utils);");
   });
 
   it("a settings save, a status change and a re-space refresh the stall panel", () => {
     const p = detail();
-    expect(block(p, "const updateCampaign = trpc.are.campaigns.update.useMutation({", "onError:")).toContain("utils.are.campaigns.stallReasons.invalidate({ campaignId });");
-    expect(block(p, "const setStatus = trpc.are.campaigns.setStatus.useMutation({", "onError:")).toContain("utils.are.campaigns.stallReasons.invalidate({ campaignId });");
+    // 2026-11-08 (audit X1.7): each through the campaign family's helper,
+    // which covers the stall panel and the step states with every `are` read.
+    expect(block(p, "const updateCampaign = trpc.are.campaigns.update.useMutation({", "onError:")).toContain("invalidateCampaignReads(utils);");
+    expect(block(p, "const setStatus = trpc.are.campaigns.setStatus.useMutation({", "onError:")).toContain("invalidateCampaignReads(utils);");
     const respace = block(p, "const respace = trpc.are.campaigns.respaceSteps.useMutation({", "onError:");
-    expect(respace).toContain("utils.are.execution.getStepStates.invalidate({ campaignId });");
+    expect(respace).toContain("invalidateCampaignReads(utils);");
   });
 
   it("the shared bulk bar refreshes Approve all, the stall panel and rows by id", () => {
     const bar = read("client/src/components/usip/AreBulkActionBar.tsx");
     const refresh = block(bar, "const refreshAll = () => {", "};");
-    expect(refresh).toContain("utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });");
-    expect(refresh).toContain("utils.are.campaigns.stallReasons.invalidate({ campaignId });");
-    expect(refresh).toContain("utils.are.prospects.byIds.invalidate({ campaignId });");
+    // 2026-11-08 (audit X1.7): the campaign family's helper covers all three.
+    expect(refresh).toContain("invalidateCampaignReads(utils);");
+    expect(refresh).toContain("invalidateListReads(utils);");
   });
 
   it("the sequence drawer's edits refresh every tab, not only its own list", () => {

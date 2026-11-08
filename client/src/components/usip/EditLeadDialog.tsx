@@ -11,12 +11,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LEAD_EDIT_STATUSES, leadEditPatch, type LeadEditValues } from "@/lib/leadEdit";
+import { invalidateLeadReads } from "@/lib/entityCache";
 
 export function EditLeadDialog({ lead, open, onOpenChange, onSaved }: { lead: any; open: boolean; onOpenChange: (v: boolean) => void; onSaved?: () => void }) {
   const utils = trpc.useUtils();
   const { data: members = [] } = trpc.workspace.members.useQuery(undefined, { enabled: open });
   const updateMut = trpc.leads.update.useMutation({
-    onSuccess: () => { toast.success("Lead updated"); utils.leads.invalidate(); onSaved?.(); onOpenChange(false); },
+    onSuccess: () => { toast.success("Lead updated"); invalidateLeadReads(utils); onSaved?.(); onOpenChange(false); },
     onError: (e: any) => toast.error(e.message),
   });
   const converted = lead?.status === "converted";

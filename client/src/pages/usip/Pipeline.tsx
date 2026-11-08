@@ -33,7 +33,8 @@ import { confirmAction } from "@/components/usip/Common";
 import { WonConfetti } from "@/components/usip/WonConfetti";
 import { ANALYZE_LIMIT, CLOSE_RANGE_OPTIONS, DEAL_AUTOPILOT_MODES, closeRangeFrom, dealAnalyzeToast, type CloseRangeValue } from "@/lib/dealAutopilot";
 import { toast } from "sonner";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useLocation } from "wouter";
+import { urlParam, useUrlState } from "@/lib/urlState";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { csvCell } from "@shared/csvCell";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
@@ -494,19 +495,19 @@ export default function Pipeline() {
   // ?owner=<userId>, the rep drill-down from Dashboard and Forecast. From
   // useSearch (audit 2026-10-20, R30): memoised on wouter's location, which is
   // the path only, "Clear filter" changed the query string and nothing re-read it.
-  const search = useSearch();
-  const ownerUserId = useMemo(() => {
-    const v = new URLSearchParams(search).get("owner");
-    return v ? Number(v) : undefined;
-  }, [search]);
+  // 2026-11-08 (audit U6): ?owner= and ?close= keep their names and links,
+  // now read and written through the shared URL-state hook with the view,
+  // the pipeline and the open deal, so a refresh or a copied link restores
+  // the whole board. Each setter keeps every other parameter.
+  const [ownerParam, setOwnerParam] = useUrlState("owner", urlParam.id());
+  const ownerUserId = ownerParam ?? undefined;
   // ?close=, the close-date filter (U13): one of dealAutopilot's ranges.
-  const closeRange = useMemo(() => closeRangeFrom(new URLSearchParams(search).get("close")), [search]);
+  const [closeParam, setCloseParam] = useUrlState("close", urlParam.string());
+  const closeRange = useMemo(() => closeRangeFrom(closeParam || null), [closeParam]);
   /** Set or clear one filter in the URL, keeping the others (owner and close are links). */
   const setFilterParam = (key: "owner" | "close", value: string | null) => {
-    const p = new URLSearchParams(search);
-    if (value) p.set(key, value); else p.delete(key);
-    const qs = p.toString();
-    navigate(qs ? `/pipeline?${qs}` : "/pipeline");
+    if (key === "owner") setOwnerParam(value ? Number(value) : null);
+    else setCloseParam(value ?? "");
   };
   const { data: team } = trpc.team.list.useQuery();
   const owners = useMemo(() => ((team ?? []) as Array<{ userId: number; name: string | null; deactivatedAt?: unknown }>).filter((m) => !m.deactivatedAt), [team]);
@@ -524,14 +525,15 @@ export default function Pipeline() {
 
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set());
-  const [view, setView] = useState<"board" | "forecast">("board");
+  const [view, setView] = useUrlState("view", urlParam.oneOf(["board", "forecast"] as const, "board"));
 
   // Multi-pipeline support: list available pipelines, default to the workspace's
   // default. Persist the selection in URL so a refresh keeps the user on the same
   // pipeline.
   const { data: pipelines } = trpc.crmPipelines.list.useQuery();
   const defaultPipelineId = useMemo(() => pipelines?.find((p) => p.isDefault)?.id ?? pipelines?.[0]?.id, [pipelines]);
-  const [selectedPipelineId, setSelectedPipelineId] = useState<number | undefined>(undefined);
+  const [pipelineParam, setSelectedPipelineId] = useUrlState("pipeline", urlParam.id());
+  const selectedPipelineId = pipelineParam ?? undefined;
   const pipelineId = selectedPipelineId ?? defaultPipelineId;
   const STAGES = useStagesFor(pipelineId);
   const pipelineName = pipelines?.find((p) => p.id === pipelineId)?.name;
@@ -560,8 +562,7 @@ export default function Pipeline() {
 
   const generateIntel = trpc.oppIntelligence.generateIntelligence.useMutation({
     onSuccess: (_data, vars) => {
-      utils.oppIntelligence.getIntelligenceForBoard.invalidate();
-      utils.opportunities.board.invalidate();
+      invalidateDealReads(utils);
       setAnalyzingIds((prev) => { const next = new Set(prev); next.delete(vars.opportunityId); return next; });
       toast.success("AI analysis complete");
     },
@@ -605,7 +606,7 @@ export default function Pipeline() {
       {
         onSettled: () => {
           setAcceptingIds((prev) => { const next = new Set(prev); next.delete(opportunityId); return next; });
-          utils.oppIntelligence.getIntelligenceForBoard.invalidate();
+          invalidateDealReads(utils);
         },
       },
     );
@@ -627,11 +628,20 @@ export default function Pipeline() {
       if (STAGES.find((s) => s.id === vars.stage)?.isWon) { setCelebrate(Date.now()); setTimeout(() => setCelebrate(0), 1800); }
       invalidateDealReads(utils);
     },
-    onSettled: () => utils.opportunities.board.invalidate(),
+    // A failed move re-reads the board it optimistically changed; a good one
+    // already refreshed every deal read in onSuccess (X1.7).
+    onSettled: (_d, err) => { if (err) invalidateDealReads(utils); },
   });
 
   const [addOpen, setAddOpen] = useState(false);
-  const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  // The open deal is ?deal= (U6): opening writes it, closing removes it, so a
+  // link opens the same deal. The card's name and line ride along in state.
+  const [dealParam, setDealParam] = useUrlState("deal", urlParam.id());
+  const [drawerMeta, setDrawerMeta] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  const drawer = dealParam != null
+    ? { id: dealParam, name: drawerMeta?.id === dealParam ? drawerMeta.name : "Deal", subtitle: drawerMeta?.id === dealParam ? drawerMeta.subtitle : undefined }
+    : null;
+  const setDrawer = (d: { id: number; name: string; subtitle: string } | null) => { setDrawerMeta(d); setDealParam(d ? d.id : null); };
   const [celebrate, setCelebrate] = useState(0);
 
   /* ── From /v2/deals (U13): the Deal Autopilot, the header numbers, the AI
@@ -645,7 +655,7 @@ export default function Pipeline() {
   // Analyze runs in Approve mode whatever the setting: drafts, not deal edits (R43).
   const analyze = trpc.deals.analyzeAll.useMutation({
     onSuccess: (r) => {
-      utils.opportunities.board.invalidate();
+      invalidateDealReads(utils);
       toast.success(dealAnalyzeToast(r), r.tasksCreated > 0 ? { action: { label: "Review", onClick: () => navigate("/v2/tasks") } } : undefined);
     },
     onError: (e) => toast.error(e.message),
@@ -736,6 +746,8 @@ export default function Pipeline() {
           title={`Drafts a next step and win probability for up to ${ANALYZE_LIMIT} open deals, as tasks for you to review. Deals are not changed.`}
           onClick={() => confirmAction({
             title: `Analyze up to ${ANALYZE_LIMIT} open deals with AI?`,
+            count: { n: ANALYZE_LIMIT, one: "open deal", upTo: true },
+            cost: { kind: "ai", calls: ANALYZE_LIMIT, what: "at most, one per deal" },
             description: `One AI call per deal, up to ${ANALYZE_LIMIT}, counted in this workspace's AI spend (Settings → Billing and credits) and held to its caps. Each result is a draft task for you to review in Tasks; no deal is changed.`,
             confirmLabel: "Analyze",
             destructive: false,
@@ -795,7 +807,7 @@ export default function Pipeline() {
             {CLOSE_RANGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           {(ownerUserId || closeRange) && (
-            <button type="button" className="text-muted-foreground underline hover:text-foreground" onClick={() => navigate("/pipeline")}>Clear filters</button>
+            <button type="button" className="text-muted-foreground underline hover:text-foreground" onClick={() => { setOwnerParam(null); setCloseParam(""); }}>Clear filters</button>
           )}
         </div>
 

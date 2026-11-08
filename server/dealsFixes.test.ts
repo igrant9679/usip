@@ -313,8 +313,10 @@ describe("L7, R66: a board reads one pipeline's deals", () => {
 describe("R30: the owner filter clears, and a move updates the board on screen", () => {
   it("reads ?owner= from useSearch, and every cache call uses the board's own input", () => {
     const page = read("client/src/pages/usip/Pipeline.tsx");
-    expect(page).toContain("const search = useSearch();");
-    expect(page).toContain("new URLSearchParams(search).get(\"owner\")");
+    // 2026-11-08 (audit U6): ?owner= through the shared URL-state hook, which
+    // reads wouter's useSearch (the R30 fix) and writes with a replace.
+    expect(page).toContain('const [ownerParam, setOwnerParam] = useUrlState("owner", urlParam.id());');
+    expect(read("client/src/lib/urlState.ts")).toContain("const search = useSearch();");
     expect(page).not.toContain("window.location.search");
     const move = page.slice(page.indexOf("const setStage = trpc.opportunities.setStage.useMutation({"), page.indexOf("const [addOpen, setAddOpen]"));
     // 2026-11-08 (CONB, U13): the board's cache key is boardQueryInput (the

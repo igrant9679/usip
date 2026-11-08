@@ -39,7 +39,7 @@ import {
   ExternalLink, Ban,
 } from "lucide-react";
 import { EMAIL_SOURCES, emailSourceLabel, type EmailFeedRow } from "@shared/emailActivity";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { AiComposeDialog, DraftEditorTools } from "@/components/usip/emails/DraftEditorTools";
 import { pressable } from "@/lib/pressable";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
@@ -324,6 +324,18 @@ export default function EmailsV2() {
   // sequence drafts, or both. Any other chip (crm, inbound…) has no drafts.
   const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
+  // A row's Send emails a prospect: asked first, naming who (audit U5, X1.8).
+  const askSend = (row: { draftId?: number | null; toEmail?: string | null; subject?: string | null }) => {
+    if (!row.draftId) return;
+    const id = row.draftId;
+    confirmAction({
+      title: `Send this email${row.toEmail ? ` to ${row.toEmail}` : ""}?`,
+      description: row.subject ? `"${row.subject}"` : undefined,
+      consequence: { kind: "sends", channel: "email", n: 1 },
+      confirmLabel: "Send",
+      destructive: false,
+    }, () => send.mutate({ id }));
+  };
   // "Send All Approved" from the retired drafts pages — workspace-wide. Each
   // draft goes the way its own Send would (deliverEmailDraft, O47), at most 25
   // a run, oldest first (O16): say what is left rather than imply it all went.
@@ -471,6 +483,7 @@ export default function EmailsV2() {
               </span>
               <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAll.isPending}
                 title={`Approve all ${approveAllSource === "ai_draft" ? "AI Pipeline" : approveAllSource === "sequence" ? "sequence" : "awaiting"} drafts?`}
+                count={{ n: awaitingScoped, one: "draft" }}
                 description={`Every draft still waiting for review in this workspace is marked approved — not only the rows on this page. This step emails nobody, and auto-send does not pick up approved drafts: each goes when someone presses its Send${isAdmin ? " or Send approved" : " (or an admin presses Send approved)"}.`}
                 confirmLabel="Approve all" onConfirm={() => approveAll.mutate({ source: approveAllSource })}>
                 <Check className="size-3.5 text-emerald-500" /> Approve all
@@ -558,7 +571,9 @@ export default function EmailsV2() {
                 return (
                   <div
                     key={row.key}
-                    className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer"
+                    // On a phone the status and Send/Approve wrap under the subject
+                    // instead of squeezing it to a few letters (audit U8).
+                    className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer"
                     {...pressable(() => setSelected(row))}
                   >
                     <span
@@ -573,7 +588,7 @@ export default function EmailsV2() {
                         : pending ? <Clock className="size-3.5" />
                         : <Icon className="size-3.5" />}
                     </span>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-[calc(100%-2.75rem)] sm:basis-0">
                       <div className="text-sm font-medium truncate">{row.subject || "(no subject)"}</div>
                       <div className="text-[11px] text-muted-foreground truncate">
                         {row.direction === "inbound" ? "from " : "to "}{who || "unknown recipient"}
@@ -599,7 +614,7 @@ export default function EmailsV2() {
                     </span>
                     {pending && row.draftId && (
                       <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <Button size="sm" variant="outline" className="h-7 gap-1" disabled={send.isPending} onClick={() => send.mutate({ id: row.draftId! })}><Send className="size-3.5" /> Send</Button>
+                        <Button size="sm" variant="outline" className="h-7 gap-1" disabled={send.isPending} onClick={() => askSend(row)}><Send className="size-3.5" /> Send</Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Approve (sends nothing; it then waits for Send, and auto-send skips it)" aria-label="Approve" onClick={() => approve.mutate({ id: row.draftId! })}><Check className="size-4 text-emerald-500" /></Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Reject" onClick={() => reject.mutate({ id: row.draftId! })}><X className="size-4 text-muted-foreground" /></Button>
                         {/* The full editor (subject A/B, research context, regenerate)
@@ -608,7 +623,7 @@ export default function EmailsV2() {
                     )}
                     {row.status === "approved" && row.draftId && (
                       <div onClick={(e) => e.stopPropagation()}>
-                        <Button size="sm" variant="outline" className="h-7 gap-1 shrink-0" disabled={send.isPending} onClick={() => send.mutate({ id: row.draftId! })}><Send className="size-3.5" /> Send</Button>
+                        <Button size="sm" variant="outline" className="h-7 gap-1 shrink-0" disabled={send.isPending} onClick={() => askSend(row)}><Send className="size-3.5" /> Send</Button>
                       </div>
                     )}
                   </div>

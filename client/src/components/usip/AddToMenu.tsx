@@ -26,6 +26,7 @@ import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { PUSH_BATCH, pushChunks } from "@/lib/pushChunks";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { invalidateCampaignReads, invalidateListReads, invalidatePeopleReads } from "@/lib/entityCache";
 
 export interface AddToMenuProps {
   prospectIds?: number[];
@@ -59,8 +60,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
 
   const close = () => { setOpen(false); go("root"); onDone?.(); };
   const invalidatePeople = () => {
-    utils.prospects.enrollmentsFor.invalidate();
-    utils.prospects.list.invalidate();
+    invalidatePeopleReads(utils);
   };
 
   // A campaign takes 100 people a call, so more go in batches, one after
@@ -95,7 +95,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     }
     if (failed && n > PUSH_BATCH) toast.error(`Stopped after ${added.length + skipped.length} of ${n}; the rest were not added.`);
     invalidatePeople();
-    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+    invalidateCampaignReads(utils);
     if (!failed) close();
   };
   const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
@@ -124,7 +124,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
       if (r.added > 0) toast.success(`Added ${r.added} to their best-fit campaign${r.added === 1 ? "" : "s"} — the engine will enrich and write their emails`);
       if (r.skipped > 0) toast.info(`${r.skipped} skipped (already in outreach or unidentifiable)`);
       invalidatePeople();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+      invalidateCampaignReads(utils);
       close();
     },
     onError: (e: any) => toast.error(e.message),
@@ -133,7 +133,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     onSuccess: (r: any) => {
       const name = lists.find((l) => l.id === listId)?.name ?? "the list";
       toast.success(r.added > 0 ? `Added ${r.added} to "${name}"` : `Already in "${name}"`);
-      utils.recordLists.list.invalidate();
+      invalidateListReads(utils);
       close();
     },
     onError: (e: any) => toast.error(e.message),

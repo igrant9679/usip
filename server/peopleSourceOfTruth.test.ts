@@ -75,8 +75,10 @@ describe("the People email-status filter matches what is stored", () => {
     expect(page).not.toContain('{ v: "unavailable"');
   });
   it("is seedable from the URL, so Data Health can deep-link into it", () => {
-    expect(page).toContain('urlParams?.get("emailStatus")');
-    expect(page).toContain('urlParams?.get("missingEmail") === "1"');
+    // 2026-11-08 (audit U6): read and written through the shared URL-state
+    // hook, under the same keys, so Data Health's links land as before.
+    expect(page).toContain('useUrlState("emailStatus", urlParam.string())');
+    expect(page).toContain('useUrlState("missingEmail", urlParam.bool())');
     expect(page).toContain("hasEmail: missingEmail ? false : (hasEmail || undefined)");
   });
 });

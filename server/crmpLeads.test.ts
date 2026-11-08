@@ -256,7 +256,8 @@ describe("one company's People (F36)", () => {
 
   it("People reads ?companyId=, shows it as a removable filter, and the company page links to it", () => {
     const src = read("client/src/pages/usip/People.tsx");
-    expect(src).toContain(`const n = Number(urlParams?.get("companyId") ?? "");`);
+    // 2026-11-08 (audit U6): read (and written) through the shared URL-state hook.
+    expect(src).toContain(`const [companyId, setCompanyId] = useUrlState("companyId", urlParam.id());`);
     expect(block(src, "const listQuery = {", "};")).toContain("companyId: companyId ?? undefined,");
     expect(src).toContain(`case "companyId": setCompanyId(null); resetPage(); break;`);
     expect(read("client/src/pages/usip/CompanyProfile.tsx")).toContain("setLocation(`/v2/people?companyId=${id}`)");

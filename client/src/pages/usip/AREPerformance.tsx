@@ -331,6 +331,7 @@ export default function AREPerformance() {
                     {recRows.length > 0 && (
                       <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={approveAll.isPending || approve.isPending}
                         title={`Apply all ${recRows.length} recommendation${recRows.length === 1 ? "" : "s"}?`}
+                        count={{ n: recRows.length, one: "recommendation" }}
                         description="Applicable changes are made to your live sequences now (each is reversible from History); advisory ones are recorded as accepted. Nothing is sent by this step."
                         confirmLabel="Apply all" onConfirm={() => approveAll.mutate({ ids: recRows.map((r) => r.id) })}>
                         <Check className="size-3.5" /> Apply all ({recRows.length})

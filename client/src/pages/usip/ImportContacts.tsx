@@ -41,6 +41,7 @@ import {
 import { pressable } from "@/lib/pressable";
 import { confirmAction } from "@/components/usip/Common";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 /* ─── System fields ──────────────────────────────────────────────────────────
  * Imported, not mirrored. This file used to declare its own copy under a comment
@@ -1226,7 +1227,7 @@ function UndoImportButton({ importId, onUndone }: { importId: number; onUndone?:
       toast.success(`Import undone: ${s.removedPeople + s.removedContacts} record${s.removedPeople + s.removedContacts === 1 ? "" : "s"} removed${s.removedCompanies ? `, ${s.removedCompanies} compan${s.removedCompanies === 1 ? "y" : "ies"}` : ""}`, {
         description: s.keptInUse ? `${s.keptInUse} kept: promoted, enrolled, in a campaign or on a deal since the import.` : undefined,
       });
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
       onUndone?.();
     },
     onError: (e) => toast.error(e.message),

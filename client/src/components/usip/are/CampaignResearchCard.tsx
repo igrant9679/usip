@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { neverTargetFromOverrides } from "@shared/researchTargeting";
 import { useRegisterDraft } from "./settingsDrafts";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 const NONE = "none";
 
@@ -30,7 +31,7 @@ export function CampaignResearchCard({ campaignId, campaign }: { campaignId: num
     onError: (e) => toast.error(e.message),
     onSuccess: async () => {
       toast.success("Saved — new sequences use this research; regenerate existing ones to apply it");
-      await utils.are.campaigns.get.invalidate({ id: campaignId });
+      await invalidateCampaignReads(utils);
     },
   });
 

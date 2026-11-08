@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { invalidateLeadReads } from "@/lib/entityCache";
 
 type Converted = { accountId: number; contactId: number; opportunityId: number | null };
 
@@ -56,8 +57,7 @@ export function ConvertLeadDialog({
 
   const convert = trpc.leads.convert.useMutation({
     onSuccess: (r) => {
-      utils.leads.invalidate();
-      utils.leads.get.invalidate();
+      invalidateLeadReads(utils);
       utils.workspace.summary.invalidate();
       toast.success(r.opportunityId ? "Converted — deal created" : "Converted");
       onOpenChange(false);

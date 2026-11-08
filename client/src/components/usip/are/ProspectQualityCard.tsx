@@ -19,6 +19,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmButton } from "@/components/usip/Common";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -129,11 +130,13 @@ export function ProspectQualityCard() {
   const canFix = rankOf(current?.role) >= ROLE_RANK.manager;
   const [report, setReport] = useState<ReconcileReportData | null>(null);
   const audit = trpc.are.prospects.audit.useQuery(undefined, { refetchOnWindowFocus: false });
+  const utils = trpc.useUtils();
   const reconcile = trpc.are.prospects.reconcile.useMutation({
     onSuccess: (r) => {
       setReport(r);
       toast.success(reconcileReportLines(r).summary + " The report is on the data-quality card.", { duration: 8000 });
-      audit.refetch();
+      // Reconcile moves prospects between states across campaigns (X1.7).
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
+import { invalidateDealReads, invalidateMeetingReads } from "@/lib/entityCache";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
 import { storedAttendees } from "@shared/calendarAttendees";
@@ -55,12 +56,14 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
   const [refreshToken, setRefreshToken] = useState("");
   const [calendarId, setCalendarId] = useState("primary");
 
+  // A calendar change shows on My Calendar, Meetings and the attention panel (X1.7).
+  const utils = trpc.useUtils();
   const connectCalDAV = trpc.calendar.connectCalDAV.useMutation({
-    onSuccess: () => { toast.success("Calendar connected"); onClose(); },
+    onSuccess: () => { toast.success("Calendar connected"); invalidateMeetingReads(utils); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   const connectOutlookOAuth = trpc.calendar.connectOutlookOAuth.useMutation({
-    onSuccess: () => { toast.success("Outlook Calendar connected"); onClose(); },
+    onSuccess: () => { toast.success("Outlook Calendar connected"); invalidateMeetingReads(utils); onClose(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -225,16 +228,17 @@ function EventDialog({
 
   const [aiSummary, setAiSummary] = useState<string | null>(event?.aiSummary ?? null);
 
+  const utils = trpc.useUtils();
   const createEvent = trpc.calendar.createEvent.useMutation({
-    onSuccess: () => { toast.success("Event created"); onClose(); },
+    onSuccess: () => { toast.success("Event created"); invalidateMeetingReads(utils); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   const updateEvent = trpc.calendar.updateEvent.useMutation({
-    onSuccess: () => { toast.success("Event updated"); onClose(); },
+    onSuccess: () => { toast.success("Event updated"); invalidateMeetingReads(utils); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   const deleteEvent = trpc.calendar.deleteEvent.useMutation({
-    onSuccess: () => { toast.success("Event deleted"); onClose(); },
+    onSuccess: () => { toast.success("Event deleted"); invalidateMeetingReads(utils); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   const [showOppPicker, setShowOppPicker] = useState(false);
@@ -256,6 +260,9 @@ function EventDialog({
   const pushSummary = trpc.calendar.pushSummaryToOpportunity.useMutation({
     onSuccess: (data) => {
       toast.success(`Summary pushed to "${data.opportunityName}"`);
+      // The summary lands on the deal's timeline, and the event keeps it.
+      invalidateDealReads(utils);
+      invalidateMeetingReads(utils);
       setShowOppPicker(false);
       setSelectedOppId(null);
     },
@@ -382,7 +389,12 @@ function EventDialog({
         <DialogFooter className="gap-2">
           {event && (
             <Button variant="destructive" size="sm"
-              onClick={() => deleteEvent.mutate({ accountId, calendarId, externalId: event.externalId, dbId: event.id })}
+              onClick={() => confirmAction({
+                title: `Delete "${event.title || "this event"}"?`,
+                description: "It is deleted from the connected calendar too, which may send its attendees a cancellation.",
+                consequence: { kind: "permanent" },
+                confirmLabel: "Delete event",
+              }, () => deleteEvent.mutate({ accountId, calendarId, externalId: event.externalId, dbId: event.id }))}
               disabled={isLoading}
             >
               <Trash2 className="size-3.5 mr-1" /> Delete
@@ -477,12 +489,13 @@ export default function CalendarPage() {
     setSelectedCalendarId(primary.id ?? "primary");
   }, [calendarsForAccount, selectedAccountId, user?.id]);
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
+  const utils = trpc.useUtils();
   const syncEvents = trpc.calendar.syncEvents.useMutation({
-    onSuccess: (d) => { toast.success(`Synced ${d.synced} events`); refetchEvents(); },
+    onSuccess: (d) => { toast.success(`Synced ${d.synced} events`); invalidateMeetingReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const disconnectAccount = trpc.calendar.disconnectAccount.useMutation({
-    onSuccess: () => { toast.success("Calendar disconnected"); refetchAccounts(); },
+    onSuccess: () => { toast.success("Calendar disconnected"); invalidateMeetingReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 

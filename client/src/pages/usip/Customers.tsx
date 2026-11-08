@@ -96,6 +96,7 @@ export default function Customers() {
             disabled={resetCs.isPending}
             ariaLabel="Delete every customer-success record for this workspace"
             title="Reset ALL customer-success data?"
+            count={{ n: list?.length ?? 0, one: "customer record" }}
             description={`This deletes every customer, QBR, support ticket, and contract amendment (${list?.length ?? 0} customer records). The underlying accounts, contacts, and opportunities stay intact. This cannot be undone.`}
             confirmLabel="Reset CS data"
           >

@@ -544,12 +544,12 @@ export default function Dashboards() {
                     </div>
                     <div className="text-muted-foreground mt-0.5 truncate">{(s.recipients as string[]).join(", ")}</div>
                     <div className="mt-1 flex gap-1">
-                      <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => sendNow.mutate({ id: s.id })}>Send now</Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => confirmAction({ title: "Send this export now?", description: (s.recipients as string[]).join(", "), consequence: { kind: "sends", channel: "report email", n: (s.recipients as string[]).length }, confirmLabel: "Send now", destructive: false }, () => sendNow.mutate({ id: s.id }))}>Send now</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={toggleSched.isPending}
                         onClick={() => toggleSched.mutate({ id: s.id, enabled: s.enabled === false })}>
                         {s.enabled === false ? "Resume" : "Pause"}
                       </Button>
-                      <Button aria-label="Delete schedule" size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={() => delSched.mutate({ id: s.id })}>
+                      <Button aria-label="Delete schedule" size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={() => confirmAction({ title: "Delete this scheduled export?", description: "Its recipients stop getting it. Pause keeps it instead.", consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => delSched.mutate({ id: s.id }))}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>
@@ -615,7 +615,7 @@ export default function Dashboards() {
                           widgetId={w.id}
                           filters={filters}
                           customizeMode={customizeMode}
-                          onRemove={() => delW.mutate({ id: w.id })}
+                          onRemove={() => confirmAction({ title: "Remove this widget?", consequence: { kind: "permanent", what: "The widget and its settings" }, confirmLabel: "Remove" }, () => delW.mutate({ id: w.id }))}
                           onRename={(title) => setRenamingWidget({ id: w.id, title })}
                         />
                       </div>

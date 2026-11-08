@@ -15,6 +15,7 @@ import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { cn } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -65,6 +66,7 @@ import {
 import { QueryError } from "@/components/usip/Shell";
 import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 import { formatAmount } from "@shared/money";
+import { invalidateListReads } from "@/lib/entityCache";
 
 // The shared compact format (R98); a dash for no amount.
 function fmtMoney(n: number) {
@@ -92,7 +94,7 @@ export default function ListDetail() {
   const isCompanies = list?.entityType === "companies";
   const { enrichList, running: enriching } = useEnrichJob();
 
-  const refreshMembers = () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); };
+  const refreshMembers = () => { invalidateListReads(utils); };
   // Remove said nothing and could not be undone (audit 2026-10-20, P139).
   const putBackMut = trpc.recordLists.addMembers.useMutation({
     onSuccess: (res) => { refreshMembers(); toast.success(res.added ? "Put back on the list" : addedSummary(res)); },
@@ -121,7 +123,7 @@ export default function ListDetail() {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const renameMut = trpc.recordLists.update.useMutation({
-    onSuccess: () => { utils.recordLists.get.invalidate({ id }); utils.recordLists.list.invalidate(); setEditingName(false); toast.success("List renamed"); },
+    onSuccess: () => { invalidateListReads(utils); setEditingName(false); toast.success("List renamed"); },
     onError: (e) => toast.error(e.message),
   });
   const saveName = () => {
@@ -135,7 +137,7 @@ export default function ListDetail() {
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
   const descMut = trpc.recordLists.update.useMutation({
-    onSuccess: () => { utils.recordLists.get.invalidate({ id }); utils.recordLists.list.invalidate(); setEditingDesc(false); toast.success("Description saved"); },
+    onSuccess: () => { invalidateListReads(utils); setEditingDesc(false); toast.success("Description saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -380,7 +382,7 @@ export default function ListDetail() {
                   />
                 )}
                 <Button size="sm" variant="outline" className="h-7 gap-1.5 text-destructive" disabled={removeManyMut.isPending}
-                  onClick={() => removeManyMut.mutate({ listId: id, memberIds: Array.from(selected) })}>
+                  onClick={() => confirmAction({ title: `Remove ${selected.size} from this list?`, description: "Only the list changes; nobody is deleted.", count: { n: selected.size, one: "member" }, consequence: { kind: "reversible", undo: "add them to the list again" }, confirmLabel: "Remove" }, () => removeManyMut.mutate({ listId: id, memberIds: Array.from(selected) }))}>
                   {removeManyMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} Remove {selected.size} from list
                 </Button>
               </div>

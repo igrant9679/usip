@@ -702,9 +702,18 @@ function ScheduleDialog({ report, onClose }: { report: Record<string, any> | nul
             <Button
               variant="outline" size="sm" className="gap-1.5"
               disabled={sendNow.isPending || !recipients.trim()}
-              onClick={async () => {
-                await setSchedule.mutateAsync({ id: report.id, freq: freq as never, recipients });
-                sendNow.mutate({ id: report.id });
+              onClick={() => {
+                const to = recipients.split(/[,;\s]+/).filter(Boolean);
+                confirmAction({
+                  title: "Send this report now?",
+                  description: to.join(", "),
+                  consequence: { kind: "sends", channel: "report email", n: to.length },
+                  confirmLabel: "Send now",
+                  destructive: false,
+                }, async () => {
+                  await setSchedule.mutateAsync({ id: report.id, freq: freq as never, recipients });
+                  sendNow.mutate({ id: report.id });
+                });
               }}
             >
               {sendNow.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Send now

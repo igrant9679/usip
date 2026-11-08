@@ -167,7 +167,7 @@ export default function DealsV2() {
   // Analyze runs in Approve mode whatever the setting: drafts, not deal edits (R43).
   const analyze = trpc.deals.analyzeAll.useMutation({
     onSuccess: (r) => {
-      utils.opportunities.board.invalidate();
+      invalidateDealReads(utils);
       toast.success(analyzeToast(r), r.tasksCreated > 0 ? { action: { label: "Review", onClick: () => navigate("/v2/tasks") } } : undefined);
     },
     onError: (e) => toast.error(e.message),

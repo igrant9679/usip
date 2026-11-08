@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
-import { ConfirmButton, fmtDate, StatusPill } from "./Common";
+import { ConfirmButton, confirmAction, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { RichTextEditor } from "./RichTextEditor";
@@ -27,6 +27,7 @@ import { tablistProps, tabProps } from "@/lib/tabs";
 import { AccountBriefPanel } from "./company/AccountBriefPanel";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
 import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
+import { invalidateCompanyReads, invalidateLeadReads, invalidatePeopleReads } from "@/lib/entityCache";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -43,7 +44,7 @@ const DISPOSITIONS = [
 function LeadScorePanel({ leadId }: { leadId: number }) {
   const utils = trpc.useUtils();
   const { data: bd, isLoading } = trpc.leadScoring.breakdown.useQuery({ leadId });
-  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.invalidate(); toast.success("Re-scored"); }, onError: (e) => toast.error(e.message) });
+  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); invalidateLeadReads(utils); toast.success("Re-scored"); }, onError: (e) => toast.error(e.message) });
   const [openSec, setOpenSec] = useState<"firmo" | "behav" | "ai" | null>("firmo");
   if (isLoading || !bd) return <div className="text-sm text-muted-foreground py-6 flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading score…</div>;
   const tier = bd.tier as string;
@@ -124,15 +125,15 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
   const { data: coOwners = [] } = trpc.oppIntelligence.getCoOwners.useQuery({ opportunityId });
   const { data: members = [] } = trpc.workspace.members.useQuery();
   const generate = trpc.oppIntelligence.generateIntelligence.useMutation({
-    onSuccess: () => { utils.oppIntelligence.getIntelligence.invalidate({ opportunityId }); toast.success("Intelligence refreshed"); },
+    onSuccess: () => { invalidateDealReads(utils); toast.success("Intelligence refreshed"); },
     onError: (e) => toast.error(e.message),
   });
   const addCoOwner = trpc.oppIntelligence.addCoOwner.useMutation({
-    onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+    onSuccess: () => invalidateDealReads(utils),
     onError: (e) => toast.error(e.message),
   });
   const removeCoOwner = trpc.oppIntelligence.removeCoOwner.useMutation({
-    onSuccess: () => utils.oppIntelligence.getCoOwners.invalidate({ opportunityId }),
+    onSuccess: () => invalidateDealReads(utils),
     onError: (e) => toast.error(e.message),
   });
   const [section, setSection] = useState<"nba" | "signals" | "actions" | "email" | "history" | "owners">("nba");
@@ -288,7 +289,7 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
           {(coOwners as any[]).map((m: any) => (
             <div key={m.userId} className="flex items-center justify-between rounded border bg-card px-3 py-2">
               <span className="text-sm">{m.name ?? m.email}</span>
-              <Button size="sm" variant="ghost" className="h-6 text-xs text-red-500" onClick={() => removeCoOwner.mutate({ opportunityId, userId: m.userId })}>Remove</Button>
+              <Button size="sm" variant="ghost" className="h-6 text-xs text-red-500" onClick={() => confirmAction({ title: `Remove ${m.name ?? m.email} as a co-owner?`, consequence: { kind: "reversible", undo: "add them again under Co-Owners" }, confirmLabel: "Remove" }, () => removeCoOwner.mutate({ opportunityId, userId: m.userId }))}>Remove</Button>
             </div>
           ))}
           {(members as any[]).filter((m: any) => !(coOwners as any[]).some((c: any) => c.userId === m.userId)).length > 0 && (
@@ -429,8 +430,7 @@ function ContactEnrichPanel({ contactId, onEnriched }: { contactId: number; onEn
   const enrich = trpc.contacts.enrich.useMutation({
     onSuccess: (data) => {
       setResult(data);
-      utils.contacts.get.invalidate({ id: contactId });
-      utils.contacts.getWithAccount.invalidate({ id: contactId });
+      invalidatePeopleReads(utils);
       onEnriched();
       if (data.fieldsUpdated.length > 0) {
         toast.success(`Enriched ${data.fieldsUpdated.length} field${data.fieldsUpdated.length > 1 ? "s" : ""}: ${data.fieldsUpdated.join(", ")}`);
@@ -468,7 +468,13 @@ function ContactEnrichPanel({ contactId, onEnriched }: { contactId: number; onEn
           </div>
           <Button
             size="sm"
-            onClick={() => enrich.mutate({ id: contactId })}
+            onClick={() => confirmAction({
+              title: `Enrich ${contact?.firstName ?? "this contact"} with AI?`,
+              description: "It suggests missing title, phone, LinkedIn, city and seniority from what is on file, and fills them in.",
+              cost: { kind: "ai", calls: 1 },
+              confirmLabel: "Enrich",
+              destructive: false,
+            }, () => enrich.mutate({ id: contactId }))}
             disabled={enrich.isPending}
             className="bg-[#14B89A] hover:bg-[#12a589] text-white shrink-0"
           >
@@ -619,7 +625,7 @@ function RecordDrawerForRecord({
     utils.activities.list.invalidate({ relatedType, relatedId });
     utils.attachments.list.invalidate({ relatedType, relatedId });
     utils.notifications.list.invalidate();
-    if (relatedType === "opportunity") utils.opportunities.getTimeline.invalidate({ id: relatedId });
+    if (relatedType === "opportunity") invalidateDealReads(utils);
   };
 
   const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { refresh(); toast.success("Call logged"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
@@ -643,12 +649,11 @@ function RecordDrawerForRecord({
         toast.success(`${relatedType.charAt(0).toUpperCase() + relatedType.slice(1)} deleted`);
         // Every list the record was on, not just one (R31): a deleted company
         // stayed on Companies and a deleted deal on Deals, Forecast and Quota.
-        if (relatedType === "contact") utils.contacts.invalidate();
+        if (relatedType === "contact") invalidatePeopleReads(utils);
         if (relatedType === "account") {
-          utils.accounts.invalidate();
-          utils.companies.invalidate();
+          invalidateCompanyReads(utils);
         }
-        if (relatedType === "lead") utils.leads.invalidate();
+        if (relatedType === "lead") invalidateLeadReads(utils);
         if (relatedType === "opportunity") invalidateDealReads(utils);
         onOpenChange(false);
       },
@@ -991,8 +996,9 @@ function LeadEmailTab({
     },
     onError: (e: any) => toast.error(e.message),
   });
+  const utils = trpc.useUtils();
   const send = trpc.leads.sendAdHocEmail.useMutation({
-    onSuccess: () => { onSent(); toast.success("Email sent"); },
+    onSuccess: () => { onSent(); invalidateLeadReads(utils); toast.success("Email sent"); },
     onError: (e: any) => toast.error(e.message),
   });
   if (sent) {
@@ -1085,8 +1091,9 @@ function ContactEmailTab({
     },
     onError: (e: any) => toast.error(e.message),
   });
+  const utils = trpc.useUtils();
   const send = trpc.contacts.sendAdHocEmail.useMutation({
-    onSuccess: () => { onSent(); toast.success("Email sent"); },
+    onSuccess: () => { onSent(); invalidatePeopleReads(utils); toast.success("Email sent"); },
     onError: (e: any) => toast.error(e.message),
   });
   if (sent) {

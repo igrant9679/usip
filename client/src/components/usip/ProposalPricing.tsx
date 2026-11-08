@@ -20,6 +20,7 @@ import { useSourceBudgets } from "@/components/usip/SpendPreview";
 import { aiCallText } from "@shared/spendPreview";
 import { computeQuoteTotals } from "@shared/quoteTotals";
 import { getDisplayCurrency } from "@shared/money";
+import { invalidateProposalReads } from "@/lib/entityCache";
 
 type Line = { productId?: number; name: string; description?: string; quantity: number; unitPrice: number; discountPct: number };
 const blankLine = (): Line => ({ name: "", quantity: 1, unitPrice: 0, discountPct: 0 });
@@ -114,8 +115,7 @@ export function ProposalPricing({ proposalId }: { proposalId: number }) {
 
   const save = trpc.proposals.savePricing.useMutation({
     onSuccess: (r) => {
-      utils.proposals.pricing.invalidate({ proposalId });
-      utils.proposals.get.invalidate();
+      invalidateProposalReads(utils);
       // The proposal's price, and the deal's value when it moved (R31).
       invalidateDealReads(utils);
       setEditing(false); setAsk(null);
@@ -124,11 +124,11 @@ export function ProposalPricing({ proposalId }: { proposalId: number }) {
     onError: (e) => toast.error(e.message),
   });
   const pdf = trpc.quotes.generatePdf.useMutation({
-    onSuccess: (r) => { utils.proposals.pricing.invalidate({ proposalId }); window.open(r.url, "_blank"); },
+    onSuccess: (r) => { invalidateProposalReads(utils); window.open(r.url, "_blank"); },
     onError: (e) => toast.error(e.message),
   });
   const aiPricing = trpc.quotesAi.suggestPricing.useMutation({
-    onSuccess: () => { utils.proposals.pricing.invalidate({ proposalId }); toast.success("AI pricing advice ready"); },
+    onSuccess: () => { invalidateProposalReads(utils); toast.success("AI pricing advice ready"); },
     onError: (e: any) => toast.error(e.message),
   });
 

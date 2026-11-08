@@ -53,6 +53,7 @@ import {
 import { pressable } from "@/lib/pressable";
 import { createSingleFlight } from "@/lib/singleFlight";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { invalidateListReads } from "@/lib/entityCache";
 
 type RecordList = {
   id: number;
@@ -149,7 +150,7 @@ export default function Lists() {
   const lists = (data ?? []) as RecordList[];
 
   const createMut = trpc.recordLists.create.useMutation({
-    onSuccess: (res: any) => { utils.recordLists.list.invalidate(); setCreateOpen(false); setNewName(""); setNewDescription(""); if (res?.id) setLocation(`/v2/lists/${res.id}`); },
+    onSuccess: (res: any) => { invalidateListReads(utils); setCreateOpen(false); setNewName(""); setNewDescription(""); if (res?.id) setLocation(`/v2/lists/${res.id}`); },
     onError: (e) => toast.error(e.message),
   });
   // Who made each list (audit 2026-10-20, U31): "Anyone", "Me" or a teammate.
@@ -157,12 +158,12 @@ export default function Lists() {
   const { data: team } = trpc.team.list.useQuery();
   const teamMembers = ((team ?? []) as Array<{ userId: number; name: string | null }>);
   const [owner, setOwner] = useState<string>("");
-  const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => utils.recordLists.list.invalidate(), onError: (e) => toast.error(e.message) });
+  const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => invalidateListReads(utils), onError: (e) => toast.error(e.message) });
   // Rename (owner ask 2026-10-06: there was no way to rename a list).
   const [renaming, setRenaming] = useState<RecordList | null>(null);
   const [renameTo, setRenameTo] = useState("");
   const renameMut = trpc.recordLists.update.useMutation({
-    onSuccess: () => { utils.recordLists.list.invalidate(); utils.recordLists.get.invalidate(); setRenaming(null); toast.success("List renamed"); },
+    onSuccess: () => { invalidateListReads(utils); setRenaming(null); toast.success("List renamed"); },
     onError: (e) => toast.error(e.message),
   });
   // Rename edits the description too (U31): it was shown and never enterable.

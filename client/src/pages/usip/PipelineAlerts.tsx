@@ -487,6 +487,7 @@ export default function PipelineAlerts() {
             disabled={clearAll.isPending}
             ariaLabel="Delete every alert for this workspace"
             title={`Delete all ${totalAlerts} alert${totalAlerts === 1 ? "" : "s"}?`}
+            count={{ n: totalAlerts, one: "alert" }}
             description="This hard-deletes every alert row for the workspace. New ones will appear on the next health scan. This cannot be undone."
             confirmLabel="Delete all"
           >

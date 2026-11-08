@@ -38,6 +38,7 @@ import { formatAmount } from "@shared/money";
 import { RecordRenewalOrChurn } from "@/components/usip/RecordRenewalOrChurn";
 import { HEALTH_TIER_TONE } from "@shared/customerHealth";
 import { RENEWAL_STAGE_LABELS } from "@shared/renewalStage";
+import { invalidateCompanyReads } from "@/lib/entityCache";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -70,7 +71,7 @@ export default function CompanyProfile() {
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
 
   const enrich = trpc.companies.enrich.useMutation({
-    onSuccess: (r) => { toast.success(`Enriched — ${r.fieldsUpdated.length} field(s) updated`); utils.companies.get.invalidate({ accountId: id }); utils.companies.enrichmentHistory.invalidate({ accountId: id }); },
+    onSuccess: (r) => { toast.success(`Enriched — ${r.fieldsUpdated.length} field(s) updated`); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const archive = trpc.companies.archive.useMutation({
@@ -78,7 +79,7 @@ export default function CompanyProfile() {
     onError: (e) => toast.error(e.message),
   });
   const restore = trpc.companies.restore.useMutation({
-    onSuccess: () => { toast.success("Company restored"); utils.companies.get.invalidate({ accountId: id }); utils.companies.search.invalidate(); },
+    onSuccess: () => { toast.success("Company restored"); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   // Each kind of row in its own list, each person once (R3).
@@ -274,9 +275,7 @@ function BrandIdentityCard({ accountId, account, isAdmin }: {
   const { data: observations } = trpc.companies.brandObservations.useQuery({ accountId }, { enabled: Number.isFinite(accountId) });
 
   const invalidate = () => {
-    utils.companies.get.invalidate({ accountId });
-    utils.companies.brandObservations.invalidate({ accountId });
-    utils.companies.enrichmentHistory.invalidate({ accountId });
+    invalidateCompanyReads(utils);
   };
   const reconcile = trpc.companies.reconcileBrand.useMutation({
     onSuccess: (r) => {

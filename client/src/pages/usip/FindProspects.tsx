@@ -47,6 +47,7 @@ import { QueryError } from "@/components/usip/Shell";
 import { NoLinkedInConnected } from "@/components/usip/NoLinkedInConnected";
 import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 /* ─── Chip-input shared between the two forms ───────────────────────── */
 function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -352,7 +353,7 @@ function LinkedInSearchCard() {
   const importPeople = trpc.unipile.importSearchHitsToPeople.useMutation({
     onSuccess: (r) => {
       toast.success(`Saved to People: ${r.created} new · ${r.updated} updated${r.skipped ? ` · ${r.skipped} not saved` : ""}`);
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
       utils.discovery.listRuns.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -567,7 +568,7 @@ export function FindProspectsPanel() {
     const s = runSummary(run);
     if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });
     // The run, its trace and the history change too, not only the queues (P142).
-    utils.prospects.list.invalidate();
+    invalidatePeopleReads(utils);
     utils.discovery.listRuns.invalidate();
     utils.discovery.getLogs.invalidate({ runId: run.id });
     utils.discovery.getRawFinds.invalidate({ runId: run.id });
@@ -761,7 +762,7 @@ function RunDetail({ runId }: { runId: number }) {
       utils.discovery.getRun.invalidate({ id: runId });
       utils.discovery.getLogs.invalidate({ runId });
       utils.discovery.listRuns.invalidate();
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -927,7 +928,7 @@ function ProspectQueue({ status, emptyText }: { status: "verified" | "needs_revi
       toast.success(`${did} ${r.updated}${r.skipped ? ` · ${r.skipped} already decided elsewhere` : ""}`);
       setSelected(new Set());
       // Both queues and the tab's waiting count read this list.
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

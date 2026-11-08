@@ -263,9 +263,13 @@ describe("the one board's screen", () => {
 
   it("a filter change keeps the other filter", () => {
     const src = read("client/src/pages/usip/Pipeline.tsx");
+    // 2026-11-08 (audit U6): each filter is its own URL-state parameter, and
+    // the shared hook's setter keeps every other parameter (urlState.test.ts).
     const set = src.slice(src.indexOf("const setFilterParam = "), src.indexOf("const { data: team }"));
-    expect(set).toContain("const p = new URLSearchParams(search);");
-    expect(set).toContain("if (value) p.set(key, value); else p.delete(key);");
+    expect(set).toContain('if (key === "owner") setOwnerParam(value ? Number(value) : null);');
+    expect(set).toContain('else setCloseParam(value ?? "");');
+    expect(src).toContain('const [ownerParam, setOwnerParam] = useUrlState("owner", urlParam.id());');
+    expect(src).toContain('const [closeParam, setCloseParam] = useUrlState("close", urlParam.string());');
     expect(src).toContain('onChange={(e) => setFilterParam("close", e.target.value || null)}');
     expect(src).toContain('onChange={(e) => setFilterParam("owner", e.target.value || null)}');
   });

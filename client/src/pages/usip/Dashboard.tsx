@@ -65,6 +65,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { invalidateDealReads } from "@/lib/entityCache";
 
 /* ─── constants ───────────────────────────────────────────────────────────── */
 const DEFAULT_GOALS: Record<string, number> = {
@@ -352,13 +353,7 @@ export function DashboardOverview() {
 
   const utils = trpc.useUtils();
   const handleRefresh = useCallback(() => {
-    utils.opportunities.dashboardStats.invalidate();
-    utils.opportunities.revenueChart.invalidate();
-    utils.opportunities.stageFunnel.invalidate();
-    utils.opportunities.topReps.invalidate();
-    utils.opportunities.winLoss.invalidate();
-    utils.attention.summary.invalidate();
-    utils.opportunities.recent.invalidate();
+    invalidateDealReads(utils);
     utils.unipile.metrics.invalidate();
   }, [utils]);
 

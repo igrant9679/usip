@@ -32,6 +32,7 @@ import {
 } from "@xyflow/react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -280,7 +281,7 @@ function CanvasInner({
   // 2026-10-20, O8/O9). updateMeta merges settings into what is stored.
   const updateSequence = trpc.sequences.updateMeta.useMutation({
     onSuccess: () => {
-      utils.sequences.get.invalidate({ id: sequenceId });
+      invalidateSequenceReads(utils);
       toast.success("Sequence settings saved");
     },
     onError: (e) => toast.error(e.message),
@@ -622,6 +623,7 @@ function CanvasInner({
 import { ReactFlowProvider } from "@xyflow/react";
 import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 export default function SequenceCanvas() {
   const params = useParams<{ id: string }>();
@@ -630,7 +632,7 @@ export default function SequenceCanvas() {
   const seqQ = trpc.sequences.get.useQuery({ id: sequenceId });
   const utils = trpc.useUtils();
   const setStatus = trpc.sequences.setStatus.useMutation({
-    onSuccess: () => utils.sequences.get.invalidate(),
+    onSuccess: () => invalidateSequenceReads(utils),
     onError: (e) => toast.error(e.message),
   });
 
@@ -676,7 +678,7 @@ export default function SequenceCanvas() {
             </Button>
           )}
           {(seq?.status === "draft" || seq?.status === "paused") && (
-            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setStatus.mutate({ id: sequenceId, status: "archived" })}>
+            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => confirmAction({ title: `Archive "${seq?.name ?? "this sequence"}"?`, description: "Everyone still enrolled is taken out for good. The sequence can be put back to draft, but they are not re-enrolled.", confirmLabel: "Archive" }, () => setStatus.mutate({ id: sequenceId, status: "archived" }))}>
               Archive
             </Button>
           )}

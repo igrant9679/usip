@@ -32,6 +32,7 @@ import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { PERSON_REJECT_PRESETS } from "@shared/rejectionKind";
 import { areStatusLabel } from "@shared/areCampaignLabels";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 const PAGE = 50;
 const PRESETS: string[] = [...PERSON_REJECT_PRESETS];
@@ -79,12 +80,7 @@ export default function AREApprovals() {
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
 
   const refresh = () => {
-    utils.are.approvals.queue.invalidate();
-    utils.are.approvals.approveAbovePreview.invalidate();
-    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-    utils.are.campaigns.pendingApprovalCount.invalidate();
-    utils.are.campaigns.get.invalidate(); utils.are.campaigns.list.invalidate();
-    utils.attention.summary.invalidate();
+    invalidateCampaignReads(utils);
   };
 
   const approveOne = trpc.are.prospects.approve.useMutation({

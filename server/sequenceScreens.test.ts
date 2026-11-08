@@ -239,7 +239,9 @@ describe("legacy /sequences says what deleting does, shows the copy that sends, 
 
   it("a status change refreshes the open detail, and an enrolment has a plain Pause (O37)", () => {
     const status = between(src, "const setStatus = trpc.sequences.setStatus.useMutation({", "onError:");
-    expect(status).toContain("utils.sequences.get.invalidate({ id: vars.id })");
+    // 2026-11-08 (audit X1.7): through the sequence family's helper, which
+    // invalidates every sequences read, the open detail included.
+    expect(status).toContain("invalidateSequenceReads(utils)");
     expect(src).toContain("const pause = trpc.sequences.pauseEnrollment.useMutation({");
     expect(src).toContain("onClick={() => pause.mutate({ id: e.id })}");
     expect(src).toContain(">Mark replied</Button>");

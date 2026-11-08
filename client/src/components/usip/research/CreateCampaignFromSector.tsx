@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,10 +40,12 @@ export function CreateCampaignFromSector({ sectorId, sector, personas }: { secto
   const titles = overrides.targetTitles as string[];
   const exclude = overrides.exclude as string[];
 
+  const utils = trpc.useUtils();
   const create = trpc.are.campaigns.create.useMutation({
     onError: (e) => toast.error(e.message),
     onSuccess: (r: any) => {
       toast.success("Draft campaign created. Review it, then start it.");
+      invalidateCampaignReads(utils);
       setOpen(false);
       const id = r?.id ?? r?.campaignId;
       navigate(id ? `/are/campaigns/${id}` : "/are/campaigns");

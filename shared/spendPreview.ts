@@ -170,3 +170,43 @@ export function paidLookupText(opts: {
       : ` ${n(left)} of today's ${n(opts.allowance!.cap)} are left.`;
   return `${head}${cap}${opts.note ? ` ${opts.note}` : ""}`;
 }
+
+/**
+ * AI calls the AI pipeline makes for one contact (runPipelineForContact in
+ * server/routers/aiPipeline.ts): org research, contact research, the fit
+ * analysis, and one draft in each of three tones. Pinned by a test that
+ * counts them.
+ */
+export const AI_PIPELINE_CALLS_PER_CONTACT = 6;
+
+/**
+ * A confirmation's cost, as data (audit 2026-10-20, U5): the confirm dialog
+ * takes one of these and words it with the functions above, so every
+ * "this spends…" sentence in the app comes from this file and its price
+ * tables. `free` says so out loud, for an action people might expect to cost.
+ */
+export type Cost =
+  | { kind: "free" }
+  | { kind: "ai"; calls: number; ai?: SourceBudgets["ai"] | null; what?: string }
+  | ({ kind: "paidLookup" } & Parameters<typeof paidLookupText>[0])
+  | { kind: "enrichFully"; people: number; budgets?: SourceBudgets | null }
+  | { kind: "areEnrich"; people: number; budgets?: SourceBudgets | null }
+  | { kind: "areGenerate"; ai?: SourceBudgets["ai"] | null }
+  /** A discovery run on the workspace's sources (Re-enrich runs one for a person). */
+  | { kind: "discovery"; sources?: readonly string[]; budgets?: SourceBudgets | null };
+
+export function costText(c: Cost): string {
+  switch (c.kind) {
+    case "discovery": {
+      const head = "This runs a discovery search on the workspace's sources, which spend their own credits for what they return, within each source's daily cap.";
+      const line = c.sources && c.budgets ? launcherBudgetLine(c.sources, c.budgets) : "";
+      return line ? `${head} Before you run: ${line}.` : head;
+    }
+    case "free": return "This spends no vendor credits and makes no AI calls.";
+    case "ai": return aiCallText(c.calls, c.ai, c.what);
+    case "paidLookup": return paidLookupText(c);
+    case "enrichFully": return enrichFullyText(c.people, c.budgets);
+    case "areEnrich": return areEnrichText(c.people, c.budgets);
+    case "areGenerate": return areGenerateText(c.ai);
+  }
+}

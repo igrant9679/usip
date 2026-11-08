@@ -54,6 +54,7 @@ import { areSettingsDraft, changedAreSettings, type AreSettingsDraft } from "./a
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 /** Descriptions keyed by source id, so this page and the campaign wizard
  *  describe the same source the same way. */
@@ -248,8 +249,7 @@ export default function ARESettings() {
     onSuccess: (r) => {
       toast.success(`${r.campaignsUpdated} campaign${r.campaignsUpdated === 1 ? "" : "s"} set to Batch approval, and new campaigns default to it.`);
       utils.settings.getAreSettings.invalidate();
-      utils.are.campaigns.list.invalidate();
-      utils.are.campaigns.get.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

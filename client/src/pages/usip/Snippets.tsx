@@ -6,6 +6,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { ResearchSectorPicker, useRememberedSector } from "@/components/usip/research/ResearchSectorPicker";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -251,7 +252,7 @@ export default function SnippetsPage() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 hover:text-destructive"
-                      onClick={() => deleteMutation.mutate({ id: snippet.id })}
+                      onClick={() => confirmAction({ title: `Delete the snippet "${snippet.name}"?`, consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => deleteMutation.mutate({ id: snippet.id }))}
                     >
                       <Trash2 size={12} />
                     </Button>
