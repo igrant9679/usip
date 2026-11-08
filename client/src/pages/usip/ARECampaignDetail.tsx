@@ -73,6 +73,9 @@ import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { targetingFromOverrides } from "@shared/campaignTargeting";
+import { campaignLaunchSearches } from "@shared/discoveryQueries";
+import { launcherBudgetLine } from "@shared/spendPreview";
+import { useSourceBudgets } from "@/components/usip/SpendPreview";
 import { isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
@@ -1584,6 +1587,13 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
  *  narrowed by the workspace source mask. That is NOT the ARE engine's own
  *  per-campaign waterfall, and it is not the account-mode list.
  *
+ *  Every title, industry and place on the campaign is searched (audit
+ *  2026-10-20, A56): Apollo and QuickEnrich take the lists in one search each,
+ *  LinkedIn takes them paired in step, one search per pair up to
+ *  CAMPAIGN_RUN_MAX_QUERIES (@shared/discoveryQueries), each against today's
+ *  allowance, and news reads once with all of them. The button says how many
+ *  searches before it runs.
+ *
  *  New people are inserted into `prospects` — the People table — each carrying
  *  `verificationStatus` by confidence tier: high becomes `verified`, medium and
  *  low become `needs_review` (services/discovery/consolidate.ts). That is a
@@ -1638,10 +1648,30 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   const geos = t.places;
   const keywords = t.keywords;
   const ready = titles.length > 0 || industries.length > 0 || geos.length > 0 || keywords.length > 0;
-  // One run searches one title, industry and place (discovery.search takes one
-  // of each), so the card names the ones it will use rather than implying all.
-  const searched = [titles[0], industries[0], geos[0]].filter(Boolean) as string[];
-  const notSearched = Math.max(0, titles.length - 1) + Math.max(0, industries.length - 1) + Math.max(0, geos.length - 1);
+  // Every title, industry and place (A56), so the card names them all and says
+  // how many LinkedIn searches that is, with the same count the server makes.
+  const searched = [...titles, ...industries, ...geos];
+  const { searches, total } = campaignLaunchSearches({ titles, industries, places: geos });
+  const budgets = useSourceBudgets();
+  const run = () => confirmAction({
+    title: "Run discovery for this campaign?",
+    description:
+      `It makes up to ${searches} LinkedIn search${searches === 1 ? "" : "es"} (one per title and place pair${total > searches ? `; ${total - searches} more pairs wait for the next run` : ""}), `
+      + "one Apollo and one QuickEnrich search with every value, and one news read, each only while today's allowance lasts. "
+      + (launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], budgets.data) ? `Today: ${launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], budgets.data)}. ` : "")
+      + "New people are saved to People and added to this campaign; nothing is sent.",
+    confirmLabel: "Run discovery",
+  }, () => launch.mutate({
+    mode: "person",
+    campaignId,
+    addToCampaign: true,
+    input: {
+      jobTitles: titles,
+      industries,
+      locations: geos,
+      keywords: keywords.length ? keywords : undefined,
+    },
+  }));
 
   return (
     <Card className="border-violet-500/30 bg-violet-500/5">
@@ -1655,8 +1685,8 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
             <div className="text-[11px] text-muted-foreground mt-0.5">
               One-click search across LinkedIn, Apollo, QuickEnrich and news for this campaign's targeting — whichever
               of those four your workspace has enabled in Settings. New people are consolidated, scored and saved to{" "}
-              <Link href="/v2/people"><span className="underline">People</span></Link>; the per-step trace appears in
-              this campaign's Logs tab.
+              <Link href="/v2/people"><span className="underline">People</span></Link> and added to this campaign; the
+              per-step trace appears in this campaign's Logs tab.
             </div>
             {ready ? (
               <div className="mt-2 space-y-1">
@@ -1665,11 +1695,10 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
                   {searched.map((v) => <Badge key={v} variant="outline" className="text-[10px]">{v}</Badge>)}
                   {keywords.length > 0 && <span className="text-[10px] text-muted-foreground">+ {keywords.length} keyword{keywords.length === 1 ? "" : "s"}</span>}
                 </div>
-                {notSearched > 0 && (
-                  <div className="text-[10px] text-muted-foreground">
-                    {notSearched} more targeting value{notSearched === 1 ? " is" : "s are"} not in this run (it takes the first title, industry and place); the campaign's own discovery uses all of them.
-                  </div>
-                )}
+                <div className="text-[10px] text-muted-foreground">
+                  Every value above is searched: up to {searches} LinkedIn search{searches === 1 ? "" : "es"}
+                  {total > searches ? ` (${total - searches} more pairs wait for the next run)` : ""}, and one search each on Apollo and QuickEnrich.
+                </div>
               </div>
             ) : (
               <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
@@ -1684,16 +1713,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
           size="sm"
           className="w-full gap-1.5"
           disabled={launch.isPending || running || !ready}
-          onClick={() => launch.mutate({
-            mode: "person",
-            campaignId,
-            input: {
-              jobTitle: titles[0],
-              industry: industries[0],
-              location: geos[0],
-              keywords: keywords.length ? keywords : undefined,
-            },
-          })}
+          onClick={run}
         >
           {launch.isPending || running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
           {launch.isPending ? "Starting discovery…" : running ? `Run #${runId} running in the background…` : "Run discovery now"}

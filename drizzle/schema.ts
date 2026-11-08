@@ -4834,6 +4834,9 @@ export const discoveryRuns = mysqlTable(
     /** Migration 0360 (audit F38): finds kept unsaved for review, and how many were already in People. */
     heldForReview: boolean("heldForReview").default(false).notNull(),
     alreadyInPeople: int("alreadyInPeople").default(0).notNull(),
+    /** Migration 0332 (audit A56): a campaign launch's saved people added to that campaign, and those it refused. Null: not a campaign launch. */
+    addedToCampaign: int("addedToCampaign"),
+    notAddedToCampaign: int("notAddedToCampaign"),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     completedAt: timestamp("completedAt"),
   },

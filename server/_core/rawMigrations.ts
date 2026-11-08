@@ -5207,6 +5207,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A56: a discovery run launched from a campaign's Scraper tab adds its saved
+  // people to that campaign; the run records how many were added and how many
+  // the campaign refused. Nullable: every other run is not a campaign launch.
+  {
+    name: "0332_discovery_run_campaign_add.sql",
+    statements: [
+      "ALTER TABLE `discovery_runs` ADD COLUMN `addedToCampaign` int NULL",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `notAddedToCampaign` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
