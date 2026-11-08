@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { ConfirmButton } from "@/components/usip/Common";
 import { quotaPeriodLabel } from "@shared/quotaPeriod";
 import { formatAmount } from "@shared/money";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 // The shared money format (R98).
 function fmt$(n: number) {
@@ -107,7 +108,7 @@ export default function Quota() {
 
   return (
     <Shell title="Quota Management">
-      <PageHeader title="Quota Management" description="Set and track revenue, deal count, and activity quotas per rep and per period. Visualise attainment in real time and get early warnings when reps are trending below target." pageKey="quota"
+      <PageHeader title="Quota Management" description="Set and track revenue, deal count, and activity quotas per rep and per period. See attainment as it stands whenever you open the page, and spot reps trending below target." pageKey="quota"
         icon={<TrendingUp className="size-5" />}
       >
         <div className="flex items-center gap-3">
@@ -126,6 +127,8 @@ export default function Quota() {
           </Button>
         </div>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 max-w-5xl mx-auto space-y-6">
 
         {/* Quota cards */}

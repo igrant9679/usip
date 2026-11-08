@@ -53,6 +53,7 @@ import { GridLayout } from "react-grid-layout";
 import type { Layout, LayoutItem } from "react-grid-layout";
 import { toast } from "sonner";
 import { Link } from "wouter";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /* ─── Constants ──────────────────────────────────────────────────────────── */
 
@@ -140,9 +141,11 @@ interface WidgetCardProps {
   filters: DashboardFilters;
   customizeMode: boolean;
   onRemove: () => void;
+  /** Rename the widget (dashboards.updateWidget; audit X6.2: it had no caller). */
+  onRename: (title: string) => void;
 }
 
-function WidgetCard({ widgetId, filters, customizeMode, onRemove }: WidgetCardProps) {
+function WidgetCard({ widgetId, filters, customizeMode, onRemove, onRename }: WidgetCardProps) {
   const resolvedFilters = useMemo(() => widgetFilters(filters), [filters]);
 
   const { data, isLoading } = trpc.dashboards.resolveWidget.useQuery(
@@ -162,6 +165,17 @@ function WidgetCard({ widgetId, filters, customizeMode, onRemove }: WidgetCardPr
           <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4 capitalize shrink-0">
             {data.type.replace(/_/g, " ")}
           </Badge>
+        )}
+        {customizeMode && data && (
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground transition-colors shrink-0 drag-cancel"
+            onClick={() => onRename(data.title)}
+            title="Rename widget"
+            aria-label="Rename widget"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
         )}
         {customizeMode && (
           <button
@@ -329,6 +343,7 @@ export default function Dashboards() {
   const [openWidget, setOpenWidget] = useState(false);
   const [openSched, setOpenSched] = useState(false);
   const [openRename, setOpenRename] = useState(false);
+  const [renamingWidget, setRenamingWidget] = useState<{ id: number; title: string } | null>(null);
   const [customizeMode, setCustomizeMode] = useState(false);
   useEffect(() => { if (!canEdit) setCustomizeMode(false); }, [canEdit]);
   const [filters, setFilters] = useState<DashboardFilters>({ preset: "all" });
@@ -371,6 +386,17 @@ export default function Dashboards() {
     onError: (e) => toast.error(e.message),
   });
   const saveLayout = trpc.dashboards.saveLayout.useMutation({ onError: (e) => toast.error(e.message) });
+  // Rename a widget, and pause or resume a schedule (audit X6.2/G67): both
+  // procedures existed with no control, so a widget kept the title it was
+  // added with and a schedule could only be deleted, never stopped.
+  const renameW = trpc.dashboards.updateWidget.useMutation({
+    onSuccess: () => { utils.dashboards.resolveWidget.invalidate(); utils.dashboards.get.invalidate(); setRenamingWidget(null); toast.success("Widget renamed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const toggleSched = trpc.dashboards.toggleSchedule.useMutation({
+    onSuccess: (_r, v) => { utils.dashboards.listSchedules.invalidate(); toast.success(v.enabled ? "Schedule resumed" : "Schedule paused"); },
+    onError: (e) => toast.error(e.message),
+  });
   const createSched = trpc.dashboards.createSchedule.useMutation({
     onSuccess: () => { utils.dashboards.listSchedules.invalidate(); setOpenSched(false); },
     onError: (e) => toast.error(e.message),
@@ -417,7 +443,7 @@ export default function Dashboards() {
 
   return (
     <Shell>
-      <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data pulled in real time. Share dashboards with your team or embed them in QBRs and executive reports." pageKey="dashboards"
+      <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets and charts, computed from your CRM data each time the dashboard loads. Share them with your team, or schedule one to email itself." pageKey="dashboards"
         icon={<LayoutGrid className="size-5" />}
       >
         {/* A schedule belongs to a dashboard, so it waits for one to be open. */}
@@ -432,6 +458,8 @@ export default function Dashboards() {
           </Button>
         )}
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <SubNav items={[
         { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
         { href: "/quota", label: "Quota Management", title: "Set and track per-rep quotas" },
@@ -511,10 +539,17 @@ export default function Dashboards() {
               <ul className="space-y-2 text-xs">
                 {(schedules.data ?? []).map((s: any) => (
                   <li key={s.id} className="border rounded-lg p-2">
-                    <div className="font-medium capitalize">{s.frequency}</div>
+                    <div className="font-medium capitalize flex items-center gap-1.5">
+                      {s.frequency}
+                      {s.enabled === false && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">Paused</Badge>}
+                    </div>
                     <div className="text-muted-foreground mt-0.5 truncate">{(s.recipients as string[]).join(", ")}</div>
                     <div className="mt-1 flex gap-1">
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => sendNow.mutate({ id: s.id })}>Send now</Button>
+                      <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={toggleSched.isPending}
+                        onClick={() => toggleSched.mutate({ id: s.id, enabled: s.enabled === false })}>
+                        {s.enabled === false ? "Resume" : "Pause"}
+                      </Button>
                       <Button aria-label="Delete schedule" size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={() => delSched.mutate({ id: s.id })}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -582,6 +617,7 @@ export default function Dashboards() {
                           filters={filters}
                           customizeMode={customizeMode}
                           onRemove={() => delW.mutate({ id: w.id })}
+                          onRename={(title) => setRenamingWidget({ id: w.id, title })}
                         />
                       </div>
                     ))}
@@ -606,6 +642,11 @@ export default function Dashboards() {
         onSubmit={(f) => rename.mutate({ id: selected!, name: String(f.get("name")), description: String(f.get("description") ?? "") || undefined })}>
         <Field name="name" label="New name" required defaultValue={(dash.data as any)?.name ?? ""} />
         <Field name="description" label="Description" defaultValue={(dash.data as any)?.description ?? ""} />
+      </FormDialog>
+
+      <FormDialog open={!!renamingWidget} onOpenChange={(v) => { if (!v) setRenamingWidget(null); }} title="Rename widget" isPending={renameW.isPending}
+        onSubmit={(f) => renamingWidget && renameW.mutate({ id: renamingWidget.id, patch: { title: String(f.get("title")).trim() } })}>
+        <Field key={renamingWidget?.id ?? 0} name="title" label="Title" required defaultValue={renamingWidget?.title ?? ""} />
       </FormDialog>
 
       <AddWidgetDialog

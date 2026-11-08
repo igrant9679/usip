@@ -10,7 +10,8 @@ import { useParams, Link, useLocation } from "wouter";
 import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
 import { trpc } from "@/lib/trpc";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
-import { Shell, EmptyState } from "@/components/usip/Shell";
+import { Shell, QueryError } from "@/components/usip/Shell";
+import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 import { DetailHeader, DetailSection, DetailFact, DetailBody } from "@/components/usip/DetailShell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
@@ -25,7 +26,8 @@ export default function LeadDetail() {
   const id = Number(idStr);
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
-  const { data: lead, isLoading } = trpc.leads.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
+  const validId = Number.isInteger(id) && id > 0;
+  const { data: lead, isLoading, error, refetch } = trpc.leads.get.useQuery({ id }, { enabled: validId });
   // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
   const [converting, setConverting] = useState(false);
   // The lead's own page can edit it (R81); it was read-only.
@@ -37,8 +39,11 @@ export default function LeadDetail() {
     else if (accountId) setLocation(`/accounts/${accountId}`);
   };
 
+  // A failed load and a missing lead are different facts (audit X1.6): both read "Lead not found".
+  if (!validId) return <Shell title="Lead"><NotFoundState what="lead" backHref="/leads" backLabel="Back to leads" /></Shell>;
+  if (error && !lead && !isNotFoundError(error)) return <Shell title="Lead"><QueryError what="this lead" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
   if (isLoading) return <Shell title="Lead"><div className="p-6 space-y-3">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 rounded-lg bg-muted/50 animate-pulse" />)}</div></Shell>;
-  if (!lead) return <Shell title="Lead"><EmptyState title="Lead not found" /></Shell>;
+  if (!lead) return <Shell title="Lead"><NotFoundState what="lead" backHref="/leads" backLabel="Back to leads" /></Shell>;
 
   const converted = lead.status === "converted";
   const name = `${lead.firstName} ${lead.lastName}`.trim();

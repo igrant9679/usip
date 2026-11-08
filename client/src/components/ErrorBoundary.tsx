@@ -9,6 +9,12 @@ import { Component, ReactNode } from "react";
  * boundary for the app, so a single broken widget took navigation down with
  * it. App.tsx now puts one around the routes, keyed by the path: leaving the
  * page clears it. The stack is still there, folded, for a support message.
+ *
+ * And one around each signed-in page (final pass 2026-11-07, G37): a page
+ * that throws in its own body, before it has rendered its Shell, was caught
+ * by the route boundary, which sits above every Shell, so the sidebar went
+ * with it. App.tsx's PageBoundary passes `wrap`, which puts this error state
+ * inside a Shell: the page shows its own error and navigation stays.
  */
 interface Props {
   children: ReactNode;
@@ -16,6 +22,8 @@ interface Props {
   resetKey?: string;
   /** Inside the app shell: no full-screen takeover, and a way back. */
   inline?: boolean;
+  /** Renders the error state inside something, e.g. the app's Shell (G37). */
+  wrap?: (content: ReactNode) => ReactNode;
 }
 
 interface State {
@@ -46,55 +54,60 @@ class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
-      const stale = isStaleChunkError(this.state.error);
-      return (
-        <div role="alert" className={cn("flex items-center justify-center p-8 bg-background", this.props.inline ? "min-h-[60vh]" : "min-h-screen")}>
-          <div className="flex flex-col items-center w-full max-w-xl p-8 text-center">
-            <AlertTriangle size={40} className="text-destructive mb-5 flex-shrink-0" aria-hidden="true" />
-            <h1 className="text-xl font-semibold mb-2">
-              {stale ? "A new version of Velocity is available" : "This page hit a problem"}
-            </h1>
-            <p className="text-sm text-muted-foreground mb-6">
-              {stale
-                ? "Reload to get it. Nothing you saved is lost."
-                : "Nothing you saved is lost. Reload to try again; if it keeps happening, send us the details below."}
-            </p>
-            <div className="flex items-center gap-2 mb-6">
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-              >
-                <RotateCcw size={16} aria-hidden="true" />
-                Reload page
-              </button>
-              {this.props.inline && (
-                <button
-                  type="button"
-                  onClick={() => window.history.back()}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg border hover:bg-muted cursor-pointer"
-                >
-                  <ArrowLeft size={16} aria-hidden="true" />
-                  Go back
-                </button>
-              )}
-            </div>
-            {!stale && this.state.error && (
-              <details className="w-full text-left">
-                <summary className="text-xs text-muted-foreground cursor-pointer">Details</summary>
-                <pre className="mt-2 p-3 rounded bg-muted text-xs text-muted-foreground whitespace-break-spaces overflow-auto max-h-64">
-                  {this.state.error.message}
-                  {"\n\n"}
-                  {this.state.error.stack}
-                </pre>
-              </details>
-            )}
-          </div>
-        </div>
-      );
+      const content = this.renderError();
+      return this.props.wrap ? this.props.wrap(content) : content;
     }
 
     return this.props.children;
+  }
+
+  private renderError(): ReactNode {
+    const stale = isStaleChunkError(this.state.error);
+    return (
+      <div role="alert" className={cn("flex items-center justify-center p-8 bg-background", this.props.inline ? "min-h-[60vh]" : "min-h-screen")}>
+        <div className="flex flex-col items-center w-full max-w-xl p-8 text-center">
+          <AlertTriangle size={40} className="text-destructive mb-5 flex-shrink-0" aria-hidden="true" />
+          <h1 className="text-xl font-semibold mb-2">
+            {stale ? "A new version of Velocity is available" : "This page hit a problem"}
+          </h1>
+          <p className="text-sm text-muted-foreground mb-6">
+            {stale
+              ? "Reload to get it. Nothing you saved is lost."
+              : "Nothing you saved is lost. Reload to try again; if it keeps happening, send us the details below."}
+          </p>
+          <div className="flex items-center gap-2 mb-6">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
+            >
+              <RotateCcw size={16} aria-hidden="true" />
+              Reload page
+            </button>
+            {this.props.inline && (
+              <button
+                type="button"
+                onClick={() => window.history.back()}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border hover:bg-muted cursor-pointer"
+              >
+                <ArrowLeft size={16} aria-hidden="true" />
+                Go back
+              </button>
+            )}
+          </div>
+          {!stale && this.state.error && (
+            <details className="w-full text-left">
+              <summary className="text-xs text-muted-foreground cursor-pointer">Details</summary>
+              <pre className="mt-2 p-3 rounded bg-muted text-xs text-muted-foreground whitespace-break-spaces overflow-auto max-h-64">
+                {this.state.error.message}
+                {"\n\n"}
+                {this.state.error.stack}
+              </pre>
+            </details>
+          )}
+        </div>
+      </div>
+    );
   }
 }
 

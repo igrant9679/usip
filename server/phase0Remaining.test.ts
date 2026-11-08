@@ -504,8 +504,10 @@ describe("switching workspace in one tab does not retarget the others", () => {
     expect(helper).toContain("window.sessionStorage.getItem(KEY)");
     // 2026-11-06 (audit R47): the account brief's streaming fetch moved out of
     // RecordDrawer into AccountBriefPanel, so the company profile can host it.
+    // 2026-11-07 (audit X6.1): hooks/useStreamLLM.ts was imported by nothing and
+    // is deleted; every streaming fetch that remains is still listed here.
     for (const f of [
-      "client/src/main.tsx", "client/src/components/usip/company/AccountBriefPanel.tsx", "client/src/hooks/useStreamLLM.ts",
+      "client/src/main.tsx", "client/src/components/usip/company/AccountBriefPanel.tsx",
       "client/src/pages/usip/EmailBuilder.tsx", "client/src/pages/usip/Mailbox.tsx", "client/src/pages/usip/ProposalDetail.tsx",
       "client/src/contexts/WorkspaceContext.tsx",
     ]) {

@@ -696,10 +696,4 @@ export const emailVerificationRouter = router({
         total: r.total,
       }));
     }),
-
-  /** Take an immediate health snapshot for the current workspace */
-  snapshotNow: workspaceProcedure.mutation(async ({ ctx }) => {
-    await snapshotHealthMetrics(ctx.workspace.id);
-    return { ok: true };
-  }),
 });

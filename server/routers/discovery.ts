@@ -98,22 +98,6 @@ export const discoveryRouter = router({
       return input.records.map((r) => alreadyInWorkspace(index, r));
     }),
 
-  /** Recent discovery runs scoped to a campaign (powers the per-campaign
-   *  Logs tab's Discovery section). */
-  listRunsForCampaign: workspaceProcedure
-    .input(z.object({ campaignId: z.number(), limit: z.number().min(1).max(50).default(20) }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return db.select().from(discoveryRuns)
-        .where(and(
-          eq(discoveryRuns.workspaceId, ctx.workspace.id),
-          eq(discoveryRuns.campaignId, input.campaignId),
-        ))
-        .orderBy(desc(discoveryRuns.startedAt))
-        .limit(input.limit);
-    }),
-
   /** All discovery_logs across every run linked to a campaign — joined
    *  by runId in a single query. Powers the unified Logs feed on the
    *  ARE Campaign Detail page (merged with are_engine_logs client-side

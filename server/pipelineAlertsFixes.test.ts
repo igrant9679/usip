@@ -125,7 +125,9 @@ describe("R2: no sender pushes a workspace's records to the platform operator", 
    * workspace. What may still call it: platform-wide run summaries that carry
    * counts across every workspace and no workspace's records.
    */
-  const PLATFORM_SUMMARIES = ["server/_core/systemRouter.ts", "server/nightlyBatch.ts", "server/routers/segmentRules.ts"];
+  // 2026-11-07 (audit X6.2/G67): systemRouter's notifyOwner procedure had no caller and is deleted,
+  // so systemRouter no longer imports it.
+  const PLATFORM_SUMMARIES = ["server/nightlyBatch.ts", "server/routers/segmentRules.ts"];
 
   const files = (dir: string): string[] => readdirSync(join(root, dir)).flatMap((n) => {
     const rel = `${dir}/${n}`;

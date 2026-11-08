@@ -303,45 +303,6 @@ export const tasksRouter = router({
       return { ok: true };
     }),
 
-  /** Bulk create — one task per target (no dedupe). Returns { created }. */
-  bulk: repProcedure
-    .input(z.object({
-      targets: z.array(z.object({ relatedType: z.string(), relatedId: z.number() })).min(1).max(500),
-      template: z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        type: z.enum(TASK_TYPES).default("todo"),
-        priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
-        dueAt: z.string().optional(),
-        ownerUserId: z.number().optional(),
-      }),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Every target and the owner are this workspace's (audit 2026-10-20,
-      // X1.1): the single create checked them; the bulk one stored any.
-      for (const t of input.targets) await assertRelatedInWorkspace(db, t.relatedType, t.relatedId, ctx.workspace.id);
-      await assertOwnerInWorkspace(ctx.workspace.id, input.template.ownerUserId);
-      const due = deadlineFrom(input.template.dueAt, await getWorkspaceTimezone(ctx.workspace.id));
-      const values = input.targets.map((t) => ({
-        workspaceId: ctx.workspace.id,
-        title: input.template.title,
-        description: input.template.description ?? null,
-        type: input.template.type,
-        priority: input.template.priority,
-        status: "open" as const,
-        dueAt: due,
-        ownerUserId: input.template.ownerUserId ?? ctx.user.id,
-        relatedType: t.relatedType,
-        relatedId: t.relatedId,
-        source: "manual" as const,
-      }));
-      await db.insert(tasks).values(values as never);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "task", entityId: 0, after: { op: "bulk_create", created: values.length } });
-      return { created: values.length };
-    }),
-
   /** Queue stats for the Tasks page header. */
   stats: workspaceProcedure.input(z.object({ mine: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();

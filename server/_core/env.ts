@@ -17,8 +17,9 @@ export const ENV = {
   // Generate with: `openssl rand -hex 32`. May also be a passphrase (hashed to 32 bytes).
   encryptionKey: process.env.ENCRYPTION_KEY ?? process.env.JWT_SECRET ?? "",
 
-  // DEPRECATED: Manus Forge platform shims. Still referenced by storage / dataApi /
-  // imageGeneration / map / notification / storageProxy / voiceTranscription.
+  // DEPRECATED: Manus Forge platform shims. Still referenced by storage /
+  // notification / storageProxy. dataApi, imageGeneration, map and
+  // voiceTranscription had no callers and were deleted (audit X6.1, 2026-11-07).
   // Schedule for removal alongside replacing each Manus dependency (see TODO P0).
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",

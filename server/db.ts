@@ -107,10 +107,10 @@ export async function getUserWorkspaces(userId: number) {
      * Deactivated memberships are NOT memberships — the same rule as
      * resolveWorkspace (3366f4b), which this list was missed by.
      *
-     * It matters twice: this is the workspace SWITCHER, so a leaver kept seeing
-     * the workspace they were removed from; and workspace.switch uses this very
-     * list as its authorization check ("Not a member of that workspace"), so it
-     * was authorising against a stale answer.
+     * It matters because this is the workspace SWITCHER, so a leaver kept
+     * seeing the workspace they were removed from. (workspace.switch also used
+     * this list as its authorization check; it echoed its input, had no caller
+     * and was deleted in 2026-11-07 (audit X6.2/G67).)
      *
      * SAFE because seed.ts's ensureUserHasWorkspace guards on ANY membership
      * row rather than an active one. workspace.list auto-bootstraps a seeded

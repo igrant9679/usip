@@ -9,7 +9,7 @@ import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { ElsieController } from "@/components/usip/Elsie";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -142,8 +142,8 @@ const HelpArticle = lazyChunk(() => import("@/pages/usip/HelpArticle"));
 const TourBuilder = lazyChunk(() => import("@/pages/usip/TourBuilder"));
 const Mindmaps = lazyChunk(() => import("@/pages/usip/Mindmaps"));
 const MindmapCanvas = lazyChunk(() => import("@/pages/usip/MindmapCanvas"));
-
-const INVITE_RETURN_KEY = "usip_invite_return";
+// Only for a page's error state (G37): the Shell is in every page's chunk, not the entry.
+const LazyShell = lazyChunk(() => import("@/components/usip/Shell").then((m) => ({ default: m.Shell })));
 
 function Landing() {
   // Sanitised at the READ, not at the use: this value reaches
@@ -443,20 +443,9 @@ function Landing() {
   );
 }
 
-function InviteReturnRedirect() {
-  const [, navigate] = useLocation();
-  const { user, loading } = useAuth();
-  useEffect(() => {
-    if (!loading && user) {
-      const returnPath = sessionStorage.getItem(INVITE_RETURN_KEY);
-      if (returnPath && returnPath.startsWith("/invite/accept")) {
-        sessionStorage.removeItem(INVITE_RETURN_KEY);
-        navigate(returnPath);
-      }
-    }
-  }, [loading, user, navigate]);
-  return null;
-}
+// InviteReturnRedirect is gone (audit G67, 2026-11-07): it read a
+// sessionStorage key nothing wrote. InviteAccept carries its own return path
+// through password-login.
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -467,7 +456,23 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // gate too: someone with no workspace to work in gets a screen that says
   // why, on every page (audit 2026-10-20, G35). The enforce2fa gate lives here
   // so it covers every authed page; in Shell it missed the settings hub (G66).
-  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceProvider>;
+  return <WorkspaceProvider><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate><PageBoundary>{children}</PageBoundary></WorkspaceAccessGate></WorkspaceProvider>;
+}
+
+/**
+ * Each signed-in page's own boundary (final pass 2026-11-07, G37). Shell has
+ * one around a page's content, but a page that throws in its own body never
+ * reaches its Shell, so the route boundary above every Shell caught it and the
+ * sidebar went too. This one sits inside the route, keyed by the path, and
+ * shows the error inside a Shell, so navigation stays and leaving clears it.
+ */
+function PageBoundary({ children }: { children: React.ReactNode }) {
+  const [path] = useLocation();
+  return (
+    <ErrorBoundary resetKey={path} inline wrap={(content) => <Suspense fallback={content}><LazyShell>{content}</LazyShell></Suspense>}>
+      {children}
+    </ErrorBoundary>
+  );
 }
 
 function PageLoading() {
@@ -584,15 +589,13 @@ function Router() {
       <Route path="/join"><JoinViaLink /></Route>
 
       {/*
-        Redesigned sidebar — new IA routes.
-        Bespoke new pages we're actively building (kept):
-          People, Companies, AI Assistant, Deliverability suite, Calls,
-          Website visitors.
-        The remaining items are intentionally NOT linked to the existing pages
-        yet — they render placeholders so the new pages can be built fresh. The
-        existing, fully-working pages stay reachable via the "More" section
-        (Segments, Data Health, Sequences, Mailbox, Tasks, Calendar, Unified
-        Inbox, Pipeline, Workflows, Dashboards, Contacts, Accounts).
+        The redesigned sidebar's pages live under /v2. None of them is a
+        placeholder any more (audit G67, 2026-11-07: this comment said they
+        were). The /v2 prefix is kept although most v1 pages are retired:
+        renaming would break bookmarks, emailed links, help articles and tour
+        anchors for a cosmetic gain. Where a v1 page and a v2 page still both
+        route, each pair is recorded with its reason in server/deadCode.test.ts
+        (ROUTE_PAIRS).
       */}
       <Route path="/v2/home"><AuthGate><Home /></AuthGate></Route>
       <Route path="/v2/library"><AuthGate><Library /></AuthGate></Route>

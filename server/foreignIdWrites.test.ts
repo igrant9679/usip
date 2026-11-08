@@ -332,17 +332,15 @@ describe("no write procedure accepts another workspace's id", () => {
       ["activities.addNote", "relatedId"],
       ["activities.logCall", "relatedId"],
       // Found by this scan on 2026-11-07, each one a foreign id written.
+      // 2026-11-07 (audit X6.2/G67): tasks.bulk, campaigns.update, campaigns.attachComponent,
+      // dashboardLayouts.saveLayout and tours.upsert were found here too; none
+      // had a caller, so they are deleted rather than pinned.
       ["activities.logMeeting", "relatedId"],
-      ["tasks.bulk", "targets[].relatedId"],
-      ["tasks.bulk", "template.ownerUserId"],
       ["meetings.create", "relatedId"],
       ["crmNotes.create", "entityId"],
       ["sequences.assign", "userId"],
-      ["campaigns.update", "patch.ownerUserId"],
-      ["campaigns.attachComponent", "campaignId"],
       ["quotes.create", "lineItems[].productId"],
       ["settings.save", "systemSenderAccountId"],
-      ["dashboardLayouts.saveLayout", "dashboardId"],
       ["oppIntelligence.addCoOwner", "userId"],
       ["pipelineAlerts.logActivityOnDeal", "opportunityId"],
       ["are.campaigns.create", "icpProfileId"],
@@ -351,7 +349,6 @@ describe("no write procedure accepts another workspace's id", () => {
       ["mailboxAi.triageThread", "accountId"],
       ["helpCenter.createArticle", "categoryId"],
       ["helpCenter.updateArticle", "associatedTourId"],
-      ["tours.upsert", "prerequisiteTourId"],
       ["tours.startTour", "tourId"],
       ["mindmaps.createLinkedTask", "mindmapId"],
       ["mindmaps.createLinkedTask", "ownerUserId"],

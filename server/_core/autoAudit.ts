@@ -36,10 +36,8 @@ export const AUTO_AUDIT_SKIP: Record<string, string> = {
   // A person's own view of the app.
   "profile.updateMyAppearance": "a person's theme",
   "dashboards.saveLayout": "a person's dashboard layout",
-  "dashboardLayouts.saveLayout": "a person's dashboard layout",
   "savedSearches.markApplied": "which saved search is showing",
   "savedSearches.clearApplied": "which saved search is showing",
-  "helpCenter.updateLearningPrefs": "a person's help preferences",
   // Guided-tour progress and help-centre use, per person, per step.
   "tours.startTour": "tour progress",
   "tours.advanceStep": "tour progress",

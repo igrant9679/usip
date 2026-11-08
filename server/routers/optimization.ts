@@ -55,20 +55,6 @@ export const optimizationRouter = router({
         .limit(input?.limit ?? 50);
     }),
 
-  /** Pending count, for a nav badge. */
-  pendingCount: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) return 0;
-    const rows = await db
-      .select({ id: optimizationRecommendations.id })
-      .from(optimizationRecommendations)
-      .where(and(
-        eq(optimizationRecommendations.workspaceId, ctx.workspace.id),
-        eq(optimizationRecommendations.status, "pending" as never),
-      ));
-    return rows.length;
-  }),
-
   /**
    * Accept a recommendation and APPLY it when it carries an applicable patch.
    *
@@ -211,12 +197,6 @@ export const optimizationRouter = router({
     // force: a human asking explicitly should get an answer even when the mode
     // is 'off' (which otherwise skips the analyzers entirely).
     return runOptimizationAnalyzers(ctx.workspace.id, true);
-  }),
-
-  /** Which analyzers exist, so the UI can explain what is and isn't covered. */
-  analyzers: workspaceProcedure.query(async () => {
-    const { ANALYZERS } = await import("../services/optimization/runner");
-    return ANALYZERS.map((a) => ({ module: a.module, name: a.name }));
   }),
 
   /** Bulk dismiss — clears a noisy backlog without 20 clicks. */

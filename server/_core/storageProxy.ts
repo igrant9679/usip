@@ -76,7 +76,8 @@ export function registerStorageProxy(app: Express) {
      *
      * A key WITHOUT that prefix falls back to authenticated-only: there is
      * nothing in it to scope by, and the sole writer of such keys
-     * (`_core/imageGeneration.ts`, `generated/<ts>.png`) has no callers at all.
+     * (`_core/imageGeneration.ts`, `generated/<ts>.png`) had no callers and
+     * was deleted (audit X6.1, 2026-11-07), so nothing writes one today.
      * Failing those closed would break nothing today and is the safer default
      * if that ever changes — but silently 403ing an object nobody can attribute
      * is worse than saying so here.

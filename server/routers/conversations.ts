@@ -78,14 +78,6 @@ export const conversationsRouter = router({
     };
   }),
 
-  get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return null;
-    const [row] = await db.select().from(emailReplies)
-      .where(and(eq(emailReplies.id, input.id), eq(emailReplies.workspaceId, ctx.workspace.id)));
-    return row ?? null;
-  }),
-
   /** Classify a single reply with AI. */
   classify: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();

@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { SaveTracker, confirmLeaveWhile } from "@/lib/saveTracker";
 import { isAdminRole } from "@shared/roleRank";
 import { conversionRate } from "@shared/publicForm";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const ALL_FIELDS = [
   { key: "name", label: "Full name" },
@@ -166,6 +167,8 @@ export default function LandingPages() {
 
   return (
     <Shell title="Landing Pages">
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div data-tour-id="landing-pages-list" className="flex h-full min-h-0">
         {/* List */}
         {/* A phone shows the list or the open one, not both side by side (X5.5). */}

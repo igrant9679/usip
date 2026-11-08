@@ -57,6 +57,7 @@ import {
   type SequenceSettings,
 } from "@/components/usip/canvas/SequenceSettingsPanel";
 import { NOT_RUN_NODE_TYPES, canvasNotRunNotes } from "@/lib/canvasSupport";
+import { QueryError } from "@/components/usip/Shell";
 
 /* ─── Node type colours ─────────────────────────────────────────────────── */
 const NODE_COLORS: Record<string, string> = {
@@ -484,6 +485,12 @@ function CanvasInner({
   const anyPanelOpen = selectedNode !== null || settingsOpen;
   const notRunNotes = canvasNotRunNotes(nodes, edges);
 
+  // A failed load is not an empty canvas (audit X1.6): building on a blank
+  // one and saving would replace the steps that failed to load.
+  if (canvasQ.error && !canvasQ.data) {
+    return <div className="flex h-full items-center justify-center"><QueryError what="this sequence's steps" message={canvasQ.error.message} onRetry={() => { void canvasQ.refetch(); }} /></div>;
+  }
+
   return (
     <div className="flex h-full">
       {/* Palette sidebar — a sheet on a phone, opened from the canvas */}
@@ -637,7 +644,10 @@ export default function SequenceCanvas() {
         <Link href="/sequences" aria-label="Back to sequences" className="text-muted-foreground hover:text-foreground transition">
           <ArrowLeft className="size-4" />
         </Link>
-        <div className="min-w-0 font-semibold text-sm truncate max-w-[55vw] sm:max-w-xs">{seq?.name ?? "Loading…"}</div>
+        {seqQ.error && !seq && (
+          <button type="button" className="text-xs underline text-muted-foreground" onClick={() => { void seqQ.refetch(); }}>Retry</button>
+        )}
+        <div className="min-w-0 font-semibold text-sm truncate max-w-[55vw] sm:max-w-xs">{seq?.name ?? (seqQ.error ? "Couldn’t load this sequence" : "Loading…")}</div>
         {seq && (
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[seq.status] ?? ""}`}>
             {seq.status}

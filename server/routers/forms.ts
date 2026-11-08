@@ -40,13 +40,6 @@ export const formsRouter = router({
     return db.select().from(forms).where(eq(forms.workspaceId, ctx.workspace.id)).orderBy(desc(forms.createdAt));
   }),
 
-  get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return null;
-    const [row] = await db.select().from(forms).where(and(eq(forms.id, input.id), eq(forms.workspaceId, ctx.workspace.id)));
-    return row ?? null;
-  }),
-
   /** Public: fetch a form's renderable shape by its public id (active only). */
   getByPublicId: publicProcedure.input(z.object({ publicId: z.string() })).query(async ({ input }) => {
     const db = await getDb();

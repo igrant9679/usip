@@ -2862,17 +2862,6 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
     if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be edited." });
     return { ok: true };
   }),
-
-  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    // A sent draft is the record of what went out (and what its unsubscribe
-    // link points at); one being sent is someone else's.
-    const res = await db.delete(emailDrafts)
-      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, EDITABLE_DRAFT_STATUSES)));
-    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be deleted." });
-    return { ok: true };
-  }),
 });
 
 /* ─────────────────────────────────────────────────────────────────────────────

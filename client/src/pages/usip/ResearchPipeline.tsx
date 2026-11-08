@@ -13,6 +13,7 @@ import { CheckCircle, Circle, Loader2, ChevronDown, ChevronRight, Sparkles, Copy
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { formatUsd } from "@shared/researchModels";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const STAGES = [
   { id: 1, label: "Prospect Research", description: "Company + person profile" },
@@ -155,6 +156,8 @@ export default function ResearchPipeline() {
       <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline for one contact: prospect research → signals → angles → draft variants → final pick. Every stage's output is kept, and the draft waits in the Email Drafts queue for your review before anything is sent." pageKey="research-pipeline"
         icon={<FlaskConical className="size-5" />}
       />
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 max-w-5xl mx-auto space-y-6">
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

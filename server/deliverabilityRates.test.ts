@@ -206,7 +206,8 @@ describe("the router stops serving the columns nothing writes", () => {
     expect(conn).not.toContain("tryDecryptSecret(account.sendgridApiKeyEnc)");
   });
 
-  it("senderPools.get does not serve the stored tier by a side door", () => {
+  // 2026-11-07 (audit X6.2/G67): senderPools.get is deleted; no pool read may serve the stored tier.
+  it("no pool read serves the stored tier by a side door", () => {
     expect(routerCode).not.toContain("reputationTier: sendingAccounts.reputationTier");
   });
 

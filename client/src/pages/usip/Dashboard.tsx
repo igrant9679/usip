@@ -8,6 +8,7 @@
  *   Row 4: Recent Opportunities table | AI Drafts Awaiting Review
  */
 import { PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { trpc } from "@/lib/trpc";
 import {
   Select,
@@ -398,6 +399,8 @@ export default function Dashboard() {
           </button>
         </div>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 space-y-6">
 
         {/* ── Funnel overview: the workflow at a glance ── */}

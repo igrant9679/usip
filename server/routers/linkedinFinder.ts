@@ -23,8 +23,6 @@ import { prospects } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import {
   listUsableAccounts,
-  lookupProfile,
-  searchLinkedInProfiles,
   LINKEDIN_DAILY_CAP,
 } from "../services/linkedinLookup";
 import { buildScrapedProspectValues } from "../services/prospectFromSource";
@@ -49,71 +47,6 @@ export const linkedinFinderRouter = router({
       accounts,
     };
   }),
-
-  /** Look up a LinkedIn profile URL. Rate-limited per bridged account. */
-  lookup: workspaceProcedure
-    .input(
-      z.object({
-        linkedinUrl: z.string().min(3).max(2048),
-        /** Admins only — route through a specific pool account. */
-        accountId: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const isAdmin = isAdminRole(ctx.member.role);
-      return lookupProfile({
-        workspaceId: ctx.workspace.id,
-        userId: ctx.user.id,
-        isAdmin,
-        linkedinUrl: input.linkedinUrl,
-        requestedAccountId: isAdmin ? input.accountId : undefined,
-      });
-    }),
-
-  /**
-   * Search LinkedIn people by structured criteria (name / title / location /
-   * industry / company size). Routes through a bridged account via Unipile's
-   * classic people-search API.
-   */
-  search: workspaceProcedure
-    .input(
-      z.object({
-        name: z.string().max(200).optional(),
-        title: z.string().max(200).optional(),
-        location: z.string().max(200).optional(),
-        industry: z.string().max(200).optional(),
-        companySize: z.string().max(40).optional(),
-        keywords: z.string().max(300).optional(),
-        limit: z.number().min(1).max(25).default(10),
-        /** Admins only — route through a specific pool account. */
-        accountId: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const isAdmin = isAdminRole(ctx.member.role);
-      // Fold the structured filters into one classic-search keyword string.
-      const parts = [
-        input.name,
-        input.title,
-        input.keywords,
-        input.location,
-        input.industry,
-      ]
-        .map((s) => (s ?? "").trim())
-        .filter(Boolean);
-      if (input.companySize && input.companySize !== "any") {
-        parts.push(`${input.companySize} employees`);
-      }
-      return searchLinkedInProfiles({
-        workspaceId: ctx.workspace.id,
-        userId: ctx.user.id,
-        isAdmin,
-        keywords: parts.join(" "),
-        limit: input.limit,
-        requestedAccountId: isAdmin ? input.accountId : undefined,
-        source: "finder",
-      });
-    }),
 
   /** Bulk-persist selected LinkedIn search hits as prospect rows. */
   saveSearchHits: workspaceProcedure

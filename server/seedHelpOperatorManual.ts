@@ -154,7 +154,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page. (The Broadcasts page that prepared one message to a segment was retired on 2026-10-27; a fixed-copy Revenue Engine campaign does that job.)
 
-**Proposals** (/proposals) are client-facing documents with sections, milestones, a portal link and e-sign; **Quotes** (/quotes) price a deal from the **Products** (/products) catalog.
+**Proposals** (/proposals) are client-facing documents with sections, milestones and a portal link where the client reviews and accepts them; **Quotes** (/quotes) price a deal from the **Products** (/products) catalog.
 
 **Calls** (/v2/calls) is the call queue and log, plus AI voice agents that answer call-backs and log transcripts.
 

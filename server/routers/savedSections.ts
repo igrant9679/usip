@@ -87,28 +87,6 @@ export const savedSectionsRouter = router({
       return rows;
     }),
 
-  /** Get a single saved section by id */
-  get: workspaceProcedure
-    .input(z.object({ id: z.number() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-      const [row] = await db
-        .select()
-        .from(emailSavedSections)
-        .where(
-          and(
-            eq(emailSavedSections.id, input.id),
-            eq(emailSavedSections.workspaceId, ctx.workspace.id),
-          ),
-        )
-        .limit(1);
-
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return row;
-    }),
-
   /** Save a new section from selected canvas blocks */
   create: repProcedure
     .input(createInput)

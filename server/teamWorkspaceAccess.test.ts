@@ -379,9 +379,9 @@ describe("G52/O43: sender pools take a manager, and hold each account once", () 
     for (const p of [
       rep.create({ name: "Mine", members: [{ accountId: 70 }] } as any),
       rep.update({ id: 60, name: "Renamed" } as any),
-      rep.addMember({ poolId: 60, accountId: 71 }),
-      rep.removeMember({ memberId: 61 }),
-      rep.updateMemberWeight({ memberId: 61, weight: 50 }),
+      rep.update({ id: 60, members: [{ accountId: 70, weight: 50 }, { accountId: 71 }] } as any),
+      // 2026-11-07 (audit X6.2/G67): addMember, removeMember and updateMemberWeight had no caller
+      // (the page edits members through update) and are deleted.
     ]) {
       expect((await refusal(p)).message).toBe("Requires manager role");
     }
@@ -392,8 +392,7 @@ describe("G52/O43: sender pools take a manager, and hold each account once", () 
 
   it("a manager can, and an account goes into a pool once", async () => {
     const mgr = caller(25).senderPools;
-    expect((await refusal(mgr.addMember({ poolId: 60, accountId: 70 }))).code).toBe("CONFLICT");
-    await mgr.addMember({ poolId: 60, accountId: 71 });
+    await mgr.update({ id: 60, members: [{ accountId: 70 }, { accountId: 70 }, { accountId: 71 }] } as any);
     expect(rows("sender_pool_members").filter((m) => m.poolId === 60).map((m) => m.accountId).sort()).toEqual([70, 71]);
     const { id } = await mgr.create({ name: "Twice", members: [{ accountId: 70 }, { accountId: 70 }, { accountId: 71 }] } as any);
     expect(rows("sender_pool_members").filter((m) => m.poolId === id).map((m) => m.accountId)).toEqual([70, 71]);
@@ -642,7 +641,9 @@ describe("G35: someone with no workspace to work in is told why", () => {
 
   it("every authed page goes through the gate", () => {
     const app = strip(read("client/src/App.tsx"));
-    expect(app).toContain("<WorkspaceAccessGate>{children}</WorkspaceAccessGate>");
+    // 2026-11-07 (audit G37): each page now sits in its own error boundary
+    // inside the gate; the gate still wraps every authed page.
+    expect(app).toContain("<WorkspaceAccessGate><PageBoundary>{children}</PageBoundary></WorkspaceAccessGate>");
     const gate = strip(read("client/src/components/usip/WorkspaceAccessGate.tsx"));
     expect(gate).toContain("const empty = !isLoading && workspaces.length === 0;");
     expect(gate).toContain("if (current && !canOpenWorkspace(current)) {");

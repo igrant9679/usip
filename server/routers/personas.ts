@@ -190,20 +190,6 @@ export const personasRouter = router({
 
   listPresets: workspaceProcedure.query(() => PRESET_PERSONAS),
 
-  get: workspaceProcedure
-    .input(z.object({ id: z.number() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [row] = await db
-        .select()
-        .from(personas)
-        .where(and(eq(personas.id, input.id), eq(personas.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return row;
-    }),
-
   create: managerProcedure
     .input(PersonaInput)
     .mutation(async ({ ctx, input }) => {

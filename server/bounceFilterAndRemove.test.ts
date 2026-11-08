@@ -3,7 +3,6 @@
  *
  * Feature 58: View Bounced Emails — bounced filter logic
  * Feature 59: Bounce Trend Line — daily bounce aggregation added to getTrackingTimeSeries
- * Feature 60: Remove from Suppression — removeByEmail mutation logic
  */
 import { describe, it, expect } from "vitest";
 
@@ -242,91 +241,5 @@ describe("getTrackingTimeSeries — bounce series (Feature 59)", () => {
   });
 });
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Feature 60 — removeByEmail mutation logic
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-function buildRemoveByEmailResult(email: string): { ok: boolean; email: string } {
-  return { ok: true, email: email.toLowerCase() };
-}
-
-function normalizeEmail(email: string): string {
-  return email.toLowerCase();
-}
-
-describe("removeByEmail — mutation result", () => {
-  it("returns ok: true on success", () => {
-    const result = buildRemoveByEmailResult("user@example.com");
-    expect(result.ok).toBe(true);
-  });
-
-  it("returns the normalized email in the result", () => {
-    const result = buildRemoveByEmailResult("User@Example.COM");
-    expect(result.email).toBe("user@example.com");
-  });
-
-  it("lowercases the email before deletion", () => {
-    expect(normalizeEmail("UPPER@DOMAIN.COM")).toBe("upper@domain.com");
-  });
-
-  it("handles already-lowercase email", () => {
-    expect(normalizeEmail("lower@domain.com")).toBe("lower@domain.com");
-  });
-
-  it("handles mixed-case email", () => {
-    expect(normalizeEmail("Mixed.Case@Domain.Org")).toBe("mixed.case@domain.org");
-  });
-});
-
-describe("removeByEmail — toast message formatting", () => {
-  function buildToastMessage(email: string): string {
-    return `${email} removed from suppression list. You can now send emails to this address.`;
-  }
-
-  it("includes the email address in the toast", () => {
-    const msg = buildToastMessage("user@example.com");
-    expect(msg).toContain("user@example.com");
-  });
-
-  it("mentions suppression list in the toast", () => {
-    const msg = buildToastMessage("user@example.com");
-    expect(msg).toContain("suppression list");
-  });
-
-  it("confirms sending is re-enabled", () => {
-    const msg = buildToastMessage("user@example.com");
-    expect(msg).toContain("You can now send emails");
-  });
-
-  it("toast is non-empty", () => {
-    const msg = buildToastMessage("a@b.com");
-    expect(msg.length).toBeGreaterThan(10);
-  });
-});
-
-describe("removeByEmail — scope safety", () => {
-  it("workspace scoping is required (deletion includes workspaceId condition)", () => {
-    // Verify the mutation requires both workspaceId AND email for deletion
-    // This mirrors the server-side AND condition in the WHERE clause
-    function buildWhereConditions(workspaceId: number, email: string) {
-      return { workspaceId, email: email.toLowerCase() };
-    }
-    const conditions = buildWhereConditions(42, "test@example.com");
-    expect(conditions.workspaceId).toBe(42);
-    expect(conditions.email).toBe("test@example.com");
-  });
-
-  it("deletes all suppression records for the email (all reasons)", () => {
-    // The mutation deletes by email only (not by reason), removing all suppression
-    // reasons (bounce, unsubscribe, spam_complaint, manual) for that address
-    const suppressions = [
-      { id: 1, email: "x@y.com", reason: "bounce" },
-      { id: 2, email: "x@y.com", reason: "unsubscribe" },
-      { id: 3, email: "other@y.com", reason: "bounce" },
-    ];
-    const emailToRemove = "x@y.com";
-    const remaining = suppressions.filter((s) => s.email !== emailToRemove);
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0].email).toBe("other@y.com");
-  });
-});
+/* Feature 60 (removeByEmail) is gone: 2026-11-07 (audit X6.2/G67), the mutation had no caller (the
+   suppression page removes rows one at a time through `remove`) and is deleted. */

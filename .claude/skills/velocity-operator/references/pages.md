@@ -133,7 +133,7 @@ Saved rule-based audiences that stay current (match all/any, rules over person a
 ## Proposals
 
 ### ★ Proposals — `/proposals`
-Client-facing proposals with sections, milestones, budget, requirements, a portal share link, e-sign, expiry with extension requests, score snapshots. Link to an opportunity.
+Client-facing proposals with sections, milestones, budget, requirements, a portal share link where the client reviews and accepts, expiry with extension requests, score snapshots. Link to an opportunity.
 
 ### Quotes — `/quotes` · Products — `/products`
 Priced quotes attached to deals with line items from the Products catalog; totals, discounts, terms, sent/accepted states.

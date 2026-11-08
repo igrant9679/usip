@@ -64,7 +64,9 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   emailTemplates: { group: "Outreach", description: "Email templates" },
   snippets: { group: "Outreach", description: "Reusable snippets" },
   sequenceAb: { group: "Outreach", description: "Sequence subject A/B tests" },
-  campaigns: { group: "Marketing", description: "Broadcasts (one message to a segment) and their audiences" },
+  // 2026-11-07 (audit X6.2/G67): the legacy Broadcasts page was retired on 2026-10-27 and its
+  // writes are deleted; only the list of old rows remains.
+  campaigns: { group: "Marketing", description: "Legacy broadcasts (retired): list the old rows, read only. Autonomous campaigns are under are." },
   segments: { group: "Marketing", description: "Saved audiences (rule-based)" },
   segmentRules: { group: "Marketing", description: "Auto-enroll a segment into a sequence" },
   are: { group: "Revenue Engine", description: "Autonomous campaigns: create, update, status, approve/skip/restore people, push people in, regenerate sequences, routing and proposals, metrics, ICP" },
@@ -239,7 +241,6 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "reports.save": "Save a report spec under a name.",
   "reports.setSchedule": "Email a saved report daily / weekly / monthly to recipients.",
   "segments.create": "Create a rule-based audience.",
-  "campaigns.create": "Create a broadcast (audience + copy; not sending yet).",
   "proposals.create": "Create a client proposal.",
   "quotes.create": "Create a quote on a deal.",
   "workflows.create": "Create a workflow rule (trigger, conditions, actions).",

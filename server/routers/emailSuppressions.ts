@@ -206,30 +206,6 @@ export const emailSuppressionsRouter = {
       return { ok: true as const, added, alreadySuppressed: already, invalid: parsed.invalid, truncated: parsed.truncated, max: SUPPRESSION_IMPORT_MAX };
     }),
 
-  /** Check if one or more emails are suppressed */
-  check: workspaceProcedure
-    .input(z.object({ emails: z.array(z.string().email()).min(1).max(100) }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const rows = await db
-        .select({ email: emailSuppressions.email, reason: emailSuppressions.reason })
-        .from(emailSuppressions)
-        .where(
-          and(
-            eq(emailSuppressions.workspaceId, ctx.workspace.id),
-            // Normalised: the stored side is normalised on write, so the query
-            // side must match or a padded address reports as not-suppressed.
-            inArray(emailSuppressions.email, input.emails.map(normalizeSuppressionEmail))
-          )
-        );
-      const suppressed = new Set(rows.map((r) => normalizeSuppressionEmail(r.email)));
-      return {
-        suppressed: input.emails.filter((e) => suppressed.has(normalizeSuppressionEmail(e))),
-        details: rows,
-      };
-    }),
-
   /** Manually add a suppression */
   add: adminWsProcedure
     .input(
@@ -289,23 +265,6 @@ export const emailSuppressionsRouter = {
     for (const r of rows) counts[r.reason]++;
     return counts;
   }),
-
-  /** Remove ALL suppression records for a given email address (Feature 60) */
-  removeByEmail: adminWsProcedure
-    .input(z.object({ email: z.string().email() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(emailSuppressions)
-        .where(
-          and(
-            eq(emailSuppressions.workspaceId, ctx.workspace.id),
-            eq(emailSuppressions.email, normalizeSuppressionEmail(input.email)),
-          )
-        );
-      return { ok: true, email: normalizeSuppressionEmail(input.email) };
-    }),
 
   /**
    * Bulk opt-out: suppress every selected prospect's email (do-not-contact), so

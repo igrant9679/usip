@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { trpc } from "@/lib/trpc";
 import {
   AlertTriangle,
@@ -155,6 +156,8 @@ export default function EmailAnalytics() {
       
         icon={<BarChart2 className="size-5" />}
       />
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {/* KPI Cards */}
       <div className="px-6 pt-2 grid grid-cols-2 lg:grid-cols-4 gap-4">

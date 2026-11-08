@@ -165,6 +165,16 @@ export default function ConversationsV2() {
     utils.conversations.socialStats.invalidate();
   };
 
+  // Opening a reply marks it read (audit X6.2/G67): markRead and
+  // markSocialRead existed with no caller, so the unread dot and bold name
+  // never cleared however many times a reply was opened. Best-effort: a failed
+  // write costs the dot, not the reading.
+  const markRead = trpc.conversations.markRead.useMutation({ meta: { silentError: true }, onSuccess: () => invalidateAll() });
+  const markSocialRead = trpc.conversations.markSocialRead.useMutation({ meta: { silentError: true }, onSuccess: () => invalidateAll() });
+  const openReply = (r: Reply) => {
+    setSelected(r);
+    if (!r.readAt) (isEmail ? markRead : markSocialRead).mutate({ id: r.id });
+  };
   const setMode = trpc.conversations.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.conversations.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
@@ -278,7 +288,7 @@ export default function ConversationsV2() {
                   const href = recordHref(r);
                   const unread = !r.readAt;
                   return (
-                    <button key={r.id} onClick={() => setSelected(r)}
+                    <button key={r.id} onClick={() => openReply(r)}
                       className="w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
                       <span className="relative shrink-0">
                         <ColorAvatar name={r.fromName || r.fromEmail} size="size-8" />

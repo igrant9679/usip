@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { notifyOwner } from "./notification";
 import { adminRuntimePayload } from "../health";
-import { adminProcedure, publicProcedure, router } from "./trpc";
+import { publicProcedure, router } from "./trpc";
 import { superAdminProcedure } from "./workspace";
 
 export const systemRouter = router({
@@ -36,25 +35,11 @@ export const systemRouter = router({
    * production host's exact Node patch version. A super_admin cannot be
    * minted the same way.
    *
-   * NOT adminProcedure, the one used just below: that tests `users.role`, a
-   * two-value global flag separate from the workspace role. It IS set to
-   * "admin" for the owner, so it would work — but it has no other callers,
-   * nothing in the app writes it, and no UI shows it, so what it means
-   * today rests on whatever set it by hand.
+   * NOT adminProcedure: that tests `users.role`, a two-value global flag
+   * separate from the workspace role. It IS set to "admin" for the owner,
+   * so it would work — but nothing in the app writes it and no UI shows it,
+   * so what it means today rests on whatever set it by hand. (Its one user
+   * here, notifyOwner, had no caller and was deleted: audit X6.2, 2026-11-07.)
    */
   deployRuntime: superAdminProcedure.query(() => adminRuntimePayload()),
-
-  notifyOwner: adminProcedure
-    .input(
-      z.object({
-        title: z.string().min(1, "title is required"),
-        content: z.string().min(1, "content is required"),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const delivered = await notifyOwner(input);
-      return {
-        success: delivered,
-      } as const;
-    }),
 });

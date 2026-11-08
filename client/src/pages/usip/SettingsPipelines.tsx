@@ -34,6 +34,7 @@ import { confirmAction, Field, FormDialog, SelectField } from "@/components/usip
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { toast } from "sonner";
 import { Plus, Star, Trash2, KanbanSquare, ChevronUp, ChevronDown, Check, X } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 export default function SettingsPipelines() {
   const utils = trpc.useUtils();
@@ -130,6 +131,8 @@ export default function SettingsPipelines() {
         <Button asChild variant="outline" size="sm"><Link href="/pipeline">Back to pipeline</Link></Button>
         {canEdit && <Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-4 mr-1" /> New pipeline</Button>}
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
         {/* Left: pipeline list */}

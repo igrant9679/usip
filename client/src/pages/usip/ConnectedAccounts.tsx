@@ -49,6 +49,7 @@ import {
   MessageSquare,
   UserPlus,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 
 // ─── Provider definitions ─────────────────────────────────────────────────────
@@ -370,7 +371,7 @@ export default function ConnectedAccounts() {
     <Shell>
       <PageHeader
         title="Connected Accounts"
-        description="Connect your LinkedIn, email, and social accounts to power outreach, engagement tracking, and automated follow-ups. All connected accounts are synced in real time."
+        description="Connect your LinkedIn, email, and social accounts to power outreach, engagement tracking, and automated follow-ups. New mail and messages arrive as the provider pushes them; LinkedIn connection changes can take a few hours to show."
         pageKey="connected-accounts"
         icon={<Link2 className="size-5" />}
       >
@@ -459,6 +460,8 @@ export default function ConnectedAccounts() {
           </Button>
         </div>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       {/* Connecting banner - shown while auth tab is open */}
       {isConnecting && (
         <div className="mx-6 mt-4 flex items-center gap-3 rounded-lg border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700">

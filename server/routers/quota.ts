@@ -241,19 +241,4 @@ export const quotaRouter = router({
         },
       };
     }),
-
-  /** Team-wide quota summary for current period */
-  // teamSummary returns everyone's targets/attainment — strictly a
-  // manager+ view. Reps shouldn't see peer compensation numbers.
-  teamSummary: managerProcedure
-    .input(z.object({ period: z.string() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      const targets = await db
-        .select()
-        .from(quotaTargets)
-        .where(and(eq(quotaTargets.workspaceId, ctx.workspace.id), inArray(quotaTargets.period, periodKeysCovering(input.period))));
-      return targets;
-    }),
 });

@@ -7,7 +7,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { TRPCError } from "@trpc/server";
-import { eq, and, inArray, desc, isNull, isNotNull, ne } from "drizzle-orm";
+import { eq, and, inArray, isNull, isNotNull, ne } from "drizzle-orm";
 import {
   aiPipelineJobs,
   emailDrafts,
@@ -316,46 +316,6 @@ Org context: ${orgResearch.slice(0, 300)}`,
 /* ─── Router ──────────────────────────────────────────────────────────── */
 
 export const aiPipelineRouter = router({
-  /** Trigger pipeline for a single contact */
-  runForContact: workspaceProcedure
-    .input(z.object({ contactId: z.number().optional(), leadId: z.number().optional() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // The no-email door, CRM side (2026-09-20): a draft for someone we
-      // cannot mail is a ghost row — April's "no recipient" review queue.
-      if (input.contactId) {
-        const [c] = await db.select({ email: contacts.email }).from(contacts)
-          .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)));
-        if (!c?.email?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "This contact has no email address — find one first (enrichment), then draft." });
-      } else if (input.leadId) {
-        const [l] = await db.select({ email: leads.email }).from(leads)
-          .where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
-        if (!l?.email?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "This lead has no email address — find one first (enrichment), then draft." });
-      }
-      const [job] = await db
-        .insert(aiPipelineJobs)
-        .values({
-          workspaceId: ctx.workspace.id,
-          contactId: input.contactId ?? null,
-          leadId: input.leadId ?? null,
-          status: "queued",
-          triggeredByUserId: ctx.user.id,
-        })
-        .$returningId();
-      const jobId = (job as any).id;
-      // Run async (fire and forget — client polls getQueueStats)
-      setImmediate(() =>
-        runPipelineForContact(
-          ctx.workspace.id,
-          jobId,
-          input.contactId ?? null,
-          input.leadId ?? null,
-          ctx.user.id
-        )
-      );
-      return { jobId };
-    }),
 
   /** Trigger pipeline for multiple contacts */
   runBulk: workspaceProcedure
@@ -398,84 +358,6 @@ export const aiPipelineRouter = router({
       return { jobIds, count: jobIds.length, skippedNoEmail };
     }),
 
-  /** Get recent pipeline jobs for this workspace */
-  getJobs: workspaceProcedure
-    .input(z.object({ limit: z.number().default(20) }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const jobs = await db
-        .select()
-        .from(aiPipelineJobs)
-        .where(eq(aiPipelineJobs.workspaceId, ctx.workspace.id))
-        .orderBy(desc(aiPipelineJobs.createdAt))
-        .limit(input.limit);
-      return jobs;
-    }),
-
-  /** Get queue stats — count of drafts by status */
-  getQueueStats: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const drafts = await db
-      .select()
-      .from(emailDrafts)
-      .where(
-        and(
-          eq(emailDrafts.workspaceId, ctx.workspace.id),
-          inArray(emailDrafts.status as any, ["ai_pending_review", "approved", "rejected", "sent"])
-        )
-      );
-    const stats = {
-      pending_review: 0,
-      approved: 0,
-      rejected: 0,
-      sent: 0,
-      total: drafts.length,
-    };
-    for (const d of drafts) {
-      if (d.status === "ai_pending_review") stats.pending_review++;
-      else if (d.status === "approved") stats.approved++;
-      else if (d.status === "rejected") stats.rejected++;
-      else if (d.status === "sent") stats.sent++;
-    }
-    return stats;
-  }),
-
-  /** Get draft review queue (ai_pending_review drafts with job context) */
-  getDraftQueue: workspaceProcedure
-    .input(z.object({ page: z.number().default(1), pageSize: z.number().default(20) }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const offset = (input.page - 1) * input.pageSize;
-      const drafts = await db
-        .select()
-        .from(emailDrafts)
-        .where(
-          and(
-            eq(emailDrafts.workspaceId, ctx.workspace.id),
-            eq(emailDrafts.status as any, "ai_pending_review")
-          )
-        )
-        .orderBy(desc(emailDrafts.createdAt))
-        .limit(input.pageSize)
-        .offset(offset);
-
-      // Attach job context for each draft
-      const jobIds = Array.from(new Set(drafts.map((d) => d.pipelineJobId).filter(Boolean))) as number[];
-      const jobs =
-        jobIds.length > 0
-          ? await db.select().from(aiPipelineJobs).where(inArray(aiPipelineJobs.id, jobIds))
-          : [];
-      const jobMap = Object.fromEntries(jobs.map((j) => [j.id, j]));
-
-      return drafts.map((d) => ({
-        ...d,
-        job: d.pipelineJobId ? jobMap[d.pipelineJobId] ?? null : null,
-      }));
-    }),
-
   /** Approve a draft (optionally with edits) */
   approveDraft: workspaceProcedure
     .input(
@@ -505,39 +387,6 @@ export const aiPipelineRouter = router({
         })
         .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)));
       return { ok: true };
-    }),
-
-  /** Reject a draft */
-  rejectDraft: workspaceProcedure
-    .input(z.object({ draftId: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .update(emailDrafts)
-        .set({ status: "rejected", reviewedByUserId: ctx.user.id })
-        .where(
-          and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id))
-        );
-      return { ok: true };
-    }),
-
-  /** Bulk approve all pending drafts for a job */
-  bulkApproveDrafts: workspaceProcedure
-    .input(z.object({ draftIds: z.array(z.number()) }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .update(emailDrafts)
-        .set({ status: "approved", reviewedByUserId: ctx.user.id })
-        .where(
-          and(
-            inArray(emailDrafts.id, input.draftIds),
-            eq(emailDrafts.workspaceId, ctx.workspace.id)
-          )
-        );
-      return { ok: true, count: input.draftIds.length };
     }),
 
   /**
@@ -698,18 +547,6 @@ Return JSON with:
       }
     }),
 
-  /** Delete one email draft from the AI Pipeline queue. */
-  deleteDraft: workspaceProcedure
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(emailDrafts)
-        .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
-      return { ok: true };
-    }),
-
   /**
    * Bulk-delete drafts, optionally filtered by status. Pass status=undefined
    * to clear the entire queue. Returns the number of rows deleted.
@@ -734,27 +571,4 @@ Return JSON with:
       const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
       return { ok: true, deleted };
     }),
-
-  /** Delete a single AI Pipeline job record. */
-  deleteJob: workspaceProcedure
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(aiPipelineJobs)
-        .where(and(eq(aiPipelineJobs.id, input.id), eq(aiPipelineJobs.workspaceId, ctx.workspace.id)));
-      return { ok: true };
-    }),
-
-  /** Purge every AI Pipeline job for the workspace. */
-  clearJobs: workspaceProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const res = await db
-      .delete(aiPipelineJobs)
-      .where(eq(aiPipelineJobs.workspaceId, ctx.workspace.id));
-    const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
-    return { ok: true, deleted };
-  }),
 });

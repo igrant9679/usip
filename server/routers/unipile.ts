@@ -22,7 +22,6 @@ import {
   deleteUnipileAccount,
   generateHostedAuthLink,
   getChatMessages,
-  getLinkedInProfile,
   listChats,
   listRelations,
   listSentInvitations,
@@ -565,35 +564,6 @@ export const unipileRouter = router({
       }
 
       return { success: true };
-    }),
-
-  /**
-   * Look up a LinkedIn profile by provider ID.
-   */
-  getLinkedInProfile: workspaceProcedure
-    .input(
-      z.object({
-        unipileAccountId: z.string(),
-        providerId: z.string(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-      // Verify account ownership
-      const [account] = await db
-        .select()
-        .from(unipileAccounts)
-        .where(
-          and(
-            eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
-            eq(unipileAccounts.userId, ctx.user.id),
-          ),
-        )
-        .limit(1);
-      if (!account) throw new TRPCError({ code: "NOT_FOUND" });
-
-      return getLinkedInProfile(input.unipileAccountId, input.providerId);
     }),
 
   /**

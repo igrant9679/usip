@@ -352,7 +352,6 @@ describe("trigger coverage (the inventory)", () => {
       "server/routers/unipile.ts",
       "server/routers/linkedinFinder.ts",
       "server/routers/placesSearch.ts",
-      "server/routers/urlScraper.ts",
       "server/services/linkedinEnrichment/batchService.ts",
       "server/services/discovery/consolidate.ts",
       "server/services/leadBridge.ts",

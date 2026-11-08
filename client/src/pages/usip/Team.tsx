@@ -38,6 +38,7 @@ import { toast } from "sonner";
 import { isAdminRole, rankOf, ROLES, type Role } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { inviteResult, roleLabel } from "@/lib/teamMessages";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 
 function roleTone(r: Role) {
@@ -504,6 +505,8 @@ export default function Team() {
           </Button>
         )}
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <SubNav items={[
         { href: "/scim", label: "SCIM Provisioning", title: "Automated user provisioning via SCIM (Okta, Azure AD, etc.)" },
       ]} />

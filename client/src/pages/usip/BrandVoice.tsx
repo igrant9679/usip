@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { Mic2, Save, Plus, Palette } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 type BrandTone = "professional" | "conversational" | "direct" | "empathetic" | "authoritative";
 const TONE_OPTIONS: BrandTone[] = ["professional", "conversational", "direct", "empathetic", "authoritative"];
@@ -171,6 +172,8 @@ export default function BrandVoicePage() {
           <Save size={14} className="mr-1.5" /> {saveMutation.isPending ? "Saving…" : "Save Changes"}
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <SubNav items={[
         { href: "/prompt-templates", label: "Prompt Templates", title: "Edit the underlying AI prompt templates used by each feature" },
       ]} />

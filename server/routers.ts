@@ -17,7 +17,6 @@ import { integrationsRouter } from "./routers/integrations";
 import { quotaRouter } from "./routers/quota";
 import { subjectABRouter } from "./routers/subjectAB";
 import { customFieldsRouter } from "./routers/customFields";
-import { dashboardLayoutsRouter } from "./routers/dashboardLayouts";
 import { researchPipelineRouter } from "./routers/researchPipeline";
 import { opportunityIntelligenceRouter } from "./routers/opportunityIntelligence";
 import { optimizationRouter } from "./routers/optimization";
@@ -74,7 +73,6 @@ import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
 import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
-import { urlScraperRouter } from "./routers/urlScraper";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
 import { linkedinEnrichmentRouter } from "./routers/linkedinEnrichment";
 import { personasRouter } from "./routers/personas";
@@ -155,7 +153,6 @@ export const appRouter = router({
   quota: quotaRouter,
   subjectAB: subjectABRouter,
   customFields: customFieldsRouter,
-  dashboardLayouts: dashboardLayoutsRouter,
   researchPipeline: researchPipelineRouter,
   oppIntelligence: opportunityIntelligenceRouter,
   optimization: optimizationRouter,
@@ -209,7 +206,6 @@ export const appRouter = router({
   prospects: prospectsRouter,
   prospectImports: prospectImportsRouter,
   placesSearch: placesSearchRouter,
-  urlScraper: urlScraperRouter,
   linkedinFinder: linkedinFinderRouter,
   linkedinEnrichment: linkedinEnrichmentRouter,
   personas: personasRouter,

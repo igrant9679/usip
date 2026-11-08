@@ -78,27 +78,9 @@ describe("a segment says so when it cannot take what it was handed", () => {
   });
 });
 
-describe("a broadcast audience cannot be handed a lead id, and cannot silently drop a segment", () => {
-  const ops = read("server/routers/operations.ts");
-  const fn = ops.slice(ops.indexOf("addAudience: workspaceProcedure"));
-
-  it("sliced the procedure it meant to", () => {
-    expect(fn.length).toBeGreaterThan(300);
-  });
-
-  it("no longer accepts a lead-ids array beside contactIds", () => {
-    expect(fn, "the lead-ids input is back on a contact-keyed audience").not.toContain("leadIds");
-  });
-
-  it("checks the ids are contacts in this workspace before merging them", () => {
-    expect(fn).toContain("inArray(contacts.id, input.contactIds)");
-    expect(fn.indexOf("inArray(contacts.id, input.contactIds)")).toBeLessThan(fn.indexOf("db.update(campaigns)"));
-  });
-
-  it("refuses rather than flipping a segment-audience broadcast to a contact list", () => {
-    expect(fn).toContain('c.audienceType === "segment"');
-  });
-});
+// 2026-11-07 (audit X6.2/G67): campaigns.addAudience (the legacy broadcast audience) had no caller
+// since the Contacts page went, and is deleted with the rest of the legacy
+// campaigns router; there is no broadcast audience left to hand a lead id to.
 
 describe("the contact-keyed audience adds keep their legitimate use", () => {
   /* The regression anchor: these two procedures take REAL contact ids and
@@ -109,10 +91,8 @@ describe("the contact-keyed audience adds keep their legitimate use", () => {
    * caller. That page was deleted on 2026-10-27 (phase 5 item 2) and nothing
    * calls either mutation from the client now, so the anchor sits where the
    * guarantee actually lives: the procedures themselves, contact-keyed. */
-  it("campaigns.addAudience and segments.addContacts still take contact ids", () => {
-    const ops = read("server/routers/operations.ts");
-    expect(ops).toContain("addAudience: workspaceProcedure");
-    expect(ops).toMatch(/addAudience: workspaceProcedure[\s\S]{0,200}contactIds: z\.array\(z\.number\(\)\.int\(\)\.positive\(\)\)\.min\(1\)/);
+  // 2026-11-07 (audit X6.2/G67): campaigns.addAudience is deleted (see above); segments.addContacts stays.
+  it("segments.addContacts still takes contact ids", () => {
     const segs = read("server/routers/segments.ts");
     expect(segs).toContain("addContacts: workspaceProcedure");
     expect(segs).toMatch(/addContacts: workspaceProcedure[\s\S]{0,200}contactIds: z\.array\(z\.number\(\)\)\.min\(1\)/);

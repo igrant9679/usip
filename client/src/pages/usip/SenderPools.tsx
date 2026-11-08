@@ -41,6 +41,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -479,6 +480,8 @@ export default function SenderPools() {
             <Plus className="w-4 h-4" /> Create pool
           </Button>}
         </PageHeader>
+        {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+        <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
         {/* Info banner if not enough accounts */}
         {accounts.length < 2 && (

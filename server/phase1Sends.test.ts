@@ -830,10 +830,12 @@ describe("a send is claimed, and never retried once the email may have left", ()
     expect(row("email_drafts", 101).status).toBe("sending");
   });
 
-  it("approve, reject, edit and delete refuse a sent draft (approving one queued it again)", async () => {
+  // 2026-11-07 (audit X6.2/G67): emailDrafts.delete had no caller (the Emails
+  // page rejects a draft instead) and is deleted, so it leaves this list.
+  it("approve, reject and edit refuse a sent draft (approving one queued it again)", async () => {
     draft(102, { status: "sent", sentAt: new Date(), toEmail: ANN });
     const c = caller(REP).emailDrafts;
-    for (const p of [c.approve({ id: 102 }), c.reject({ id: 102 }), c.update({ id: 102, subject: "x", body: "y" }), c.delete({ id: 102 })]) {
+    for (const p of [c.approve({ id: 102 }), c.reject({ id: 102 }), c.update({ id: 102, subject: "x", body: "y" })]) {
       expect((await refusal(p)).code).toBe("CONFLICT");
     }
     expect(row("email_drafts", 102)).toMatchObject({ status: "sent", subject: "Hello" });

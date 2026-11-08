@@ -58,6 +58,7 @@ import {
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { pressable } from "@/lib/pressable";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const REASON_LABELS: Record<string, { label: string; color: string }> = {
   unsubscribe: { label: "Unsubscribed", color: "bg-yellow-500/15 text-yellow-700 border-yellow-300" },
@@ -204,6 +205,8 @@ export function EmailSuppressions() {
           Add Suppression
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

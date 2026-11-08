@@ -8,6 +8,7 @@ import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { Map, Plus, Trash2, Zap } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /**
  * What the rules do, and only that (audit 2026-10-20, R42). The page said they
@@ -47,6 +48,8 @@ export default function Territories() {
         {canEdit && <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>}
         {canEdit && <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>}
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <SubNav items={LEAD_ASSIGNMENT_NAV} />
       <div className="p-4 md:p-5 space-y-6">
         <Section title={`Territories (${data?.length ?? 0})`}>

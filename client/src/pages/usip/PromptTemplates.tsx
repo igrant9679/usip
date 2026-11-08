@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { FlaskConical, GitBranch, Plus, Star, Trash2, Edit2, Copy, Clock, MessageSquare } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 type GoalType = "intro" | "follow_up" | "meeting_request" | "value_prop" | "breakup" | "check_in";
 const GOALS: GoalType[] = ["intro", "follow_up", "meeting_request", "value_prop", "breakup", "check_in"];
@@ -158,6 +159,8 @@ export default function PromptTemplatesPage() {
           <Plus size={14} className="mr-1.5" /> New Template
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {/* Filter */}
       <div className="flex items-center gap-3 mb-5">

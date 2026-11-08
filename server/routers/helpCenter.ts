@@ -14,7 +14,6 @@ import {
   helpCategories,
   helpSearchLog,
   tours,
-  userLearningPreferences,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { assertInWorkspace } from "../services/foreignIds";
@@ -202,45 +201,6 @@ export const helpCenterRouter = router({
             eq(helpSearchLog.query, input.query),
           ),
         );
-    }),
-
-  upsertArticle: adminWsProcedure
-    .input(
-      z.object({
-        id: z.number().optional(),
-        categoryId: z.number().optional(),
-        slug: z.string().min(1).max(200),
-        title: z.string().min(1).max(300),
-        summary: z.string().max(500).optional(),
-        bodyMarkdown: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        status: z.enum(["draft", "published", "archived"]).default("draft"),
-        associatedTourId: z.number().optional(),
-        pageKey: z.string().max(120).optional(),
-        pageKeys: z.array(z.string()).optional(),
-        readingTimeMinutes: z.number().int().min(1).max(120).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await requireDb();
-      await articleLinksHere(db, ctx.workspace.id, input);
-      const { id, ...rest } = input;
-      const payload = {
-        ...rest,
-        workspaceId: ctx.workspace.id,
-        authorId: ctx.user.id,
-        tags: rest.tags ?? [],
-      };
-      if (id) {
-        await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
-        await db
-          .update(helpArticles)
-          .set(payload)
-          .where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, ctx.workspace.id)));
-        return { id };
-      }
-      const [res] = await db.insert(helpArticles).values(payload);
-      return { id: (res as any).insertId as number };
     }),
 
   deleteArticle: adminWsProcedure
@@ -613,72 +573,6 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
       mostHelpful, needsImprovement,
     };
   }),
-
-  /* ── Learning Preferences ───────────────────────────────────────────────── */
-
-  getLearningPrefs: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await requireDb();
-    const [prefs] = await db
-      .select()
-      .from(userLearningPreferences)
-      .where(
-        and(
-          eq(userLearningPreferences.workspaceId, ctx.workspace.id),
-          eq(userLearningPreferences.userId, ctx.user.id),
-        ),
-      )
-      .limit(1);
-    return (
-      prefs ?? {
-        showCoachMascot: true,
-        showProactiveHints: true,
-        completedOnboarding: false,
-        preferredTourSpeed: "normal",
-        dontShowHints: false,
-      }
-    );
-  }),
-
-  updateLearningPrefs: workspaceProcedure
-    .input(
-      z.object({
-        showCoachMascot: z.boolean().optional(),
-        showProactiveHints: z.boolean().optional(),
-        completedOnboarding: z.boolean().optional(),
-        preferredTourSpeed: z.enum(["slow", "normal", "fast"]).optional(),
-        dontShowHints: z.boolean().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await requireDb();
-      const existing = await db
-        .select()
-        .from(userLearningPreferences)
-        .where(
-          and(
-            eq(userLearningPreferences.workspaceId, ctx.workspace.id),
-            eq(userLearningPreferences.userId, ctx.user.id),
-          ),
-        )
-        .limit(1);
-      if (existing[0]) {
-        await db
-          .update(userLearningPreferences)
-          .set(input)
-          .where(
-            and(
-              eq(userLearningPreferences.workspaceId, ctx.workspace.id),
-              eq(userLearningPreferences.userId, ctx.user.id),
-            ),
-          );
-      } else {
-        await db.insert(userLearningPreferences).values({
-          workspaceId: ctx.workspace.id,
-          userId: ctx.user.id,
-          ...input,
-        });
-      }
-    }),
 
   // ── Aliases so HelpCenter.tsx (createArticle/updateArticle) maps to upsertArticle ──
   createArticle: adminWsProcedure

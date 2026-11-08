@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { BookOpen, Check, Copy, Edit2, Plus, Search, Trash2, Wand2, Scissors } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 type SnippetCategory = "opener" | "value_prop" | "social_proof" | "objection_handler" | "cta" | "closing" | "ps";
 const CATEGORIES: SnippetCategory[] = ["opener", "value_prop", "social_proof", "objection_handler", "cta", "closing", "ps"];
@@ -172,6 +173,8 @@ export default function SnippetsPage() {
           <Plus size={14} className="mr-1.5" /> New Snippet
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {/* Filters */}
       <div className="flex items-center gap-3 mb-5">

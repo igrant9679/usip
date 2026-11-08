@@ -12,7 +12,8 @@
 import { useMemo } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState, QueryError } from "@/components/usip/Shell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, Target, BarChart3 } from "lucide-react";
@@ -28,7 +29,7 @@ export const FORECAST_DESCRIPTION =
   "Pipeline by rep. Commit and Best case follow the forecast category set on each deal; a deal with none counts in Commit at 90% or more and in Best case at 50% or more. Weighted = value × win %. Quarters are calendar quarters. Reps see their own row; managers see the team.";
 
 export default function Forecast() {
-  const { data: byRep, isLoading } = trpc.opportunities.forecastByRep.useQuery();
+  const { data: byRep, isLoading, error: byRepError, refetch: refetchByRep } = trpc.opportunities.forecastByRep.useQuery();
   const { data: members } = trpc.team.list.useQuery();
 
   const memberMap = useMemo(() => {
@@ -53,6 +54,8 @@ export default function Forecast() {
     <Shell title="Forecast">
       <PageHeader title="Forecast" description={FORECAST_DESCRIPTION} icon={<TrendingUp className="size-5" />} />
       <div className="p-4 md:p-5 space-y-4">
+        {/* The totals read the same query: when it fails they are not zeros (audit X1.6). */}
+        <FailedLoadsBanner />
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatCard label="Total open" value={fmt$(totals.open)} />
           <StatCard label="Weighted" value={fmt$(totals.weighted)} hint="value × win prob" />
@@ -63,6 +66,7 @@ export default function Forecast() {
 
         <Card><CardContent className="pt-4">
           {isLoading ? <div className="text-sm text-muted-foreground">Loading…</div> :
+            byRepError && !byRep ? <QueryError what="the forecast" message={byRepError.message} onRetry={() => { void refetchByRep(); }} /> :
             !byRep || byRep.length === 0 ? <EmptyState icon={BarChart3} title="No pipeline data yet" /> :
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

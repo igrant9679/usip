@@ -40,7 +40,7 @@ import { dailyCheckDue, getLastDailyCheck } from "../services/linkedinEnrichment
 import { drainLinkedInLookups } from "../services/linkedinEnrichment/lookupQueue";
 import { listUsableAccounts } from "../services/linkedinLookup";
 import type { VelocityLinkedInProfile } from "../services/linkedinEnrichment/mapper";
-import { runForProspects, runForList, getJob, getJobItems } from "../services/linkedinEnrichment/orchestrator";
+import { runForProspects, runForList, getJob } from "../services/linkedinEnrichment/orchestrator";
 import {
   prospects,
   prospectLinkedinEnrichments,
@@ -216,9 +216,6 @@ export const linkedinEnrichmentRouter = router({
       return { ...handle, lookupsLeftToday: await lookupsLeftToday(ctx) };
     }),
 
-  /** Lookups the caller's accounts have left today (the Enrich and "Run now" confirmations, audit P92/P157). */
-  lookupsLeft: workspaceProcedure.query(async ({ ctx }) => ({ lookupsLeftToday: await lookupsLeftToday(ctx) })),
-
   /** Job status + counters (poll this for progress). */
   getJob: workspaceProcedure
     .input(z.object({ jobId: z.number().int().positive() }))
@@ -226,25 +223,6 @@ export const linkedinEnrichmentRouter = router({
       const job = await getJob(ctx.workspace.id, input.jobId);
       if (!job) throw new TRPCError({ code: "NOT_FOUND" });
       return job;
-    }),
-
-  /** Row-level results for a job. */
-  getJobItems: workspaceProcedure
-    .input(z.object({ jobId: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => getJobItems(ctx.workspace.id, input.jobId)),
-
-  /** Recent Enrich jobs (newest first) — backs the job-results review panel. */
-  listJobs: workspaceProcedure
-    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(linkedinEnrichmentJobs)
-        .where(eq(linkedinEnrichmentJobs.workspaceId, ctx.workspace.id))
-        .orderBy(desc(linkedinEnrichmentJobs.id))
-        .limit(input?.limit ?? 10);
     }),
 
   /**

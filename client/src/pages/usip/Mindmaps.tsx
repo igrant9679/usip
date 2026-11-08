@@ -15,6 +15,7 @@ import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { GitFork, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 export default function Mindmaps() {
   const { data: maps = [], refetch } = trpc.mindmaps.list.useQuery();
@@ -83,6 +84,8 @@ export default function Mindmaps() {
           <Plus className="size-4 mr-1" /> New Mindmap
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       <div className="flex-1 overflow-auto p-6">
         {maps.length === 0 ? (
