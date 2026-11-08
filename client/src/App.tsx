@@ -32,9 +32,9 @@ const AccountRedirect = lazyChunk(() => import("@/pages/usip/AccountRedirect"));
 const Audit = lazyChunk(() => import("@/pages/usip/Audit"));
 const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
+// Retired (U33, 2026-11-08): the Pipeline view of Home now; kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
 const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
-const HomeRoute = lazyChunk(() => import("@/pages/usip/HomeRoute"));
 const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
 const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
 const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
@@ -83,11 +83,13 @@ const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
 const Settings = lazyChunk(() => import("@/pages/usip/Settings"));
 const SettingsHub = lazyChunk(() => import("@/pages/usip/SettingsHub"));
 const Social = lazyChunk(() => import("@/pages/usip/Social"));
+// Retired (R72, X6.3, 2026-11-08): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Tasks = lazyChunk(() => import("@/pages/usip/Tasks"));
 const TasksV2 = lazyChunk(() => import("@/pages/usip/TasksV2"));
 const MeetingsV2 = lazyChunk(() => import("@/pages/usip/MeetingsV2"));
 // Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const ConversationsV2 = lazyChunk(() => import("@/pages/usip/ConversationsV2"));
+// Retired (U13, 2026-11-08): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const DealsV2 = lazyChunk(() => import("@/pages/usip/DealsV2"));
 const WorkflowsV2 = lazyChunk(() => import("@/pages/usip/WorkflowsV2"));
 const AnalyticsV2 = lazyChunk(() => import("@/pages/usip/AnalyticsV2"));
@@ -501,9 +503,11 @@ function Router() {
     <ErrorBoundary resetKey={path} inline>
     <Suspense fallback={<PageLoading />}>
     <Switch>
-      {/* "/" is the home picked with "Set as home" (G56): the Dashboard unless Home was picked. */}
-      <Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>
-      <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
+      {/* "/" is the one home page (U33, X6.3; 2026-11-08), opening on the
+          view the person picked with "Set as home" (stored on the server).
+          /dashboard is its Pipeline view now. See lib/retiredRoutes. */}
+      <Route path="/"><AuthGate><Home /></AuthGate></Route>
+      <Route path="/dashboard"><AuthGate><RetiredRedirect from="/dashboard" /></AuthGate></Route>
       <Route path="/inbox"><AuthGate><RetiredRedirect from="/inbox" /></AuthGate></Route>
       <Route path="/mailbox"><AuthGate><RetiredRedirect from="/mailbox" /></AuthGate></Route>
       <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>
@@ -546,7 +550,8 @@ function Router() {
       <Route path="/customers"><AuthGate><Customers /></AuthGate></Route>
       <Route path="/renewals"><AuthGate><Renewals /></AuthGate></Route>
       <Route path="/qbrs"><AuthGate><QBRs /></AuthGate></Route>
-      <Route path="/tasks"><AuthGate><Tasks /></AuthGate></Route>
+      {/* One task page (R72, X6.3; 2026-11-08): /tasks folded into /v2/tasks. See lib/retiredRoutes. */}
+      <Route path="/tasks"><AuthGate><RetiredRedirect from="/tasks" /></AuthGate></Route>
       <Route path="/workflows"><AuthGate><Workflows /></AuthGate></Route>
       <Route path="/dashboards"><AuthGate><Dashboards /></AuthGate></Route>
       <Route path="/reports"><AuthGate><Reports /></AuthGate></Route>
@@ -632,7 +637,8 @@ function Router() {
       <Route path="/v2/meetings"><AuthGate><MeetingsV2 /></AuthGate></Route>
       <Route path="/v2/conversations"><AuthGate><RetiredRedirect from="/v2/conversations" /></AuthGate></Route>
       <Route path="/v2/inbox"><AuthGate><InboxWorkspace /></AuthGate></Route>
-      <Route path="/v2/deals"><AuthGate><DealsV2 /></AuthGate></Route>
+      {/* One deal board (U13, X6.3; 2026-11-08): /v2/deals folded into /pipeline. See lib/retiredRoutes. */}
+      <Route path="/v2/deals"><AuthGate><RetiredRedirect from="/v2/deals" /></AuthGate></Route>
       <Route path="/v2/workflows"><AuthGate><WorkflowsV2 /></AuthGate></Route>
       <Route path="/v2/analytics"><AuthGate><AnalyticsV2 /></AuthGate></Route>
       <Route path="/v2/website-visitors"><AuthGate><WebsiteVisitors /></AuthGate></Route>

@@ -1,7 +1,7 @@
 /**
- * deals router — the autonomy layer for /v2/deals (the pipeline surface itself
+ * deals router — the autonomy layer for the deal board, /pipeline (the board itself
  * is served by the existing `opportunities`, `crmPipelines`, `pipelineAlerts`
- * and `forecastAi` routers, which /v2/deals reuses). This router only adds the
+ * and `forecastAi` routers, which the board reuses). This router only adds the
  * Deal Autopilot: on-demand analysis + the per-workspace autonomy config.
  */
 import { TRPCError } from "@trpc/server";

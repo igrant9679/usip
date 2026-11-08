@@ -17,6 +17,7 @@ import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
 import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon, Database } from "lucide-react";
 import { useReduceMotion } from "@/components/PageTransition";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
+import { SignaturePointer } from "@/components/usip/settings/SignatureSection";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -288,7 +289,7 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
           )}
 
           {tab === "general" && <GeneralTab settings={settings.data} save={save.mutate} canEdit={isAdmin} summary={summary.data} />}
-          {tab === "my-profile" && <MyProfileTab workspaceSignature={settings.data?.emailSignature ?? ""} />}
+          {tab === "my-profile" && <MyProfileTab />}
           {tab === "security" && <SecurityTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "notifications" && <NotificationsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "integrations" && <IntegrationsTab />}
@@ -650,74 +651,16 @@ function RuntimeSection() {
 }
 
 /**
- * My Profile tab — per-user settings. Currently just the signature
- * override; if blank, the workspace default (Branding → Default signature)
- * is used on outbound mail.
+ * My Profile tab (the hub's Appearance section) — per-user display settings.
+ * "My email signature" lived here; it moved to Settings → Email signature,
+ * the one place signatures live, and this links there (audit 2026-10-20,
+ * G51; batch CONB, 2026-11-08).
  */
-function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
-  const utils = trpc.useUtils();
-  const q = trpc.profile.getMySignature.useQuery();
-  const [sig, setSig] = useState<string>("");
-  useEffect(() => {
-    if (q.data) setSig(q.data.emailSignature ?? "");
-  }, [q.data]);
-  const save = trpc.profile.updateMySignature.useMutation({
-    onSuccess: () => {
-      utils.profile.getMySignature.invalidate();
-      toast.success("Signature saved");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const hasOverride = sig.trim().length > 0;
+function MyProfileTab() {
   return (
     <>
     <AppearanceSection />
-    <Section
-      title="My email signature"
-      description="Overrides the workspace default for emails you send. Leave blank to use the workspace default."
-      right={
-        <Button
-          size="sm"
-          onClick={() => save.mutate({ emailSignature: sig })}
-          disabled={save.isPending}
-        >
-          {save.isPending ? <Loader2 className="size-3 mr-1 animate-spin" /> : null}
-          Save
-        </Button>
-      }
-    >
-      <div className="p-4 space-y-3">
-        <div className="space-y-1">
-          <Label>Your signature</Label>
-          <textarea aria-label="Your signature"
-            className="w-full min-h-32 rounded-md border bg-transparent px-3 py-2 text-sm font-mono"
-            value={sig}
-            onChange={(e) => setSig(e.target.value)}
-            placeholder={
-              workspaceSignature ||
-              "Best,\nYour Name\nYour Title, Your Company"
-            }
-          />
-          <p className="text-xs text-muted-foreground">
-            {hasOverride
-              ? "Outbound mail will use this signature."
-              : workspaceSignature
-                ? "Currently using the workspace default (shown as placeholder)."
-                : "No workspace default configured. Set one in Branding, or add yours here."}
-          </p>
-        </div>
-        {workspaceSignature ? (
-          <div className="rounded-md border bg-muted/40 p-3">
-            <div className="text-xs font-medium text-muted-foreground mb-1">
-              Workspace default
-            </div>
-            <pre className="text-xs whitespace-pre-wrap font-sans">
-              {workspaceSignature}
-            </pre>
-          </div>
-        ) : null}
-      </div>
-    </Section>
+    <SignaturePointer what="Your email signature" />
     </>
   );
 }
@@ -788,14 +731,12 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
   const [primary, setPrimary] = useState("#14B89A");
   const [accent, setAccent] = useState("#0F766E");
   const [fromName, setFromName] = useState<string>("");
-  const [sig, setSig] = useState<string>("");
 
   useEffect(() => {
     if (!settings) return;
     setPrimary(settings.brandPrimary ?? "#14B89A");
     setAccent(settings.brandAccent ?? "#0F766E");
     setFromName(settings.emailFromName ?? "");
-    setSig(settings.emailSignature ?? "");
   }, [settings]);
 
   // Brand COLOURS moved to the hub's Branding section (BrandingSection.tsx,
@@ -805,12 +746,12 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
   return (
     <Section
       title="Email identity"
-      description="Outbound email From-name and the signature appended to AI-drafted sends. Brand colours live under Branding."
+      description="Outbound email From-name. The default signature is on Settings → Email signature with the others (G51); brand colours live under Branding."
       right={
         canEdit ? (
           <Button
             size="sm"
-            onClick={() => save({ brandPrimary: primary, brandAccent: accent, emailFromName: fromName || null, emailSignature: sig || null })}
+            onClick={() => save({ brandPrimary: primary, brandAccent: accent, emailFromName: fromName || null })}
           >
             Save
           </Button>
@@ -822,15 +763,9 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
           <Label>Email From-name</Label>
           <Input aria-label="Email From-name" value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc. Sales" />
         </div>
-        <div className="space-y-1 md:col-span-2">
-          <Label>Default signature</Label>
-          <textarea aria-label="Default signature"
-            className="w-full min-h-28 rounded-md border bg-transparent px-3 py-2 text-sm"
-            value={sig}
-            onChange={(e) => setSig(e.target.value)}
-            disabled={!canEdit}
-            placeholder={"Best,\nJane Doe\nAE, Acme Inc."}
-          />
+        <div className="space-y-1 md:col-span-2 text-xs text-muted-foreground">
+          The default signature is edited on{" "}
+          <Link href="/v2/settings/signature" className="font-medium text-foreground underline underline-offset-2">Email signature</Link>, beside your own and each mailbox's.
         </div>
       </div>
     </Section>

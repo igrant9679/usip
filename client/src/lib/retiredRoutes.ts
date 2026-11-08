@@ -84,13 +84,16 @@
  *  - `/settings/pipelines` and `/settings/linkedin-limits` are separate pages
  *    that merely share the prefix. Same trap as `/prospects/:id`: the parent
  *    stopped being a page, the children did not.
- *  - The Settings hub still has seven rows that navigate to standalone pages
- *    rather than rendering inside it (`/team`, `/audit`, `/custom-fields`,
- *    `/notification-prefs`, `/tour-builder`, `/v2/calls`,
- *    `/v2/data-enrichment`). Those are link-outs BY DESIGN, not leftovers:
- *    each is a full page in its own right, so hosting it in the hub means
- *    re-rendering it, which is a different job from retiring a duplicate and
- *    was left out of Phase 5 item 3 on purpose.
+ *  - The Settings hub had seven rows that navigated to standalone pages.
+ *    Since 2026-11-08 (audit U9, batch CONB) the four that are settings —
+ *    Users and teams (`/team`), Audit log (`/audit`), Custom fields
+ *    (`/custom-fields`) and Notifications (`/notification-prefs`) — render
+ *    inside the hub (Shell's ShellEmbedContext drops the page's own frame),
+ *    and their routes stay for links and bookmarks; "Phone numbers", which
+ *    opened the call queue (`/v2/calls`), is the hub's Voice agents section,
+ *    where numbers are set. Three still link out on purpose: Tour builder (a
+ *    full-screen authoring tool for super admins, not a setting) and Imports
+ *    and Data enrichment (`/v2/data-enrichment`, places to work on records).
  */
 
 /*
@@ -124,6 +127,53 @@
  * putting its one <Route> line back in App.tsx.
  */
 
+/*
+ * Batch CONB (2026-11-08, audit 2026-10-20 R72, U33, U13 and X6.3) retired
+ * the last pairs, folding first again:
+ *
+ *   /tasks     → /v2/tasks   R72: one task page. /v2/tasks took /tasks' Today
+ *                            / Upcoming / Overdue / Done / All tabs (as views,
+ *                            `?view=`), its related-record filter, Reopen and
+ *                            Cancel; it already had the assignee picker and
+ *                            filter (ported 2026-10-29). Tasks.tsx is kept,
+ *                            unrouted, and still exports RelatedTasks, which
+ *                            the record pages embed.
+ *   /dashboard → /v2/home?view=pipeline   U33: one home. The Dashboard and
+ *                            Home were two homes that disagreed (G56); Home
+ *                            has a Today view (its own) and a Pipeline view
+ *                            (the Dashboard's whole body, DashboardOverview,
+ *                            so no read was written twice), and "/" renders
+ *                            it. "Set as home" picks the view and is stored on
+ *                            the person (users.home_view, migration 0430); a
+ *                            browser's old choice is carried over once.
+ *                            Dashboard.tsx's page wrapper is kept, unrouted.
+ *   /v2/deals  → /pipeline   U13: one deal board. /pipeline took what only
+ *                            /v2/deals had: the Deal Autopilot dial and strip,
+ *                            Analyze with AI, the header numbers, the AI
+ *                            commentary, the at-risk alerts strip, a Move menu
+ *                            on every card and the won confetti; and gained
+ *                            owner and close-date filter controls, folding
+ *                            closed columns and "Show more" on them. It kept
+ *                            its own forecast, create, export, drag, AI card
+ *                            analysis and pipeline switcher. The hash rides
+ *                            along, so /v2/deals#alerts still opens the alerts.
+ *                            DealsV2.tsx is kept, unrouted.
+ *
+ * Audit X6.3 listed "two or more versions of the same screen". With the
+ * above, each is settled: one task page, one home, one deal board; one
+ * sequence list and one editor, and one reply workspace for the four inboxes
+ * (batch CONA, above); the Prospects list folded into People (phase 5 item 2).
+ *
+ * People and Leads are NOT a pair, and stay two lists by design: People is
+ * the person database (every person imported or sourced, table prospects,
+ * what outreach draws on); a lead is an inbound enquiry (chat, booking page,
+ * form) waiting to be qualified, scored and routed, which converting turns
+ * into a company, a contact and a deal. Merging them would put unqualified
+ * enquiries into the list sequences enrol from, or bury the qualification
+ * queue in the database. So each page's description says which it is and
+ * points at the other (People.tsx, Leads.tsx, toolRegistry, helpText).
+ */
+
 /**
  * Retired path → its v2 equivalent. Both are real routes in App.tsx. A `:name`
  * segment in a key is filled into the same `:name` in its target, and a target
@@ -140,6 +190,9 @@ export const RETIRED_ROUTES = {
   "/unified-inbox": "/v2/inbox?tab=social&view=chats",
   "/v2/conversations": "/v2/inbox",
   "/quotes": "/proposals",
+  "/tasks": "/v2/tasks",
+  "/dashboard": "/v2/home?view=pipeline",
+  "/v2/deals": "/pipeline",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

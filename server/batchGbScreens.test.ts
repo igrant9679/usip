@@ -134,8 +134,10 @@ describe("the settings hub says where you are (G51)", () => {
     expect(hub).toContain("if (askedItem && !askedItem.internal && askedItem.href) navigate(askedItem.href, { replace: true });");
   });
 
+  // 2026-11-08 (CONB, U9): the audit log renders inside the hub now, so the
+  // row is internal; it still carries the page's own title.
   it("the audit page's row carries its title", () => {
-    expect(hub).toContain('{ id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" }');
+    expect(hub).toContain('{ id: "system-activity", label: "Audit log", icon: Activity, internal: true,');
   });
 });
 

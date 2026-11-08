@@ -10,9 +10,22 @@
  * Several widgets are wired to live data (People → prospects, Companies →
  * accounts, Tasks → tasks, Sequence stats → sequences, Email stats →
  * dataHealth); the rest are compact scaffolds.
+ *
+ * THE one home page (audit 2026-10-20, U33 and X6.3; batch CONB,
+ * 2026-11-08). The Dashboard (/dashboard) and this page were two homes that
+ * disagreed (G56); they are two views of this page now: Today (what needs
+ * you, below) and Pipeline (the Dashboard's numbers, DashboardOverview). "/"
+ * renders this page too. `?view=today|pipeline` picks a view; without it the
+ * page opens on the person's "Set as home" choice, which is stored on the
+ * server (users.home_view) instead of in one browser (hooks/useHomeView).
+ * /dashboard redirects to the Pipeline view (lib/retiredRoutes.ts).
  */
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
+import { DashboardOverview } from "./Dashboard";
+import { useHomeView } from "@/hooks/useHomeView";
+import { HOME_CHOICES, resolveHomeView } from "@/lib/homeChoice";
+import { tablistProps, tabProps } from "@/lib/tabs";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AttentionPanel } from "@/components/usip/AttentionPanel";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -22,7 +35,7 @@ import { Button } from "@/components/ui/button";
 import {
   Pencil, Plus, X, GripVertical, Trash2, Sparkles, Users, Building2,
   ListChecks, Mail, MessageSquare, Lightbulb, DollarSign, Activity, BarChart3,
-  Phone, ArrowRight, Inbox,
+  Phone, ArrowRight, Inbox, Home as HomeIcon,
 } from "lucide-react";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
@@ -166,12 +179,12 @@ const WIDGETS: Record<string, WidgetDef> = {
       // read every deal and the default pipeline's stages only.
       const open = c.deals ?? [];
       return open.length === 0
-        ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>
+        ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/pipeline")}>View pipeline</Button></div>
         : (
           <div>{open.slice(0, 5).map((d: any) => (
             <MiniRow key={d.id} primary={d.name}
               secondary={[d.stage?.replace(/_/g, " "), d.value ? `$${Number(d.value).toLocaleString()}` : null].filter(Boolean).join(" · ")}
-              right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/deals")}>Open <ArrowRight className="size-3" /></Button>} />
+              right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/pipeline")}>Open <ArrowRight className="size-3" /></Button>} />
           ))}</div>
         );
     },
@@ -210,7 +223,8 @@ function loadHeights(): Record<string, number> {
   return {};
 }
 
-export default function Home() {
+/** The Today view: the old Home, attention panel first, then the widgets. */
+function TodayView({ viewBar }: { viewBar: React.ReactNode }) {
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
   const { user } = useAuth();
@@ -234,8 +248,10 @@ export default function Home() {
   const companies = (trpc.accounts.list.useQuery({ limit: 5 }).data ?? []) as any[];
   // "Your tasks" listed everyone's (audit 2026-10-20, G57).
   const tasks = (trpc.tasks.list.useQuery({ ownerOnly: true, status: "open" }).data ?? []) as any[];
-  // The one definition of open/dueToday/overdue, in the workspace's timezone.
-  const taskStats = trpc.tasks.stats.useQuery().data as any;
+  // The one definition of open/dueToday/overdue, in the workspace's timezone,
+  // over the Tasks page's scope (audit 2026-10-20, R72): a rep's own tasks, a
+  // manager's everyone's. It counted every task in the workspace for everyone.
+  const taskStats = trpc.tasks.stats.useQuery({ mine: true }).data as any;
   const sequences = (trpc.sequences.list.useQuery().data ?? []) as any[];
   const metrics = trpc.dataHealth.getMetrics.useQuery().data as any;
   const trend = trpc.workspace.trend7d.useQuery().data;
@@ -266,12 +282,12 @@ export default function Home() {
   const available = useMemo(() => Object.keys(WIDGETS), []);
 
   return (
-    <Shell title="Home">
       <div className="flex flex-col h-full min-h-0">
         {/* header */}
         <div className="relative shrink-0 flex items-center gap-2 px-4 md:px-6 h-12 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <h1 className="text-[17px] font-semibold tracking-tight">{editing ? "Editing home layout" : <>Welcome, {firstName} <span className="ml-0.5">👋</span></>}</h1>
+          {!editing && viewBar}
           <div className="flex-1" />
           {editing ? (
             <>
@@ -297,7 +313,7 @@ export default function Home() {
                 and it used new Date().setHours(...) — the BROWSER's day, the
                 same UTC-day bug activities.ts records having fixed server-side
                 using the workspace timezone. Two copies, one fixed. */}
-            <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
+            <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks?view=today")} />
             <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/inbox")} />
             <div className="flex-1" />
             <button type="button" onClick={() => setLocation("/v2/inbox?tab=notifications")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">
@@ -425,6 +441,66 @@ export default function Home() {
           )}
         </div>
       </div>
+  );
+}
+
+/**
+ * The home page: Today or Pipeline, with "Set as home" beside the switch.
+ * The view in the URL wins; otherwise the person's saved choice; otherwise
+ * Pipeline, which is what "/" showed anyone who never chose (G56).
+ */
+export default function Home() {
+  const search = useSearch();
+  const [, setLocation] = useLocation();
+  const accent = useAccentColor();
+  const { homeView, chosen, setHomeView, saving } = useHomeView();
+  const view = resolveHomeView(search, chosen ? homeView : null);
+  const isHome = chosen ? homeView === view : view === "pipeline";
+  const label = HOME_CHOICES.find((c) => c.view === view)?.label ?? "Home";
+
+  const viewBar = (
+    <div className="flex items-center gap-2">
+      <div {...tablistProps("Home views")} className="ml-2 flex items-center rounded-md border p-0.5">
+        {HOME_CHOICES.map((c) => (
+          <button {...tabProps(view === c.view)} key={c.view} type="button"
+            onClick={() => setLocation(`/v2/home?view=${c.view}`, { replace: true })}
+            className={cn("rounded px-2.5 py-1 text-xs transition-colors", view === c.view ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}>
+            {c.view === "today" ? "Today" : "Pipeline"}
+          </button>
+        ))}
+      </div>
+      {/* "Set as home", per person (U33): which view "/" and Home open on. */}
+      {isHome ? (
+        <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-muted-foreground" title="Velocity opens on this view">
+          <HomeIcon className="size-3" style={{ color: accent }} /> Your home
+        </span>
+      ) : (
+        <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" disabled={saving}
+          title={`Open Velocity on ${label} on every device you sign in on`}
+          onClick={() => setHomeView(view)}>
+          <HomeIcon className="size-3" /> Set as home
+        </Button>
+      )}
+    </div>
+  );
+
+  return (
+    <Shell title={view === "pipeline" ? "Dashboard" : "Home"}>
+      {view === "pipeline" ? (
+        <div className="flex flex-col h-full min-h-0">
+          <div className="relative shrink-0 flex flex-wrap items-center gap-2 px-4 md:px-6 min-h-12 py-1.5 border-b border-border bg-card/40">
+            <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
+            <h1 className="text-[17px] font-semibold tracking-tight">Dashboard</h1>
+            {viewBar}
+          </div>
+          <div className="shrink-0 px-4 md:px-6 empty:hidden"><FailedLoadsBanner /></div>
+          <div className="flex-1 min-h-0 overflow-auto" data-tour-id="home-pipeline">
+            <DashboardOverview />
+          </div>
+        </div>
+      ) : (
+        <TodayView viewBar={viewBar} />
+      )}
     </Shell>
   );
 }

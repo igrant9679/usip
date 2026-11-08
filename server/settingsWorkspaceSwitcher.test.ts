@@ -30,7 +30,8 @@ describe("the Settings hub carries the workspace switcher", () => {
   it("switches through the shared context, never a second mechanism", () => {
     expect(fn.length).toBeGreaterThan(200);
     expect(fn).toContain("const { workspaces, current, switchTo, isLoading } = useWorkspace();");
-    expect(fn).toContain("if (w.id !== current?.id) switchTo(w.id);");
+    // 2026-11-08 (CONB, U10): the rows are the shared WorkspaceSwitchList; the pick is the same rule.
+    expect(fn).toContain("onPick={(id) => { setOpen(false); if (id !== current?.id) switchTo(id); }}");
     expect(fn).not.toContain("localStorage");
   });
 

@@ -260,6 +260,41 @@ export function fiscalYearLabel(fy: number, fyStart = 1): string {
   return fyStart === 1 ? String(fy) : `FY${fy} (${monthSpan(fiscalYearFirstMonth(fy, fyStart), 12, true)})`;
 }
 
+/* ── The deal board's close-date filter (audit 2026-10-20, U13; CONB) ──────
+ * A close date is a calendar day, stored as noon UTC (shared/calendarDate),
+ * so a range is a run of days compared by UTC day: from the start of the
+ * first day to the start of the day after the last. "Today" is the
+ * workspace's day, and "this quarter" its fiscal quarter, as the forecast
+ * reads them. */
+export const CLOSE_RANGES = ["overdue", "this_month", "this_quarter", "next_90", "none"] as const;
+export type CloseRange = (typeof CLOSE_RANGES)[number];
+
+/** A close-date range as instants: on or after `from`, before `before`; or no close date at all. */
+export function closeRangeBounds(range: CloseRange, tz: string, now: Date = new Date(), fyStart = 1): { from?: Date; before?: Date; none?: true } {
+  if (range === "none") return { none: true };
+  const { y, m, day } = zonedYmd(tz, now);
+  const dayStart = (yy: number, mm: number, dd: number) => new Date(Date.UTC(yy, mm - 1, dd));
+  const today = dayStart(y, m, day);
+  const plusDays = (d: Date, n: number) => new Date(d.getTime() + n * 86_400_000);
+  if (range === "overdue") return { before: today };
+  if (range === "next_90") return { from: today, before: plusDays(today, 90) };
+  if (range === "this_month") {
+    const next = addMonths(y, m, 1);
+    return { from: dayStart(y, m, 1), before: dayStart(next.y, next.m, 1) };
+  }
+  const q = fiscalQuarterOf(y, m, fyStart).start;
+  const after = addMonths(q.y, q.m, 3);
+  return { from: dayStart(q.y, q.m, 1), before: dayStart(after.y, after.m, 1) };
+}
+
+/** Whether a deal's close date is in a range's bounds (the in-memory twin of the board's SQL). */
+export function closeDateIn(closeDate: Date | null, b: { from?: Date; before?: Date; none?: true }): boolean {
+  if (b.none) return closeDate == null;
+  if (closeDate == null) return false;
+  const t = closeDate.getTime();
+  return (!b.from || t >= b.from.getTime()) && (!b.before || t < b.before.getTime());
+}
+
 /**
  * This month, last month, this fiscal quarter and this fiscal year, in the
  * workspace's zone. `fyStart` 1 (the default) is the calendar year.

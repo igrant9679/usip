@@ -694,8 +694,11 @@ describe("G36: archived workspaces are badged, and their public pages stop", () 
     const list = [{ id: 2, role: "rep", archivedAt: new Date() }, { id: 4, role: "rep", archivedAt: null }];
     expect(chooseWorkspace(list, 2)?.id, "a tab on an archived workspace moves").toBe(4);
     expect(chooseWorkspace(list, null)?.id).toBe(4);
+    // 2026-11-08 (CONB, U10): both switchers render one shared list, which
+    // carries the rule; each switcher is pinned to render it.
+    expect(read("client/src/components/usip/WorkspaceSwitchList.tsx")).toContain("disabled={!canOpenWorkspace(w)}");
     for (const f of ["client/src/components/usip/Shell.tsx", "client/src/pages/usip/SettingsHub.tsx"]) {
-      expect(read(f), f).toContain("disabled={!canOpenWorkspace(w)}");
+      expect(read(f), f).toContain("<WorkspaceSwitchList");
     }
   });
 

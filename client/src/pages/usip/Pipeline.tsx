@@ -1,3 +1,16 @@
+/**
+ * THE deal board (/pipeline) — audit 2026-10-20, U13 and X6.3; batch CONB,
+ * 2026-11-08. /v2/deals and this page were two boards over the same deals;
+ * /v2/deals folded in here and redirects (lib/retiredRoutes.ts), its file
+ * kept, unrouted. What came across: the Deal Autopilot dial and its strip,
+ * Analyze with AI, the header numbers, the AI forecast commentary, the
+ * at-risk alerts strip (/pipeline#alerts), a Move menu on every card and the
+ * won confetti. What is new: owner and close-date filters as controls
+ * (?owner=, ?close=), closed columns that collapse, and "Show more" on a
+ * closed column, which pages past the latest 50 (CRMP's server paging).
+ * Every move — drag, arrows, Move menu, accepted AI suggestion — goes through
+ * the lost-reason prompt (F28). The forecast, create and export stay.
+ */
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,8 +24,14 @@ import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
 import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
 import { usePermissions } from "@/hooks/usePermissions";
-import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight, Bot, AlertTriangle, MoreHorizontal, ChevronsLeftRight, ChevronsRightLeft } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { forbiddenMessage } from "@/lib/forbidden";
+import { confirmAction } from "@/components/usip/Common";
+import { WonConfetti } from "@/components/usip/WonConfetti";
+import { ANALYZE_LIMIT, CLOSE_RANGE_OPTIONS, DEAL_AUTOPILOT_MODES, closeRangeFrom, dealAnalyzeToast, type CloseRangeValue } from "@/lib/dealAutopilot";
 import { toast } from "sonner";
 import { Link, useLocation, useSearch } from "wouter";
 import { tablistProps, tabProps } from "@/lib/tabs";
@@ -34,6 +53,12 @@ export function droppedDealId(dt: { types: ReadonlyArray<string>; getData(type: 
   const id = Number(dt.getData(DEAL_DRAG_TYPE));
   return Number.isInteger(id) && id > 0 ? id : null;
 }
+
+/** A closed column's page: the server's default (BOARD_CLOSED_LIMIT), and its ceiling. */
+export const BOARD_CLOSED_STEP = 50;
+export const BOARD_CLOSED_MAX = 500;
+/** This browser remembers whether the closed columns are folded. */
+const CLOSED_FOLD_KEY = "velocity_board_closed_folded";
 
 /** Loading fallback only — the real flags come from crmPipelines.get. */
 const LEGACY_STAGES: StageItem[] = [
@@ -134,6 +159,27 @@ function DealCard({
           </Link>
           <div className="text-[11px] text-muted-foreground truncate mt-0.5">{opp.accountName}</div>
         </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+        {/* The Move menu from /v2/deals (U13): any stage, not just the next
+            one. It goes through onMove, i.e. the lost-reason prompt (F28).
+            The menu sits in a portal, so its clicks and keys must not reach
+            the card's own open-the-drawer handlers. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label="Move deal to a stage" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}
+              className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity">
+              <MoreHorizontal className="size-3 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">Move to stage</DropdownMenuLabel>
+            {STAGES.filter((st) => st.id !== opp.stage).map((st) => (
+              <DropdownMenuItem key={st.id} onClick={() => onMove(st.id)}>
+                <ArrowRight className="size-3.5 mr-2" /> {st.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -154,6 +200,7 @@ function DealCard({
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
+        </div>
       </div>
 
       <div className="flex items-center justify-between mt-2">
@@ -248,7 +295,7 @@ function DealCard({
 }
 
 /* ─── Forecast View ─────────────────────────────────────────────────────── */
-function ForecastView({ scope, scopeLabel }: { scope: { pipelineId?: number; ownerUserId?: number }; scopeLabel: string }) {
+function ForecastView({ scope, scopeLabel }: { scope: { pipelineId?: number; ownerUserId?: number; closeRange?: CloseRangeValue }; scopeLabel: string }) {
   const STAGES = useStagesFor(scope.pipelineId);
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<string | null>(null);
@@ -452,6 +499,28 @@ export default function Pipeline() {
     const v = new URLSearchParams(search).get("owner");
     return v ? Number(v) : undefined;
   }, [search]);
+  // ?close=, the close-date filter (U13): one of dealAutopilot's ranges.
+  const closeRange = useMemo(() => closeRangeFrom(new URLSearchParams(search).get("close")), [search]);
+  /** Set or clear one filter in the URL, keeping the others (owner and close are links). */
+  const setFilterParam = (key: "owner" | "close", value: string | null) => {
+    const p = new URLSearchParams(search);
+    if (value) p.set(key, value); else p.delete(key);
+    const qs = p.toString();
+    navigate(qs ? `/pipeline?${qs}` : "/pipeline");
+  };
+  const { data: team } = trpc.team.list.useQuery();
+  const owners = useMemo(() => ((team ?? []) as Array<{ userId: number; name: string | null; deactivatedAt?: unknown }>).filter((m) => !m.deactivatedAt), [team]);
+  // Closed columns show their latest deals; "Show more" pages further (CRMP's
+  // closedLimit, up to the server's 500), and they can fold away (U13). The
+  // fold is this browser's convenience, so it is remembered here only.
+  const [closedLimit, setClosedLimit] = useState(BOARD_CLOSED_STEP);
+  const [closedFolded, setClosedFolded] = useState<boolean>(() => {
+    try { return localStorage.getItem(CLOSED_FOLD_KEY) === "1"; } catch { return false; }
+  });
+  const toggleClosedFolded = () => setClosedFolded((v) => {
+    try { localStorage.setItem(CLOSED_FOLD_KEY, v ? "0" : "1"); } catch { /* this visit only */ }
+    return !v;
+  });
 
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set());
@@ -470,8 +539,12 @@ export default function Pipeline() {
   // One pipeline's deals, read by the server (L7), and the same input for
   // every read and write of this cache — the optimistic move wrote the
   // unfiltered entry while a filtered board was on screen (R30).
-  const boardInput = useMemo(() => ({ ownerUserId, pipelineId }), [ownerUserId, pipelineId]);
-  const { data } = trpc.opportunities.board.useQuery(boardInput, { enabled: pipelines !== undefined });
+  // 2026-11-08 (U13): the close-date range is part of the board's scope, so
+  // every read below counts the same deals. The board itself also carries the
+  // closed columns' page size, and its cache is keyed by that.
+  const boardInput = useMemo(() => ({ ownerUserId, pipelineId, closeRange }), [ownerUserId, pipelineId, closeRange]);
+  const boardQueryInput = useMemo(() => ({ ...boardInput, closedLimit }), [boardInput, closedLimit]);
+  const { data, isLoading: boardLoading } = trpc.opportunities.board.useQuery(boardQueryInput, { enabled: pipelines !== undefined });
   // Each column's count and value, counted by the server over every deal in
   // scope (audit 2026-10-20, X4.1): a won or lost column shows its latest
   // deals only, and its header still says how many it has.
@@ -540,19 +613,55 @@ export default function Pipeline() {
 
   const setStage = trpc.opportunities.setStage.useMutation({
     onMutate: async ({ id, stage }) => {
-      await utils.opportunities.board.cancel(boardInput);
-      const prev = utils.opportunities.board.getData(boardInput);
-      utils.opportunities.board.setData(boardInput, (old) => (old ?? []).map((o) => (o.id === id ? { ...o, stage } : o)));
+      await utils.opportunities.board.cancel(boardQueryInput);
+      const prev = utils.opportunities.board.getData(boardQueryInput);
+      utils.opportunities.board.setData(boardQueryInput, (old) => (old ?? []).map((o) => (o.id === id ? { ...o, stage } : o)));
       return { prev };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(boardInput, ctx.prev); toast.error("Move failed"); },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(boardQueryInput, ctx.prev); toast.error("Move failed"); },
     // Every read a stage move changes, not just this board (R31).
-    onSuccess: (res) => { if (res?.customerCreated) toast.success("Closed won 🎉 — customer created"); invalidateDealReads(utils); },
+    onSuccess: (res, vars) => {
+      if (res?.customerCreated) toast.success("Closed won 🎉 — customer created");
+      // The won confetti from /v2/deals (U13), on the stage's flag, not its key.
+      else if (STAGES.find((s) => s.id === vars.stage)?.isWon) toast.success("Deal won! 🎉");
+      if (STAGES.find((s) => s.id === vars.stage)?.isWon) { setCelebrate(Date.now()); setTimeout(() => setCelebrate(0), 1800); }
+      invalidateDealReads(utils);
+    },
     onSettled: () => utils.opportunities.board.invalidate(),
   });
 
   const [addOpen, setAddOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
+  const [celebrate, setCelebrate] = useState(0);
+
+  /* ── From /v2/deals (U13): the Deal Autopilot, the header numbers, the AI
+   *    commentary and the at-risk alerts. ─────────────────────────────── */
+  const autopilot = trpc.deals.getAutopilotSettings.useQuery();
+  const mode = autopilot.data?.mode ?? "off";
+  const setMode = trpc.deals.setAutopilotSettings.useMutation({
+    onSuccess: () => { utils.deals.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
+  });
+  // Analyze runs in Approve mode whatever the setting: drafts, not deal edits (R43).
+  const analyze = trpc.deals.analyzeAll.useMutation({
+    onSuccess: (r) => {
+      utils.opportunities.board.invalidate();
+      toast.success(dealAnalyzeToast(r), r.tasksCreated > 0 ? { action: { label: "Review", onClick: () => navigate("/v2/tasks") } } : undefined);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // The header numbers are the server's deal metrics for the board's scope (R39).
+  const summary = trpc.opportunities.summary.useQuery(boardInput, { enabled: pipelines !== undefined });
+  const commentary = trpc.forecastAi.getCommentary.useQuery(undefined as any, { retry: false });
+  const alerts = trpc.pipelineAlerts.list.useQuery(undefined as any, { retry: false });
+  const activeAlerts = ((alerts.data as any[])?.filter?.((a) => !a.dismissedAt) ?? (alerts.data as any[]) ?? []) as any[];
+  // /pipeline#alerts (the Library's "Pipeline Alerts") lands on the strip once
+  // the alerts have loaded (R103); the hash rides through the /v2/deals redirect.
+  useEffect(() => {
+    if (typeof window === "undefined" || window.location.hash !== "#alerts" || !alerts.isFetched) return;
+    document.getElementById("alerts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [alerts.isFetched]);
+  const showAlerts = activeAlerts.length > 0 || (typeof window !== "undefined" && window.location.hash === "#alerts" && alerts.isFetched);
 
   // The server returns the selected pipeline's deals (legacy deals with no
   // pipeline sit on the default board), so the board is what it sent.
@@ -566,7 +675,9 @@ export default function Pipeline() {
     const deal = filteredOpps.find((o: any) => o.id === id);
     lostPrompt.ask({ id, stage: toStage }, { isLost: !!st?.isLost, dealName: deal?.name ?? "this deal", stageLabel: st?.label ?? toStage });
   };
-  const scopeLabel = `${pipelineName ? `${pipelineName} pipeline` : "All deals"}${ownerUserId ? ", one rep" : ", every owner"}: the deals on the board.`;
+  const closeLabel = CLOSE_RANGE_OPTIONS.find((o) => o.value === closeRange)?.label.toLowerCase();
+  const scopeLabel = `${pipelineName ? `${pipelineName} pipeline` : "All deals"}${ownerUserId ? ", one rep" : ", every owner"}${closeLabel ? `, ${closeLabel}` : ""}: the deals on the board.`;
+  const ownerName = owners.find((m) => m.userId === ownerUserId)?.name;
 
   const grouped = useMemo(() => {
     const buckets: Record<string, typeof data> = {};
@@ -580,16 +691,16 @@ export default function Pipeline() {
       {ownerUserId && (
         <div className="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-sm">
           <User className="size-4 text-amber-400" />
-          <span className="text-amber-700 dark:text-amber-300 font-medium">Showing deals for one rep.</span>
+          <span className="text-amber-700 dark:text-amber-300 font-medium">Showing deals for {ownerName ?? "one rep"}.</span>
           <button
-            onClick={() => navigate("/pipeline")}
+            onClick={() => setFilterParam("owner", null)}
             className="ml-auto flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 hover:underline"
           >
             <X className="size-3" /> Clear filter
           </button>
         </div>
       )}
-      <PageHeader title="Pipeline" description="Visualise and advance open opportunities across every stage of your sales funnel. Drag deals between stages, set close dates, and get AI-powered next-step recommendations." pageKey="pipeline"
+      <PageHeader title="Pipeline" description="Every deal by stage, with the Deal Autopilot, at-risk alerts and the weighted forecast. Drag a deal or use its Move menu, filter by owner and close date, and get AI next steps." pageKey="pipeline"
         icon={<KanbanSquare className="size-5" />}
       >
         {/* Pipeline switcher (multi-pipeline support) */}
@@ -607,6 +718,29 @@ export default function Pipeline() {
         )}
         <Button variant="ghost" size="sm" onClick={() => navigate("/settings/pipelines")} title="Configure pipelines">
           Configure
+        </Button>
+        {/* The Deal Autopilot dial, from /v2/deals (U13). */}
+        <div className="flex items-center gap-1.5">
+          <Bot className="size-3.5 text-muted-foreground" aria-hidden />
+          <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
+            <SelectTrigger aria-label="Deal Autopilot" className="h-8 w-[168px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off">Autopilot: Off</SelectItem>
+              <SelectItem value="approval">Autopilot: Approve</SelectItem>
+              <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {/* Spends AI: says how many calls and asks first (batch rule on spending). */}
+        <Button variant="outline" size="sm" disabled={analyze.isPending}
+          title={`Drafts a next step and win probability for up to ${ANALYZE_LIMIT} open deals, as tasks for you to review. Deals are not changed.`}
+          onClick={() => confirmAction({
+            title: `Analyze up to ${ANALYZE_LIMIT} open deals with AI?`,
+            description: `One AI call per deal, up to ${ANALYZE_LIMIT}, counted in this workspace's AI spend (Settings → Billing and credits) and held to its caps. Each result is a draft task for you to review in Tasks; no deal is changed.`,
+            confirmLabel: "Analyze",
+            destructive: false,
+          }, () => analyze.mutate({ limit: ANALYZE_LIMIT }))}>
+          <Sparkles className="size-3.5" /> {analyze.isPending ? "Analyzing…" : "Analyze with AI"}
         </Button>
         {/* View toggle */}
         <div {...tablistProps("Pipeline view")} className="flex items-center border rounded-md overflow-hidden text-sm" data-tour-id="pipeline-view-toggle">
@@ -645,13 +779,88 @@ export default function Pipeline() {
       {/* A failed load says so instead of showing an empty page (audit X1.6). */}
       <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
+      <div className="px-4 pt-3 space-y-3">
+        {/* Owner and close-date filters as controls (U13). Each is a URL
+            parameter, so a filtered board is a link (Top Reps uses ?owner=). */}
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <label htmlFor="board-owner" className="text-muted-foreground">Owner</label>
+          <select id="board-owner" className="rounded border bg-background px-2 py-1" value={ownerUserId ? String(ownerUserId) : ""}
+            onChange={(e) => setFilterParam("owner", e.target.value || null)}>
+            <option value="">Everyone</option>
+            {owners.map((m) => <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>)}
+          </select>
+          <label htmlFor="board-close" className="text-muted-foreground">Close date</label>
+          <select id="board-close" className="rounded border bg-background px-2 py-1" value={closeRange ?? ""}
+            onChange={(e) => setFilterParam("close", e.target.value || null)}>
+            {CLOSE_RANGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          {(ownerUserId || closeRange) && (
+            <button type="button" className="text-muted-foreground underline hover:text-foreground" onClick={() => navigate("/pipeline")}>Clear filters</button>
+          )}
+        </div>
+
+        {/* The Deal Autopilot's strip: what the current mode does (R43). */}
+        <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
+          <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
+            {mode === "auto" ? <Zap className="size-4" /> : <Bot className="size-4" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{DEAL_AUTOPILOT_MODES[mode]?.label}</div>
+            <div className="text-[12px] text-muted-foreground">{DEAL_AUTOPILOT_MODES[mode]?.blurb}</div>
+          </div>
+        </div>
+
+        {/* The header numbers, for what the board shows (R39). */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: "Open deals", value: String(summary.data?.open.count ?? 0) },
+            { label: "Pipeline value", value: fmt$(summary.data?.open.value ?? 0) },
+            { label: "Weighted", value: fmt$(summary.data?.open.weighted ?? 0) },
+            { label: "Won", value: String(summary.data?.won.count ?? 0) },
+          ].map((c) => (
+            <div key={c.label} className="rounded-lg border bg-card p-3 shadow-sm">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{c.label}</div>
+              <div className="text-xl font-semibold tabular-nums mt-0.5">{c.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {commentary.data?.commentary && (
+          <div className="rounded-lg border bg-card px-4 py-2.5 flex items-start gap-2.5 shadow-sm">
+            <TrendingUp className="size-4 mt-0.5 shrink-0" style={{ color: "#7c3aed" }} />
+            <div className="text-[12px] text-muted-foreground">{commentary.data.commentary}</div>
+          </div>
+        )}
+
+        {/* At-risk alerts (R103): each chip opens its deal. */}
+        {showAlerts && (
+          <div id="alerts" className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2.5 shadow-sm scroll-mt-4">
+            <div className="text-[12px] font-medium flex items-center gap-1.5 text-amber-700 dark:text-amber-300 mb-1">
+              <AlertTriangle className="size-3.5" />
+              {activeAlerts.length === 0 ? "No deals need attention right now" : `${activeAlerts.length} deal${activeAlerts.length === 1 ? "" : "s"} need attention`}
+              <Link href="/pipeline-alerts" className="ml-auto font-normal underline">All alerts</Link>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {activeAlerts.slice(0, 6).map((a: any, i: number) => (
+                <Link key={a.id ?? i} href={`/opportunities/${a.opportunityId}`}
+                  className="text-[11px] rounded px-1.5 py-0.5 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:hover:bg-amber-900/50">
+                  {a.opportunity?.name ?? a.details?.oppName ?? "Deal"} · {String(a.alertType ?? "").replace(/_/g, " ")}
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {view === "forecast" ? (
         <ForecastView scope={boardInput} scopeLabel={scopeLabel} />
       ) : (
-        <div className="p-4 overflow-x-auto" tabIndex={0} role="region" aria-label="Pipeline board">
+        <div className="p-4 overflow-x-auto" tabIndex={0} role="region" aria-label="Pipeline board" data-tour-id="deals-board">
+          {boardLoading && <p className="mb-2 text-xs text-muted-foreground">Loading deals…</p>}
           <div className="flex gap-3 min-w-max" data-tour-id="pipeline-board">
             {STAGES.map((s) => {
               const items = grouped[s.id] ?? [];
+              const closed = s.isWon || s.isLost;
               const t = totalsByStage.get(s.id);
               const count = t?.count ?? items.length;
               const total = t?.value ?? items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
@@ -661,22 +870,37 @@ export default function Pipeline() {
               const avgProb = t ? t.avgWinProb : items.length > 0
                 ? Math.round(items.reduce((sum, o) => sum + Number(o.winProb ?? 0), 0) / items.length)
                 : null;
+              const folded = closed && closedFolded;
               return (
                 <div
                   key={s.id}
-                  className="w-72 shrink-0 bg-secondary/40 border rounded-lg flex flex-col"
+                  className={`${folded ? "w-12" : "w-72"} shrink-0 bg-secondary/40 border rounded-lg flex flex-col`}
                   onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes(DEAL_DRAG_TYPE)) e.preventDefault(); }}
                   onDrop={(e) => {
                     const id = droppedDealId(e.dataTransfer);
                     if (id) requestMove(id, s.id);
                   }}
                 >
+                  {folded ? (
+                    // A folded closed column: its name and count, still a drop target.
+                    <button type="button" aria-expanded={false} aria-label={`Show the ${s.label} column (${count})`} title={`Show ${s.label}`}
+                      onClick={toggleClosedFolded} className="flex flex-col items-center gap-2 py-3 min-h-[60vh] hover:bg-muted/60 rounded-lg">
+                      <ChevronsLeftRight className="size-3.5 text-muted-foreground" />
+                      <span className="text-xs font-medium [writing-mode:vertical-rl]">{s.label} · {count}</span>
+                    </button>
+                  ) : (<>
                   <div className="px-3 py-2 border-b flex items-center gap-2">
                     <div className="text-sm font-medium">{s.label}</div>
                     <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
                       <span>{count} · {fmt$(total)}</span>
                       {avgProb !== null && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">avg {avgProb}%</Badge>
+                      )}
+                      {closed && (
+                        <button type="button" aria-expanded={true} aria-label={`Fold the closed columns`} title="Fold the closed columns"
+                          onClick={toggleClosedFolded} className="p-0.5 rounded hover:bg-muted">
+                          <ChevronsRightLeft className="size-3.5" />
+                        </button>
                       )}
                     </div>
                   </div>
@@ -706,7 +930,15 @@ export default function Pipeline() {
                     {count > items.length && (
                       <p className="px-1 pt-1 text-[11px] text-muted-foreground">The latest {items.length} of {count.toLocaleString()} shown. Export CSV has them all.</p>
                     )}
+                    {/* The next page of a closed column (CRMP's server paging). */}
+                    {closed && count > items.length && closedLimit < BOARD_CLOSED_MAX && (
+                      <button type="button" className="w-full rounded border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => setClosedLimit((n) => Math.min(n + BOARD_CLOSED_STEP, BOARD_CLOSED_MAX))}>
+                        Show {Math.min(BOARD_CLOSED_STEP, count - items.length)} more
+                      </button>
+                    )}
                   </div>
+                  </>)}
                 </div>
               );
             })}
@@ -716,6 +948,7 @@ export default function Pipeline() {
 
       <NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={STAGES} pipelineId={pipelineId} />
       {lostPrompt.dialog}
+      {celebrate > 0 && <WonConfetti />}
 
       <RecordDrawer
         open={!!drawer}

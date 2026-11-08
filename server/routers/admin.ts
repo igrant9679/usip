@@ -550,6 +550,96 @@ async function teamTarget(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, wo
   return target;
 }
 
+/**
+ * Accept the invitation a token names, for the signed-in user (the body of
+ * team.finaliseAcceptance, shared since 2026-11-08 so the pending-invites
+ * inbox goes through the same path: audit U10). Checks the token is live and
+ * is this user's own membership row, marks an account waiting on its sign-up
+ * link verified (F1: the token was emailed to the address), clears the token,
+ * and records the acceptance.
+ */
+async function acceptInviteByToken(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  user: typeof users.$inferSelect,
+  token: string,
+): Promise<{ ok: true; workspaceName: string; role: string }> {
+  const { workspaces } = await import("../../drizzle/schema");
+  const [row] = await db
+    .select({
+      memberId: workspaceMembers.id,
+      workspaceId: workspaceMembers.workspaceId,
+      workspaceName: workspaces.name,
+      userId: workspaceMembers.userId,
+      role: workspaceMembers.role,
+      inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+      loginMethod: users.loginMethod,
+      userEmail: users.email,
+    })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(workspaceMembers.userId, users.id))
+    .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .where(eq(workspaceMembers.inviteToken, token));
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
+  const now = new Date();
+  if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
+  }
+  // Verify the signed-in user IS the invitee — the same row, not merely
+  // the same email. Email is not unique on users, so an email match alone
+  // let another account accept on the invitee's behalf (and this procedure
+  // then rewrote the invitee's openId). With OAuth gone, the invitee only
+  // ever signs in as their own row.
+  if (user.id !== row.userId || user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
+    });
+  }
+  // The invitation's token was emailed to this address, so holding it
+  // proves the address: an account still waiting on its sign-up link is
+  // verified now (audit 2026-10-20, F1). user IS row.userId (checked
+  // just above) and is the full users row, so no extra read; an account
+  // that is not waiting is not written to.
+  const { isEmailVerificationPending, markEmailVerified } = await import("../services/accountEmailVerification");
+  if (isEmailVerificationPending(user)) await markEmailVerified(db, row.userId);
+  // If the member's loginMethod is already a real method (oauth, google, etc.),
+  // the OAuth merge already handled the acceptance — just clear the token and return.
+  // This covers: (a) the invite-placeholder merge in the OAuth callback, and
+  // (b) the resendPasswordSetup flow where loginMethod is already "oauth".
+  const pendingMethods = ["invite", "expired_invite"];
+  if (!pendingMethods.includes(row.loginMethod ?? "")) {
+    // Already accepted — just clear the token if it's still set
+    await db.update(workspaceMembers)
+      .set({ inviteToken: null, inviteExpiresAt: null })
+      .where(eq(workspaceMembers.id, row.memberId));
+    return { ok: true, workspaceName: row.workspaceName, role: row.role };
+  }
+  // Mark accepted: update users.loginMethod, clear invite token
+  await db.update(users)
+    .set({ loginMethod: "oauth", openId: user.openId })
+    .where(eq(users.id, row.userId));
+  await db.update(workspaceMembers)
+    .set({ inviteToken: null, inviteExpiresAt: null })
+    .where(eq(workspaceMembers.id, row.memberId));
+  // Record login history
+  try {
+    await db.insert(loginHistory).values({
+      userId: row.userId,
+      workspaceId: row.workspaceId,
+      outcome: "success",
+    });
+  } catch (_) { /* non-fatal */ }
+  await recordAudit({
+    workspaceId: row.workspaceId,
+    actorUserId: row.userId,
+    action: "update",
+    entityType: "workspace_member",
+    entityId: row.memberId,
+    after: { loginMethod: "oauth", inviteAccepted: true },
+  });
+  return { ok: true, workspaceName: row.workspaceName, role: row.role };
+}
+
 export const teamRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -1906,81 +1996,85 @@ export const teamRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { workspaces } = await import("../../drizzle/schema");
+      return acceptInviteByToken(db, ctx.user, input.token);
+    }),
+
+  /**
+   * Invitations waiting for the signed-in user (audit 2026-10-20, U10): every
+   * workspace that invited this account and has not been joined yet. They were
+   * listed nowhere, so an existing user invited to a second workspace had
+   * only the email to go on. Live ones only (not expired, not deactivated, the
+   * workspace not archived). Never the token: accepting goes through
+   * acceptMyInvitation, which reads it on the server.
+   */
+  myInvitations: protectedProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const { workspaces } = await import("../../drizzle/schema");
+    const now = new Date();
+    const rows = await db
+      .select({
+        memberId: workspaceMembers.id,
+        workspaceId: workspaceMembers.workspaceId,
+        workspaceName: workspaces.name,
+        role: workspaceMembers.role,
+        invitedAt: workspaceMembers.createdAt,
+        expiresAt: workspaceMembers.inviteExpiresAt,
+      })
+      .from(workspaceMembers)
+      .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+      .where(and(
+        eq(workspaceMembers.userId, ctx.user.id),
+        isNotNull(workspaceMembers.inviteToken),
+        isNull(workspaceMembers.deactivatedAt),
+        isNull(workspaces.archivedAt),
+        or(isNull(workspaceMembers.inviteExpiresAt), gt(workspaceMembers.inviteExpiresAt, now)),
+      ))
+      .orderBy(desc(workspaceMembers.createdAt));
+    return rows;
+  }),
+
+  /**
+   * Accept one of those invitations from inside the app (U10). The same path
+   * as the emailed link (acceptInviteByToken), with the token read here, never
+   * sent to the browser. One thing the link proves and this does not: that
+   * the person holds the address. So an account still waiting on its sign-up
+   * link (F1) is refused and pointed at the invitation email, which proves
+   * it; anyone already verified accepts here.
+   */
+  acceptMyInvitation: protectedProcedure
+    .input(z.object({ memberId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [row] = await db
-        .select({
-          memberId: workspaceMembers.id,
-          workspaceId: workspaceMembers.workspaceId,
-          workspaceName: workspaces.name,
-          userId: workspaceMembers.userId,
-          role: workspaceMembers.role,
-          inviteExpiresAt: workspaceMembers.inviteExpiresAt,
-          loginMethod: users.loginMethod,
-          userEmail: users.email,
-        })
+        .select({ token: workspaceMembers.inviteToken, workspaceId: workspaceMembers.workspaceId })
         .from(workspaceMembers)
-        .innerJoin(users, eq(workspaceMembers.userId, users.id))
-        .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
-        .where(eq(workspaceMembers.inviteToken, input.token));
-      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Invite link is invalid or has already been used." });
-      const now = new Date();
-      if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
-      }
-      // Verify the signed-in user IS the invitee — the same row, not merely
-      // the same email. Email is not unique on users, so an email match alone
-      // let another account accept on the invitee's behalf (and this procedure
-      // then rewrote the invitee's openId). With OAuth gone, the invitee only
-      // ever signs in as their own row.
-      if (ctx.user.id !== row.userId || ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+        .where(and(
+          eq(workspaceMembers.id, input.memberId),
+          eq(workspaceMembers.userId, ctx.user.id),
+          isNotNull(workspaceMembers.inviteToken),
+          isNull(workspaceMembers.deactivatedAt),
+        ));
+      if (!row?.token) throw new TRPCError({ code: "NOT_FOUND", message: "That invitation is no longer waiting for you." });
+      const { isEmailVerificationPending } = await import("../services/accountEmailVerification");
+      if (isEmailVerificationPending(ctx.user)) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
+          message: "Confirm your email address first: open the invitation email and accept from there, which confirms it too.",
         });
       }
-      // The invitation's token was emailed to this address, so holding it
-      // proves the address: an account still waiting on its sign-up link is
-      // verified now (audit 2026-10-20, F1). ctx.user IS row.userId (checked
-      // just above) and is the full users row, so no extra read; an account
-      // that is not waiting is not written to.
-      const { isEmailVerificationPending, markEmailVerified } = await import("../services/accountEmailVerification");
-      if (isEmailVerificationPending(ctx.user)) await markEmailVerified(db, row.userId);
-      // If the member's loginMethod is already a real method (oauth, google, etc.),
-      // the OAuth merge already handled the acceptance — just clear the token and return.
-      // This covers: (a) the invite-placeholder merge in the OAuth callback, and
-      // (b) the resendPasswordSetup flow where loginMethod is already "oauth".
-      const pendingMethods = ["invite", "expired_invite"];
-      if (!pendingMethods.includes(row.loginMethod ?? "")) {
-        // Already accepted — just clear the token if it's still set
-        await db.update(workspaceMembers)
-          .set({ inviteToken: null, inviteExpiresAt: null })
-          .where(eq(workspaceMembers.id, row.memberId));
-        return { ok: true, workspaceName: row.workspaceName, role: row.role };
-      }
-      // Mark accepted: update users.loginMethod, clear invite token
-      await db.update(users)
-        .set({ loginMethod: "oauth", openId: ctx.user.openId })
-        .where(eq(users.id, row.userId));
-      await db.update(workspaceMembers)
-        .set({ inviteToken: null, inviteExpiresAt: null })
-        .where(eq(workspaceMembers.id, row.memberId));
-      // Record login history
-      try {
-        await db.insert(loginHistory).values({
-          userId: row.userId,
-          workspaceId: row.workspaceId,
-          outcome: "success",
-        });
-      } catch (_) { /* non-fatal */ }
+      const res = await acceptInviteByToken(db, ctx.user, row.token);
+      // Joined from inside the app: said in the joined workspace's log.
       await recordAudit({
         workspaceId: row.workspaceId,
-        actorUserId: row.userId,
+        actorUserId: ctx.user.id,
         action: "update",
         entityType: "workspace_member",
-        entityId: row.memberId,
-        after: { loginMethod: "oauth", inviteAccepted: true },
+        entityId: input.memberId,
+        after: { inviteAccepted: true, via: "pending_invitations" },
       });
-      return { ok: true, workspaceName: row.workspaceName, role: row.role };
+      return { ...res, workspaceId: row.workspaceId };
     }),
 
   /**

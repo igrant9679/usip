@@ -30,13 +30,14 @@ import {
 } from "@/components/usip/DashboardFilterBar";
 import { WidgetDataRenderer } from "@/components/usip/DashboardWidgets";
 import { confirmAction, Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell, SubNav, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { rankOf } from "@shared/roleRank";
 import { widgetFilters } from "@shared/dashboardPresets";
-import { HOME_CHOICES, homeHref } from "@/lib/homeChoice";
+import { HOME_CHOICES } from "@/lib/homeChoice";
+import { useHomeView } from "@/hooks/useHomeView";
 import {
   BarChart2,
   Home,
@@ -347,10 +348,9 @@ export default function Dashboards() {
   const [customizeMode, setCustomizeMode] = useState(false);
   useEffect(() => { if (!canEdit) setCustomizeMode(false); }, [canEdit]);
   const [filters, setFilters] = useState<DashboardFilters>({ preset: "all" });
-  // Where "/" lands; App's HomeRoute reads the same key (G56).
-  const [homeDashboard, setHomeDashboard] = useState<string>(() => {
-    try { return homeHref(localStorage.getItem(HOME_DASHBOARD_KEY)); } catch { return homeHref(null); }
-  });
+  // Which view of the home page Velocity opens on: the person's choice, on
+  // the server (U33), the same one the home page's own "Set as home" sets.
+  const { homeView, setHomeView } = useHomeView();
 
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState(900);
@@ -473,12 +473,12 @@ export default function Dashboards() {
             right={<Button aria-label="New dashboard" size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
           >
             <ul className="space-y-0.5">
-              {/* The two homes. "Set as home" decides which one "/" opens
-                  (G56); it used to name only the Dashboard, as "Home", and
-                  change nothing. "Home 2" (/dashboard-home2) is retired
-                  (phase 5 item 2, 2026-10-27). */}
+              {/* The two views of the one home page (U33). "Set as home"
+                  decides which one "/" and Home open on (G56), for this
+                  person on every device. "Home 2" (/dashboard-home2) is
+                  retired (phase 5 item 2, 2026-10-27). */}
               {HOME_CHOICES.map((p) => {
-                const isCurrentHome = homeDashboard === p.href;
+                const isCurrentHome = homeView === p.view;
                 return (
                   <li key={p.href} className="group">
                     <div className="flex items-center gap-1">
@@ -498,8 +498,7 @@ export default function Dashboards() {
                           title="Set as home"
                           className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity p-1 rounded hover:bg-secondary text-muted-foreground hover:text-amber-400"
                           onClick={() => {
-                            try { localStorage.setItem(HOME_DASHBOARD_KEY, p.href); } catch { /* this visit only */ }
-                            setHomeDashboard(p.href);
+                            setHomeView(p.view);
                             toast.success(`Velocity now opens on ${p.label}`);
                           }}
                         >

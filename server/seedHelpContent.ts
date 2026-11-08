@@ -1567,11 +1567,12 @@ export const TOURS: TourSeed[] = [
     description: "Move opportunities toward close, with the AI watching for stalls.",
     type: "feature",
     estimatedMinutes: 2,
-    pageKey: "deals",
-    route: "/v2/deals",
+    // The deal board is /pipeline since /v2/deals folded into it (U13, 2026-11-08).
+    pageKey: "pipeline",
+    route: "/pipeline",
     roleTags: ["sdr"],
     steps: [
-      { title: "Every open opportunity", bodyMarkdown: "This is the board of deals in flight. Stages come from your pipeline settings, so it matches how your team actually sells.", routeTo: "/v2/deals", targetDataTourId: "deals-board", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Every open opportunity", bodyMarkdown: "This is the board of deals in flight. Stages come from your pipeline settings, so it matches how your team actually sells.", routeTo: "/pipeline", targetDataTourId: "deals-board", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Deal Autopilot", bodyMarkdown: "Turned on, it watches for deals going quiet and proposes the next move. On Approve it drafts and waits for you; on Autonomous it acts. Set it in the Autonomy Control Center.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Closing a deal", bodyMarkdown: "Marking one Closed Won creates the customer record for you, so renewals and QBRs pick it up without a handoff.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
@@ -1753,10 +1754,10 @@ export const TOURS: TourSeed[] = [
     type: "onboarding",
     estimatedMinutes: 3,
     pageKey: "dashboard",
-    route: "/dashboard",
+    route: "/v2/home?view=pipeline",
     roleTags: ["sdr"],
     steps: [
-      { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/dashboard", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/v2/home?view=pipeline", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, AI Assistant, Inbox, Mailbox, Calendar), then the work: Prospect and enrich, Engage, Win deals, Revenue Engine, and more.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Your daily numbers", bodyMarkdown: "The Dashboard is your morning home — pipeline, leads, customers.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Help anytime", bodyMarkdown: "Click the ? in the top bar for contextual articles, Ask AI, and these tours — on any page.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
@@ -1768,7 +1769,7 @@ export const TOURS: TourSeed[] = [
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "dashboard",
-    route: "/dashboard",
+    route: "/v2/home?view=pipeline",
     roleTags: ["sdr"],
     steps: [
       { title: "KPIs at a glance", bodyMarkdown: "Pipeline value, closed-won, leads, customers — vs. goal.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },

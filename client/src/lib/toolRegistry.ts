@@ -74,11 +74,12 @@ export const TOOL_GROUPS: ToolGroup[] = [
 export const TOOLS: Tool[] = [
   /* ── Daily — the loop: what needs me, what the machine did, where I act ── */
   { href: "/v2/home", label: "Home", icon: Home, group: "Daily", primary: true,
-    description: "What needs you, what the autopilots did, and today's numbers." },
+    description: "What needs you, what the autopilots did, and today's numbers — or the pipeline dashboard, whichever you set as home." },
   // Back on the rail (owner, 2026-09-04): the pipeline dashboard — revenue,
   // win/loss, stage funnel, top reps — is a different question from Home's
   // "what needs me", and it was the app's landing page before /v2/home.
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
+  // One home since 2026-11-08 (U33): the Dashboard is Home's Pipeline view.
+  { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
     description: "Pipeline at a glance — revenue, win/loss, stage funnel, top reps, recent deals.", keywords: ["overview", "kpi", "home screen", "revenue"] },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, group: "Daily", primary: true,
     description: "Ask anything about your pipeline in plain language." },
@@ -144,14 +145,15 @@ export const TOOLS: Tool[] = [
     description: "AI chat widgets that qualify and book meetings.", keywords: ["inbound"] },
 
   /* ── CRM — the records, and the spine Prospect → Lead → Opportunity ─── */
+  // People and Leads stay two lists on purpose (audit X6.3, 2026-11-08): People
+  // is the person database, a lead an inbound enquiry still to qualify. Each
+  // description says which, so they read as two jobs, not two copies.
   { href: "/v2/people", label: "People", icon: Users, group: "CRM", primary: true,
-    description: "Every person record — search, filter, act.", keywords: ["contacts", "prospects"] },
+    description: "Every person record, imported or sourced — the database outreach draws on. Inbound enquiries are Leads.", keywords: ["contacts", "prospects"] },
   { href: "/v2/companies", label: "Companies", icon: Building2, group: "CRM", primary: true,
     description: "Every company record with its people and activity.", keywords: ["accounts"] },
   { href: "/leads", label: "Leads", icon: Target, group: "CRM", primary: true,
-    description: "Scored, routable leads awaiting qualification." },
-  { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "CRM", primary: true,
-    description: "Deal autopilot, at-risk alerts and the working board.", keywords: ["pipeline", "opportunities"] },
+    description: "Inbound enquiries awaiting qualification — scored and routed. Not the person database: that is People." },
   // Back on the rail (owner, 2026-09-20: "bring back the traditional Sales
   // Pipeline page"). It was never deleted — it simply had no entry here, and
   // the rail, Library and palette all render ONLY from this file, so it went
@@ -159,9 +161,11 @@ export const TOOLS: Tool[] = [
   // rather than folded into Deals because it is the only place you can create
   // an opportunity, run the weighted forecast, export the board, or switch
   // between configured pipelines.
+  // THE deal board since 2026-11-08 (audit U13): /v2/deals ("Deals") folded
+  // in here and redirects, so this one entry carries both names.
   { href: "/pipeline", label: "Sales Pipeline", icon: TrendingUp, group: "CRM", primary: true,
-    description: "The classic stage board — with the weighted forecast, CSV export, and where you add an opportunity.",
-    keywords: ["forecast", "opportunities", "stages", "pipeline", "weighted", "export"] },
+    description: "Every deal by stage — the Deal Autopilot and at-risk alerts, the weighted forecast, owner and close-date filters, CSV export, and where you add an opportunity.",
+    keywords: ["deals", "forecast", "opportunities", "stages", "pipeline", "weighted", "export", "autopilot", "kanban", "board"] },
   // Back on the rail (owner, 2026-09-04): both are daily working surfaces —
   // Lists feed the Add-existing wizard and targeting, Tasks carry the
   // Task Autopilot's proposals.
@@ -171,8 +175,8 @@ export const TOOLS: Tool[] = [
     description: "Your to-dos, including AI-proposed drafts." },
   // The alerts strip on Deals shows the same rows (phase 4); the route stays
   // for its in-page deal actions.
-  { href: "/v2/deals#alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
-    description: "Stuck-deal and at-risk warnings — the strip at the top of Deals.", keywords: ["stuck", "at risk"] },
+  { href: "/pipeline#alerts", label: "Pipeline Alerts", icon: AlertTriangle, group: "CRM",
+    description: "Stuck-deal and at-risk warnings — the strip at the top of the deal board.", keywords: ["stuck", "at risk"] },
 
   /* ── Outreach — 1:1, sequenced, per-person copy; replies and meetings ── */
   { href: "/are", label: "Revenue Engine", icon: Bot, group: "Outreach", primary: true,

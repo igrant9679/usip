@@ -9,6 +9,7 @@
  *
  * The route's params and the query string ride along (U14, F25): a canvas
  * deep link keeps its sequence id, and /mailbox?reply=12 still opens reply 12.
+ * So does the hash (U13, 2026-11-08): /v2/deals#alerts opens /pipeline#alerts.
  */
 import { useEffect } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
@@ -19,6 +20,7 @@ export default function RetiredRedirect({ from }: { from: RetiredRoute }) {
   const params = useParams() as Record<string, string | undefined>;
   const search = useSearch();
   const to = retiredRedirectUrl(from, { params, search });
-  useEffect(() => { setLocation(to, { replace: true }); }, [to, setLocation]);
+  const hash = typeof window !== "undefined" ? window.location.hash : "";
+  useEffect(() => { setLocation(`${to}${hash}`, { replace: true }); }, [to, hash, setLocation]);
   return null;
 }

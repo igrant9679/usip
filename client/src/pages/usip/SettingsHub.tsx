@@ -13,19 +13,23 @@
  * Profile is the default landing subpage — the sidebar "Admin Settings →
  * All settings" opens /v2/settings/profile. Its five tabs mirror the Apollo
  * reference and each is wired to real Velocity data:
- *   General        — account info, CRM connection, credit limit, LinkedIn
+ *   General        — account info, CRM connection, annual quota, LinkedIn
  *   MFA            — honest sign-in security state + password controls
  *   Custom fields  — live customFields.listDefs summary + manage link
  *   Email settings — sending prefs, sequence opt-out, mailbox links
  *   Conversations  — per-user notification routing (team.getNotifPrefs)
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLocation, useParams } from "wouter";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation, useParams, useSearch } from "wouter";
+import { usePageTitle } from "@/lib/usePageTitle";
+import { ShellEmbedContext } from "@/components/usip/Shell";
+import { SignatureSection } from "@/components/usip/settings/SignatureSection";
+import { HUB_SECTION_ALIASES, PROFILE_TAB_IDS, profileTabFrom, settingsMatches, type ProfileTabId } from "@/lib/settingsSearch";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { canOpenWorkspace } from "@/lib/activeWorkspace";
-import { Building2 as WsIcon, Check as WsCheck, ChevronsUpDown as WsChevrons } from "lucide-react";
+import { WorkspaceSwitchList } from "@/components/usip/WorkspaceSwitchList";
+import { Building2 as WsIcon, ChevronsUpDown as WsChevrons } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -88,6 +92,7 @@ import {
   Zap,
   AlertTriangle,
   ListChecks,
+  PenLine,
 } from "lucide-react";
 import { BackupCodesPanel } from "@/components/usip/settings/BackupCodesPanel";
 import { confirmAction } from "@/components/usip/Common";
@@ -104,56 +109,97 @@ type HubItem = {
   internal?: boolean;
   /** … or an app route this row navigates to. */
   href?: string;
+  /**
+   * What else this row is called, for the search box (audit 2026-10-20, U9):
+   * it matched labels only, so "MFA", "SMTP", "webhook" or "signature" found
+   * nothing. Lower case.
+   */
+  keywords?: string[];
 };
 type HubGroup = { label: string; items: HubItem[] };
 
-// The legacy /settings page collapsed into this hub 2026-09-15: every row
-// that used to round-trip into it is now an internal section rendering the
-// same tab component via LegacySettingsSection.
+/*
+ * The structure (audit 2026-10-20, G51 and U9; batch CONB, 2026-11-08; the
+ * owner delegated the call). Personal holds what belongs to you; anything
+ * that applies to the whole workspace sits under Workspace — Mailboxes (the
+ * workspace's sending accounts) moved there, and "Phone numbers", which opened
+ * the call queue, is the Voice agents section, where numbers are set. Your
+ * signature has its own section, the one place signatures are edited.
+ *
+ * Users and teams, Audit log, Custom fields and Notifications are settings, so
+ * they render inside the hub now (ShellEmbedContext); their pages still route
+ * on their own for links and bookmarks. Three rows still link out, on
+ * purpose: Tour builder is a full-screen authoring tool for super admins, not
+ * a setting, and Imports and Data enrichment are places to work on records.
+ *
+ * The legacy /settings page collapsed into this hub 2026-09-15: every row
+ * that used to round-trip into it is an internal section rendering the same
+ * tab component via LegacySettingsSection.
+ */
 const GROUPS: HubGroup[] = [
   {
     label: "Personal settings",
     items: [
-      { id: "profile", label: "Profile", icon: User, internal: true },
-      { id: "appearance", label: "Appearance", icon: Monitor, internal: true },
-      { id: "mailboxes", label: "Mailboxes", icon: Mail, internal: true },
-      { id: "phone-numbers", label: "Phone numbers", icon: Phone, href: "/v2/calls" },
-      { id: "notifications", label: "Notifications", icon: Bell, href: "/notification-prefs" },
-      { id: "social-accounts", label: "Social accounts", icon: Link2, internal: true },
+      { id: "profile", label: "Profile", icon: User, internal: true, keywords: ["name", "title", "login email", "password", "quota", "annual quota", "linkedin", "mfa", "2fa", "two-factor", "authenticator", "backup codes", "sessions", "sign out everywhere"] },
+      { id: "appearance", label: "Appearance", icon: Monitor, internal: true, keywords: ["theme", "dark mode", "light mode", "colour", "color", "palette"] },
+      { id: "signature", label: "Email signature", icon: PenLine, internal: true, keywords: ["signature", "email signature", "sign-off", "sign off", "footer"] },
+      { id: "notifications", label: "Notifications", icon: Bell, internal: true, keywords: ["alerts", "email notifications", "in-app", "bell", "mute"] },
+      { id: "social-accounts", label: "Social accounts", icon: Link2, internal: true, keywords: ["linkedin", "unipile", "whatsapp", "instagram", "social"] },
     ],
   },
   {
     label: "Workspace settings",
     items: [
-      { id: "workspace", label: "Workspace overview", icon: Building2, internal: true },
-      { id: "users-teams", label: "Users and teams", icon: Users, href: "/team" },
-      { id: "security", label: "Security", icon: ShieldCheck, internal: true },
-      { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true },
-      { id: "integrations", label: "Integrations", icon: Plug, internal: true },
-      { id: "voice-agents", label: "Voice agents", icon: AudioLines, internal: true },
-      { id: "knowledge", label: "Knowledge base", icon: BookOpen, internal: true },
-      { id: "data-sources", label: "Data sources", icon: Database, internal: true },
-      { id: "email-delivery", label: "Email delivery", icon: Send, internal: true },
-      { id: "branding", label: "Branding", icon: Palette, internal: true },
-      { id: "proposals", label: "Proposals", icon: FileText, internal: true },
-      { id: "billing", label: "Billing and credits", icon: CreditCard, internal: true },
+      { id: "workspace", label: "Workspace overview", icon: Building2, internal: true, keywords: ["workspace name", "slug", "plan", "time zone", "timezone", "fiscal year", "currency", "general"] },
+      { id: "users-teams", label: "Users and teams", icon: Users, internal: true, keywords: ["team", "users", "members", "invite", "invitations", "roles", "permissions", "seats", "deactivate"] },
+      { id: "mailboxes", label: "Mailboxes", icon: Mail, internal: true, keywords: ["mailbox", "sending accounts", "smtp", "imap", "gmail", "google", "outlook", "warmup", "sending limits", "opt-out"] },
+      { id: "voice-agents", label: "Voice agents and numbers", icon: AudioLines, internal: true, keywords: ["voice", "phone", "phone numbers", "calls", "dialer", "plivo", "xai"] },
+      { id: "security", label: "Security", icon: ShieldCheck, internal: true, keywords: ["mfa", "2fa", "two-factor", "require 2fa", "sso", "ip allowlist", "session timeout", "password"] },
+      { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true, keywords: ["notifications", "notify", "policy"] },
+      { id: "integrations", label: "Integrations", icon: Plug, internal: true, keywords: ["webhook", "webhooks", "api key", "api keys", "ai providers", "openai", "anthropic", "gemini", "slack", "teams", "google maps", "sendgrid"] },
+      { id: "knowledge", label: "Knowledge base", icon: BookOpen, internal: true, keywords: ["documents", "faq", "knowledge"] },
+      { id: "data-sources", label: "Data sources", icon: Database, internal: true, keywords: ["apollo", "reoon", "quickenrich", "warmysender", "leadocean", "vendors", "api key", "api keys", "verification", "providers"] },
+      { id: "email-delivery", label: "Email delivery", icon: Send, internal: true, keywords: ["smtp", "from name", "sender", "deliverability", "email identity", "system email"] },
+      { id: "branding", label: "Branding", icon: Palette, internal: true, keywords: ["brand", "logo", "colours", "colors", "brand voice"] },
+      { id: "proposals", label: "Proposals", icon: FileText, internal: true, keywords: ["quote", "quotes", "e-signature", "portal", "expiry"] },
+      { id: "billing", label: "Billing and credits", icon: CreditCard, internal: true, keywords: ["billing", "credits", "plan", "usage", "spend", "cost", "invoice", "caps"] },
       // "Audit log", the page's own title: as "System activity" it read as a
       // different page (the Shell's admin menu made the same fix) (G51).
-      { id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" },
-      { id: "tour-builder", label: "Tour builder", icon: Zap, href: "/tour-builder" },
-      { id: "danger", label: "Danger zone", icon: AlertTriangle, internal: true },
+      { id: "system-activity", label: "Audit log", icon: Activity, internal: true, keywords: ["audit", "history", "activity log", "who changed"] },
+      { id: "tour-builder", label: "Tour builder", icon: Zap, href: "/tour-builder", keywords: ["tours", "onboarding", "guide"] },
+      { id: "danger", label: "Danger zone", icon: AlertTriangle, internal: true, keywords: ["delete workspace", "archive", "danger"] },
     ],
   },
   {
     label: "Data management",
     items: [
-      { id: "custom-fields", label: "Custom fields", icon: Tag, href: "/custom-fields" },
-      { id: "imports", label: "Imports and exports", icon: Upload, href: "/v2/data-enrichment?tab=import-contacts" },
-      { id: "enrichment", label: "Data enrichment", icon: Sparkles, href: "/v2/data-enrichment" },
-      { id: "enrichment-sweep", label: "Enrichment sweep", icon: Database, internal: true },
+      { id: "custom-fields", label: "Custom fields", icon: Tag, internal: true, keywords: ["fields", "properties", "custom"] },
+      { id: "imports", label: "Imports and exports", icon: Upload, href: "/v2/data-enrichment?tab=import-contacts", keywords: ["import", "export", "csv", "upload"] },
+      { id: "enrichment", label: "Data enrichment", icon: Sparkles, href: "/v2/data-enrichment", keywords: ["enrich", "enrichment"] },
+      { id: "enrichment-sweep", label: "Enrichment sweep", icon: Database, internal: true, keywords: ["sweep", "enrichment schedule"] },
     ],
   },
 ];
+
+/** The registry, for its tests (search keywords, groups). */
+export const SETTINGS_GROUPS = GROUPS;
+
+/** The settings pages that render inside the hub (U9), loaded when opened. */
+const EmbeddedTeam = lazy(() => import("@/pages/usip/Team"));
+const EmbeddedAudit = lazy(() => import("@/pages/usip/Audit"));
+const EmbeddedCustomFields = lazy(() => import("@/pages/usip/CustomFields"));
+const EmbeddedNotificationPrefs = lazy(() => import("@/pages/usip/NotificationPrefs"));
+
+/** A whole page, shown in the hub's content panel without its own frame. */
+function Embedded({ children }: { children: ReactNode }) {
+  return (
+    <ShellEmbedContext.Provider value={true}>
+      <Suspense fallback={<div className="p-6"><div className="h-40 rounded-xl bg-muted/50 animate-pulse" /></div>}>
+        <div className="flex-1 min-h-0 flex flex-col">{children}</div>
+      </Suspense>
+    </ShellEmbedContext.Provider>
+  );
+}
 
 /* ─────────────────────────────── page ─────────────────────────────────── */
 
@@ -165,11 +211,14 @@ export default function SettingsHub() {
   // Absent section → Profile (the default landing subpage). A row that links
   // out, reached by its id, goes where the rail would send it; an id that is no
   // section says so. Both used to show Profile as if it had been asked for (G51).
-  const askedItem = params.section ? GROUPS.flatMap((g) => g.items).find((i) => i.id === params.section) : undefined;
+  // An id a row used to have still lands (phone-numbers → voice-agents).
+  const askedId = params.section ? (HUB_SECTION_ALIASES[params.section] ?? params.section) : undefined;
+  const askedItem = askedId ? GROUPS.flatMap((g) => g.items).find((i) => i.id === askedId) : undefined;
   const unknownSection = !!params.section && !askedItem ? params.section : null;
   useEffect(() => {
     if (askedItem && !askedItem.internal && askedItem.href) navigate(askedItem.href, { replace: true });
-  }, [askedItem, navigate]);
+    else if (askedItem && params.section && askedItem.id !== params.section) navigate(`/v2/settings/${askedItem.id}`, { replace: true });
+  }, [askedItem, navigate, params.section]);
   const section = askedItem?.internal ? askedItem.id : "profile";
 
   // "Billing and credits" is the one section behind a per-member permission
@@ -183,13 +232,18 @@ export default function SettingsHub() {
     const q = query.trim().toLowerCase();
     const visible = GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.id !== "billing" || canBilling) }));
     if (!q) return visible.filter((g) => g.items.length > 0);
-    return visible.map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(q)) }))
+    // Labels and keywords (U9): "mfa", "smtp", "webhook", "signature".
+    return visible.map((g) => ({ ...g, items: g.items.filter((i) => settingsMatches(q, i.label, i.keywords)) }))
       .filter((g) => g.items.length > 0);
   }, [query, canBilling]);
 
   // Below md the rail is a sheet, opened from the top bar (G27).
   const [navOpen, setNavOpen] = useState(false);
   const sectionLabel = GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ?? "Profile";
+  // The tab says which section is open (the workspace name rides along: U10).
+  usePageTitle(unknownSection ? "Settings" : `${sectionLabel} · Settings`);
+  // The Profile tab a search result or a link asked for (?tab=, U9).
+  const search = useSearch();
 
   const go = (it: HubItem) => {
     setNavOpen(false);
@@ -236,11 +290,13 @@ export default function SettingsHub() {
               <div className="space-y-0.5">
                 {g.items.map((it) => {
                   const active = it.internal && it.id === section;
+                  // A Profile hit for "mfa" or "password" opens that tab (U9).
+                  const tabHit = it.id === "profile" && query.trim() ? profileTabFrom(query) : null;
                   return (
                     <button
                       key={it.id}
                       type="button"
-                      onClick={() => go(it)}
+                      onClick={() => (tabHit ? (setNavOpen(false), navigate(`/v2/settings/profile?tab=${tabHit}`)) : go(it))}
                       className={cn(
                         "w-full flex items-center gap-2.5 rounded-md px-3 py-1.5 text-left text-[13px] transition-colors",
                         active
@@ -249,7 +305,7 @@ export default function SettingsHub() {
                       )}
                     >
                       <it.icon className={cn("size-3.5 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="truncate">{it.label}</span>
+                      <span className="truncate">{it.label}{tabHit ? ` › ${PROFILE_TABS.find((t) => t.id === tabHit)?.label}` : ""}</span>
                     </button>
                   );
                 })}
@@ -261,7 +317,7 @@ export default function SettingsHub() {
           )}
         </nav>
         <div className="shrink-0 border-t border-border p-3">
-          <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => navigate("/team")}>
+          <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={() => navigate("/v2/settings/users-teams")}>
             <UserPlus className="size-4" /> Add Teammates
           </Button>
         </div>
@@ -300,7 +356,12 @@ export default function SettingsHub() {
               Go to Profile
             </button>
           </div>
-        ) : section === "profile" && <ProfileSection />}
+        ) : section === "profile" && <ProfileSection tabParam={new URLSearchParams(search).get("tab")} />}
+        {section === "signature" && <SignatureSectionForMe />}
+        {section === "users-teams" && <Embedded><EmbeddedTeam /></Embedded>}
+        {section === "system-activity" && <Embedded><EmbeddedAudit /></Embedded>}
+        {section === "custom-fields" && <Embedded><EmbeddedCustomFields /></Embedded>}
+        {section === "notifications" && <Embedded><EmbeddedNotificationPrefs /></Embedded>}
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
         {section === "knowledge" && <KnowledgeSection />}
@@ -334,16 +395,28 @@ export default function SettingsHub() {
 
 /* ───────────────────────── Profile subpage ────────────────────────────── */
 
-const PROFILE_TABS = [
+const PROFILE_TABS: ReadonlyArray<{ id: ProfileTabId; label: string }> = [
   { id: "general", label: "General" },
   // "Security" since 2026-11-07 (F3, G15): 2FA, backup codes and where you are signed in.
   { id: "mfa", label: "Security" },
   { id: "email-settings", label: "Email settings" },
-] as const;
-type ProfileTab = (typeof PROFILE_TABS)[number]["id"];
+];
+type ProfileTab = ProfileTabId;
 
-function ProfileSection() {
-  const [tab, setTab] = useState<ProfileTab>("general");
+/** The signature section, with whether this person may edit the workspace default. */
+function SignatureSectionForMe() {
+  const me = trpc.profile.getMe.useQuery();
+  return <SignatureSection isAdmin={isAdminRole(me.data?.role)} />;
+}
+
+function ProfileSection({ tabParam }: { tabParam?: string | null }) {
+  // Deep links to a tab (U9): /v2/settings/profile?tab=mfa opens Security.
+  // Picking a tab writes it back, so the address is shareable.
+  const [, navigateTab] = useLocation();
+  const asked: ProfileTab = (PROFILE_TAB_IDS as readonly string[]).includes(tabParam === "security" ? "mfa" : tabParam ?? "") ? ((tabParam === "security" ? "mfa" : tabParam) as ProfileTab) : "general";
+  const [tab, setTabState] = useState<ProfileTab>(asked);
+  useEffect(() => { setTabState(asked); }, [asked]);
+  const setTab = (t: ProfileTab) => { setTabState(t); navigateTab(t === "general" ? "/v2/settings/profile" : `/v2/settings/profile?tab=${t}`, { replace: true }); };
   const utils = trpc.useUtils();
 
   const me = trpc.profile.getMe.useQuery();
@@ -405,7 +478,7 @@ function ProfileSection() {
     if (!formName) { toast.error("Name is required"); return; }
     const quotaNum = quotaStr.trim() === "" ? null : Number(quotaStr);
     if (isAdmin && quotaNum != null && (!Number.isFinite(quotaNum) || quotaNum < 0)) {
-      toast.error("Credit limit must be a positive number");
+      toast.error("Annual quota must be a positive number");
       return;
     }
     setSaving(true);
@@ -593,11 +666,13 @@ function GeneralTab(props: {
         </div>
       </SettingsCard>
 
-      {/* Restrictions */}
-      <SettingsCard title="Restrictions">
+      {/* One label for the one number (G51): this is workspace_members.quota,
+          the sales quota the Team page and Quota Management call "Annual
+          quota". As "Credit Limit" it read as a spending cap, which it is not. */}
+      <SettingsCard title="Quota">
         <div className="space-y-1.5 max-w-sm">
-          <Label>Credit Limit</Label>
-          <Input aria-label="Credit Limit"
+          <Label>Annual quota ($)</Label>
+          <Input aria-label="Annual quota ($)"
             type="number"
             min={0}
             value={quotaStr}
@@ -607,8 +682,8 @@ function GeneralTab(props: {
           />
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "Leave this field blank if no limit is required"
-              : "Set by your workspace admin. Leave blank means no limit."}
+              ? "Your sales target for the year in this workspace. Leave it blank for none."
+              : "Your sales target for the year, set by a workspace admin. Blank means none is set."}
           </p>
         </div>
       </SettingsCard>
@@ -1037,16 +1112,17 @@ function EmailSettingsTab({
           Manage Mailboxes
         </Button>
 
+        {/* The signature lives on one page (G51); this said it was set per
+            mailbox, which is true only of mail sent through a mailbox. */}
         <p className="text-[13px] text-muted-foreground">
-          Your signature is set per mailbox — open a mailbox from{" "}
+          Your signature, the workspace default and each mailbox's are on{" "}
           <button
             type="button"
-            onClick={() => navigate("/v2/settings/mailboxes")}
+            onClick={() => navigate("/v2/settings/signature")}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80"
           >
-            Mailboxes
-          </button>{" "}
-          to edit its signature.
+            Email signature
+          </button>.
         </p>
 
         <div className="space-y-3 pt-1">
@@ -1243,7 +1319,14 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
  */
 function SettingsWorkspaceSwitcher() {
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  // Search, once the list is long (U10); cleared when the panel closes.
+  const [query, setQuery] = useState("");
+  const setOpen = (v: boolean | ((o: boolean) => boolean)) => setOpenState((o) => {
+    const next = typeof v === "function" ? v(o) : v;
+    if (!next) setQuery("");
+    return next;
+  });
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Hand-rolled disclosure, so the semantics Radix supplies for free have to be
   // written out (a11y 2026-10-28): the trigger says it opens a popup and
@@ -1279,20 +1362,15 @@ function SettingsWorkspaceSwitcher() {
       </button>
       {open && (
         <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-md border bg-popover p-1 shadow-lg">
-          {/* Archived: badged, and open to super admins only (G36), as in Shell. */}
-          {workspaces.map((w) => (
-            <button
-              key={w.id}
-              type="button"
-              disabled={!canOpenWorkspace(w)}
-              onClick={() => { setOpen(false); if (w.id !== current?.id) switchTo(w.id); }}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:opacity-60 disabled:hover:bg-transparent"
-            >
-              {current?.id === w.id ? <WsCheck className="size-3.5 shrink-0 text-primary" /> : <span className="size-3.5 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate">{w.name}</span>
-              {w.archivedAt && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>}
-            </button>
-          ))}
+          {/* Archived: badged, and open to super admins only (G36); a search
+              box once the list is long (U10). The same list as the Shell's. */}
+          <WorkspaceSwitchList
+            workspaces={workspaces}
+            currentId={current?.id}
+            query={query}
+            onQuery={setQuery}
+            onPick={(id) => { setOpen(false); if (id !== current?.id) switchTo(id); }}
+          />
         </div>
       )}
     </div>
