@@ -22,7 +22,8 @@ describe("the detail pages speak the v2 vocabulary", () => {
   });
   for (const [label, file, back] of [
     ["Lead", "LeadDetail.tsx", '{ href: "/leads", label: "Leads" }'],
-    ["Opportunity", "OpportunityDetail.tsx", '{ href: "/v2/deals", label: "Deals" }'],
+    // 2026-11-08 (CONB, U13): the deal board is /pipeline; /v2/deals redirects there.
+    ["Opportunity", "OpportunityDetail.tsx", '{ href: "/pipeline", label: "Deals" }'],
     ["Prospect", "ProspectDetail.tsx", '{ href: "/v2/people", label: "People" }'],
   ] as const) {
     it(`${label} detail uses DetailHeader/DetailSection and no legacy banner or card grid`, () => {

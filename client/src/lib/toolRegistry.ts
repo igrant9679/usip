@@ -145,7 +145,7 @@ export const TOOLS: Tool[] = [
     description: "AI chat widgets that qualify and book meetings.", keywords: ["inbound"] },
 
   /* ── CRM — the records, and the spine Prospect → Lead → Opportunity ─── */
-  // People and Leads stay two lists by design (audit X6.3, 2026-11-08): People
+  // People and Leads stay two lists on purpose (audit X6.3, 2026-11-08): People
   // is the person database, a lead an inbound enquiry still to qualify. Each
   // description says which, so they read as two jobs, not two copies.
   { href: "/v2/people", label: "People", icon: Users, group: "CRM", primary: true,
