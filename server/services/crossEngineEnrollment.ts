@@ -188,30 +188,34 @@ export const campaignMembershipsForProspects = (workspaceId: number, prospectIds
 /**
  * Resolve contacts and leads to their People rows (creating the mirror when
  * none exists) so any person type can enter an ARE campaign. Returns the
- * People ids plus the ones that could not be resolved.
+ * People ids plus the ones that could not be resolved, and which person each
+ * contact became (`byContact`), for a caller that must keep the pairing (the
+ * People-list member backfill, audit A55). A contact id not found in this
+ * workspace is in neither.
  */
 export async function resolveToPeopleIds(
   workspaceId: number,
   input: { prospectIds?: number[]; contactIds?: number[]; leadIds?: number[] },
-): Promise<{ prospectIds: number[]; unresolved: Array<{ type: "contact" | "lead"; id: number }> }> {
+): Promise<{ prospectIds: number[]; unresolved: Array<{ type: "contact" | "lead"; id: number }>; byContact: Map<number, number> }> {
   const db = await getDb();
   const ids = new Set<number>(input.prospectIds ?? []);
   const unresolved: Array<{ type: "contact" | "lead"; id: number }> = [];
-  if (!db) return { prospectIds: Array.from(ids), unresolved };
+  const byContact = new Map<number, number>();
+  if (!db) return { prospectIds: Array.from(ids), unresolved, byContact };
 
   if (input.contactIds?.length) {
     const rows = await db.select().from(contacts)
       .where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, input.contactIds)));
     const { upsertPersonForContact } = await import("./personLink");
     for (const c of rows) {
-      if (c.personProspectId) { ids.add(c.personProspectId); continue; }
+      if (c.personProspectId) { ids.add(c.personProspectId); byContact.set(c.id, c.personProspectId); continue; }
       const r = await upsertPersonForContact(workspaceId, {
         id: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email,
         linkedinUrl: (c as any).linkedinUrl ?? null, phone: (c as any).phone ?? null,
         title: (c as any).title ?? null, companyName: (c as any).companyName ?? (c as any).company ?? null,
         companyDomain: (c as any).companyDomain ?? null,
       } as any);
-      if (r?.personId) ids.add(r.personId); else unresolved.push({ type: "contact", id: c.id });
+      if (r?.personId) { ids.add(r.personId); byContact.set(c.id, r.personId); } else unresolved.push({ type: "contact", id: c.id });
     }
   }
   if (input.leadIds?.length) {
@@ -221,7 +225,7 @@ export async function resolveToPeopleIds(
       if (r.prospectId) ids.add(r.prospectId); else unresolved.push({ type: "lead", id: leadId });
     }
   }
-  return { prospectIds: Array.from(ids), unresolved };
+  return { prospectIds: Array.from(ids), unresolved, byContact };
 }
 
 // Re-exported so callers that only need the null-guards import one module.
