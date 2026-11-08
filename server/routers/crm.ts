@@ -41,7 +41,7 @@ import {
   contactAccountLinks,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
 import { insertIdOf } from "../_core/insertId";
@@ -560,17 +560,35 @@ export const accountsRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** Contacts contacts.list returns when the caller names no limit (X4.1). */
+export const CONTACT_LIST_DEFAULT = 200;
+
 export const contactsRouter = router({
+  /**
+   * Contacts for the pickers: filtered in SQL and capped (audit 2026-10-20,
+   * X4.1). This read every contact in the workspace, every column, and then
+   * filtered by account and search in JavaScript. Each word of the search must
+   * appear in the first name, last name or email, as the old filter matched
+   * over "first last email"; at most `limit`, newest first.
+   */
   list: workspaceProcedure
-    .input(z.object({ accountId: z.number().optional(), search: z.string().optional() }).optional())
+    .input(z.object({ accountId: z.number().optional(), search: z.string().optional(), limit: z.number().int().min(1).max(1000).optional() }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id)).orderBy(desc(contacts.updatedAt));
-      if (input?.accountId) rows = rows.filter((c) => c.accountId === input.accountId);
-      const q = input?.search?.toLowerCase().trim();
-      if (q) rows = rows.filter((c) => `${c.firstName} ${c.lastName} ${c.email ?? ""}`.toLowerCase().includes(q));
-      return rows;
+      const words = (input?.search ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+      const wordConds = words.map((w) => {
+        const s = `%${w.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+        return or(like(contacts.firstName, s), like(contacts.lastName, s), like(contacts.email, s))!;
+      });
+      return db.select().from(contacts)
+        .where(and(
+          eq(contacts.workspaceId, ctx.workspace.id),
+          input?.accountId ? eq(contacts.accountId, input.accountId) : undefined,
+          ...wordConds,
+        ))
+        .orderBy(desc(contacts.updatedAt), desc(contacts.id))
+        .limit(input?.limit ?? CONTACT_LIST_DEFAULT);
     }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -1268,6 +1286,54 @@ export const leadsRouter = router({
     }))
     .query(({ ctx, input }) => searchLeads(ctx.workspace.id, input)),
 
+  /**
+   * "Select all N matching" on Leads (audit 2026-10-20, F30): the ids of every
+   * lead the table shows under its filter (at most 5,000) and how many match,
+   * for Add to…, whose own procedures enrol them with every check.
+   */
+  matchingIds: workspaceProcedure
+    .input(z.object({ status: z.string().optional(), search: z.string().max(200).optional() }))
+    .query(async ({ ctx, input }) => {
+      const { matchingLeadIds } = await import("../services/leadSearch");
+      const r = await matchingLeadIds(ctx.workspace.id, input);
+      return { ...r, capped: r.total > r.ids.length };
+    }),
+
+  /**
+   * Delete every lead matching the table's filter (F30), as a job through
+   * bulkDelete a slice at a time. `expectedTotal` is the count the
+   * confirmation stated; a different count now refuses.
+   */
+  bulkByFilter: repProcedure
+    .input(z.object({
+      action: z.enum(["delete"]),
+      filter: z.object({ status: z.string().optional(), search: z.string().max(200).optional() }),
+      expectedTotal: z.number().int().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { matchingLeadIds } = await import("../services/leadSearch");
+      const { ids, total } = await matchingLeadIds(ctx.workspace.id, input.filter);
+      if (total !== input.expectedTotal) {
+        throw new TRPCError({ code: "CONFLICT", message: `${total.toLocaleString()} leads match now, not ${input.expectedTotal.toLocaleString()}. Check the count and confirm again.` });
+      }
+      if (total > ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: `This acts on at most ${ids.length.toLocaleString()} leads at a time; ${total.toLocaleString()} match. Narrow the filters.` });
+      const { queueBulk } = await import("../services/bulkByFilter");
+      return queueBulk({ workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "leads", action: "delete", ids, scope: { filter: input.filter, matched: total } });
+    }),
+
+  /** Leads and contacts a new lead would duplicate, for the New lead dialog (F36). */
+  duplicateCheck: workspaceProcedure
+    .input(z.object({
+      email: z.string().max(320).optional(),
+      firstName: z.string().max(120).optional(),
+      lastName: z.string().max(120).optional(),
+      company: z.string().max(200).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const { findLeadDuplicates } = await import("../services/leadDuplicates");
+      return findLeadDuplicates(ctx.workspace.id, input);
+    }),
+
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -1295,11 +1361,24 @@ export const leadsRouter = router({
         company: z.string().optional(),
         title: z.string().optional(),
         source: z.string().optional(),
+        /** Create even though a lead or contact already has this address (F36). */
+        allowDuplicate: z.boolean().default(false),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: raw }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { allowDuplicate, ...input } = raw;
+      // One address, one lead, unless the person creating it says otherwise
+      // (audit 2026-10-20, F36): a second lead for a known address was made
+      // and nobody was told.
+      if (!allowDuplicate) {
+        const { findLeadDuplicates, describeLeadDuplicates } = await import("../services/leadDuplicates");
+        const dupes = await findLeadDuplicates(ctx.workspace.id, input);
+        if (dupes.length > 0) {
+          throw new TRPCError({ code: "CONFLICT", message: `Already here: ${describeLeadDuplicates(dupes)}. Open it, or create the lead anyway.` });
+        }
+      }
       // Apply lead-routing rules first; fall back to creator as owner. Rules on
       // Score see the score the lead is created with, not 0 (audit P13).
       const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
@@ -1422,11 +1501,15 @@ export const leadsRouter = router({
       ? await db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email, accountId: contacts.accountId })
         .from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, ctx.workspace.id))).limit(1)
       : [];
+    // Who the new records go to unless the converter picks someone (audit
+    // 2026-10-20, F31): the lead's owner, while they still work here.
+    const leadOwnerId = await activeOwnerOrNull(ctx.workspace.id, lead.ownerUserId);
     return {
       alreadyConverted: lead.status === "converted",
       accountMatches,
       contactMatch: contactMatch ?? null,
       newAccountName: lead.company ?? `${lead.firstName} ${lead.lastName}`,
+      leadOwnerUserId: leadOwnerId,
     };
   }),
 
@@ -1454,6 +1537,8 @@ export const leadsRouter = router({
       createOpportunity: z.boolean().default(false),
       opportunityValue: z.number().min(0).optional(),
       opportunityName: z.string().trim().min(1).max(200).optional(),
+      /** Who owns what this creates; omitted keeps the lead's owner (F31). */
+      ownerUserId: z.number().int().positive().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1464,6 +1549,12 @@ export const leadsRouter = router({
       if (lead.status === "converted") throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
       await assertRowInWorkspace(db, "account", input.accountId, ws);
       await assertRowInWorkspace(db, "contact", input.contactId, ws);
+      await assertOwnerInWorkspace(ws, input.ownerUserId);
+      // The lead keeps its owner through the conversion (audit 2026-10-20,
+      // F31): the new company, contact and deal took the converting user. A
+      // pick in the dialog wins; a lead owner who has left falls back to the
+      // converter, as the territory owner does below.
+      const keptOwner = input.ownerUserId ?? (await activeOwnerOrNull(ws, lead.ownerUserId)) ?? ctx.user.id;
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const domain = businessDomainFromEmail(lead.email) || null;
@@ -1498,7 +1589,7 @@ export const leadsRouter = router({
         if (accountCreated) {
           const accR = await tx.insert(accounts).values({
             workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain),
-            ownerUserId: territoryOwner ?? ctx.user.id, territoryId: territory?.territoryId ?? undefined,
+            ownerUserId: input.ownerUserId ?? territoryOwner ?? keptOwner, territoryId: territory?.territoryId ?? undefined,
           });
           accountId = Number((accR as any)[0]?.insertId ?? 0);
         }
@@ -1508,7 +1599,7 @@ export const leadsRouter = router({
         const contactCreated = contactId == null;
         if (contactCreated) {
           const conR = await tx.insert(contacts).values({
-            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
+            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: keptOwner,
           });
           contactId = Number((conR as any)[0]?.insertId ?? 0);
         }
@@ -1518,7 +1609,7 @@ export const leadsRouter = router({
           const oR = await tx.insert(opportunities).values({
             workspaceId: ws, accountId: accountId!, pipelineId: deal.pipelineId,
             name: input.opportunityName ?? `${convName} – New opportunity`,
-            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: ctx.user.id,
+            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: keptOwner,
             ...stageDatesForNewDeal(deal.meta),
           } as never);
           opportunityId = Number((oR as any)[0]?.insertId ?? 0);
@@ -1591,13 +1682,13 @@ export const leadsRouter = router({
           if (done.contactCreated) {
             await m.fireRecordCreated(ws, "contact", contactId, {
               email: lead.email, title: lead.title, accountId, source: "lead_convert",
-            }, ctx.user.id);
+            }, keptOwner);
           }
           if (opportunityId && deal) {
             await m.fireRecordCreated(ws, "opportunity", opportunityId, {
               name: input.opportunityName ?? `${convName} – New opportunity`,
               stage: deal.key, value: Number(input.opportunityValue ?? 0), winProb: deal.winProb, accountId,
-            }, ctx.user.id);
+            }, keptOwner);
           }
           // The "when a lead converts" rule people actually want.
           await m.fireRecordUpdated(ws, "lead", lead.id, lead, {
@@ -1922,6 +2013,15 @@ export const leadsRouter = router({
 /** What a board shows: one pipeline, optionally one owner. */
 const BOARD_SCOPE = z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional();
 type BoardScope = z.infer<typeof BOARD_SCOPE>;
+/** Deals a won or lost column shows, latest first (X4.1); boardTotals counts them all. */
+export const BOARD_CLOSED_LIMIT = 50;
+const BOARD_SCOPE_WITH_LIMIT = z.object({
+  ownerUserId: z.number().optional(),
+  pipelineId: z.number().optional(),
+  closedLimit: z.number().int().min(1).max(500).optional(),
+}).optional();
+/** Deals opportunities.list returns when the caller names no limit (X4.1). */
+export const OPPORTUNITY_LIST_DEFAULT = 200;
 
 /**
  * The deals on a board, as a WHERE: the pipeline's own (and, for the default
@@ -1960,22 +2060,33 @@ export const opportunitiesRouter = router({
       ownerOnly: z.boolean().optional(),
       accountId: z.number().int().positive().optional(),
       openOnly: z.boolean().optional(),
+      /** Deal name contains (X4.1): the pickers search instead of loading every deal. */
+      search: z.string().trim().max(200).optional(),
+      /** These deals only (X4.1): a page naming the deals it shows, e.g. Quotes. */
+      ids: z.array(z.number().int().positive()).max(500).optional(),
       limit: z.number().int().min(1).max(1000).optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
+      // No ids named is no deals, not every deal.
+      if (input?.ids && input.ids.length === 0) return [];
       const closed = input?.openOnly ? await closedStageKeys(db, ctx.workspace.id) : [];
-      const q = db.select().from(opportunities)
+      const s = input?.search ?`%${input.search.replace(/[\\%_]/g, (m) => `\\${m}`)}%` : null;
+      // Capped (audit 2026-10-20, X4.1): with no limit this read every deal in
+      // the workspace. A caller wanting more asks, up to 1,000.
+      return db.select().from(opportunities)
         .where(and(
           eq(opportunities.workspaceId, ctx.workspace.id),
           input?.stage ? eq(opportunities.stage, input.stage) : undefined,
           input?.ownerOnly ? eq(opportunities.ownerUserId, ctx.user.id) : undefined,
           input?.accountId ? eq(opportunities.accountId, input.accountId) : undefined,
           closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+          s ? like(opportunities.name, s) : undefined,
+          input?.ids ? inArray(opportunities.id, input.ids) : undefined,
         ))
-        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id));
-      return input?.limit ? q.limit(input.limit) : q;
+        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id))
+        .limit(input?.limit ?? OPPORTUNITY_LIST_DEFAULT);
     }),
 
   /**
@@ -1983,13 +2094,29 @@ export const opportunitiesRouter = router({
    * given (its own, plus those with no pipeline on the default board), the
    * same rule the board columns use. Every deal in the workspace was read and
    * the browser threw the other pipelines' away (audit 2026-10-20, L7, R66).
+   *
+   * Every open deal, and in each won or lost column the latest
+   * `closedLimit` (audit 2026-10-20, X4.1): those columns grow forever, and
+   * the board drew every deal ever closed. boardTotals counts each column
+   * in SQL, so the headers stay exact; boardExport gives the whole board.
    */
-  board: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
+  board: workspaceProcedure.input(BOARD_SCOPE_WITH_LIMIT).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
     const where = await boardScopeWhere(db, ctx.workspace.id, input);
     if (!where) return [];
-    const rows = await db.select().from(opportunities).where(where);
+    const closed = await closedStageKeys(db, ctx.workspace.id);
+    const closedLimit = input?.closedLimit ?? BOARD_CLOSED_LIMIT;
+    const open = await db.select().from(opportunities)
+      .where(closed.length ? and(where, notInArray(opportunities.stage, closed)) : where);
+    const closedRows = [];
+    for (const key of closed) {
+      closedRows.push(...(await db.select().from(opportunities)
+        .where(and(where, eq(opportunities.stage, key)))
+        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id))
+        .limit(closedLimit)));
+    }
+    const rows = [...open, ...closedRows];
     // Names only: every account's every column (inline logos included) made
     // this 2 s for a board with a handful of deals (audit 2026-10-20, L7).
     // And only the board's accounts, not the workspace's.
@@ -1999,6 +2126,45 @@ export const opportunitiesRouter = router({
       : [];
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
+  }),
+
+  /**
+   * Each board column's count, value and average win %, counted in SQL over
+   * every deal the board's scope holds (X4.1), so a won or lost column that
+   * shows its latest deals still says how many it has.
+   */
+  boardTotals: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
+    const rows = await db.select({
+      stage: opportunities.stage,
+      count: sql<number>`count(*)`,
+      value: sql<number>`sum(${opportunities.value})`,
+      avgWinProb: sql<number>`avg(${opportunities.winProb})`,
+    }).from(opportunities).where(where).groupBy(opportunities.stage);
+    return rows.map((r) => ({ stage: r.stage, count: Number(r.count), value: Number(r.value ?? 0), avgWinProb: r.avgWinProb == null ? null : Math.round(Number(r.avgWinProb)) }));
+  }),
+
+  /** The whole board for its CSV (X4.1): every deal in scope, the export's columns only. */
+  boardExport: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
+    await checkPermission(ctx, "export_data");
+    const db = await getDb();
+    if (!db) return [];
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
+    const rows = await db.select({
+      id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value,
+      winProb: opportunities.winProb, closeDate: opportunities.closeDate, accountId: opportunities.accountId, createdAt: opportunities.createdAt,
+    }).from(opportunities).where(where).orderBy(desc(opportunities.id)).limit(20_000);
+    const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+    const names = new Map<number, string>();
+    for (let i = 0; i < accountIds.length; i += 1000) {
+      const part = accountIds.slice(i, i + 1000);
+      for (const a of await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, part)))) names.set(a.id, a.name);
+    }
+    return rows.map(({ accountId, ...r }) => ({ ...r, accountName: names.get(accountId) ?? "" }));
   }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {

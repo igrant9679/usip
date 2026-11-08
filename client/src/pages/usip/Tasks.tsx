@@ -23,6 +23,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
 import { recentlyClosed, seesAllTasks, taskDueState, WORKABLE_TASK_STATUSES } from "@shared/taskRules";
+import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 
 type TaskRow = {
   id: number;
@@ -197,6 +198,10 @@ export default function Tasks() {
     tab === "overdue" ? buckets.overdue :
     tab === "done" ? done :
     filtered;
+  // 50 rows at a time (audit 2026-10-20, X4.2): /tasks drew every task at
+  // once, about 9,000 DOM nodes on a busy workspace. A new tab or filter
+  // starts over at 50; the tab counts stay whole.
+  const rowsShown = useShowMore(visible, { tab, assigneeFilter, relTypeFilter });
 
   return (
     <Shell title="Tasks">
@@ -236,11 +241,18 @@ export default function Tasks() {
           <TabsContent value={tab} className="pt-4">
             {allError ? <QueryError message={allError.message} onRetry={() => allRefetch()} /> : allLoading ? <TableSkeleton rows={6} /> : visible.length === 0 ? <EmptyState icon={ListChecks} title="No tasks" description="You're all caught up. Tasks created from a deal, contact, or lead — and your follow-ups — show up here." /> :
               <ul className="divide-y rounded-lg border bg-card">
-                {visible.map((t) => (
+                {rowsShown.shown.map((t) => (
                   <TaskItem key={t.id} t={t} members={memberOpts}
                     onToggle={() => setStatus.mutate({ id: t.id, status: t.status === "done" ? "open" : "done" })}
                     onCancel={() => setStatus.mutate({ id: t.id, status: "cancelled" })} />
                 ))}
+                {rowsShown.remaining > 0 && (
+                  <li>
+                    <button type="button" onClick={rowsShown.showMore} className="w-full px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                      Show {Math.min(rowsShown.remaining, SHOW_MORE_STEP)} more tasks ({rowsShown.remaining.toLocaleString()} not shown)
+                    </button>
+                  </li>
+                )}
               </ul>
             }
           </TabsContent>

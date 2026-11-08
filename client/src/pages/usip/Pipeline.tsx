@@ -470,6 +470,11 @@ export default function Pipeline() {
   // unfiltered entry while a filtered board was on screen (R30).
   const boardInput = useMemo(() => ({ ownerUserId, pipelineId }), [ownerUserId, pipelineId]);
   const { data } = trpc.opportunities.board.useQuery(boardInput, { enabled: pipelines !== undefined });
+  // Each column's count and value, counted by the server over every deal in
+  // scope (audit 2026-10-20, X4.1): a won or lost column shows its latest
+  // deals only, and its header still says how many it has.
+  const { data: totals } = trpc.opportunities.boardTotals.useQuery(boardInput, { enabled: pipelines !== undefined });
+  const totalsByStage = useMemo(() => new Map((totals ?? []).map((t) => [t.stage, t])), [totals]);
   const { data: boardIntel = [] } = trpc.oppIntelligence.getIntelligenceForBoard.useQuery(boardInput, { enabled: pipelines !== undefined });
 
   const intelMap = useMemo(() => {
@@ -607,9 +612,11 @@ export default function Pipeline() {
           ))}
         </div>
         {can("export_data") && (
-        <Button variant="outline" onClick={() => {
-          // What the board shows — this pipeline, this owner filter (R39).
-          const rows = filteredOpps;
+        <Button variant="outline" onClick={async () => {
+          // What the board holds — this pipeline, this owner filter (R39) —
+          // every deal, from the server: a won or lost column shows only its
+          // latest (X4.1).
+          const rows = await utils.opportunities.boardExport.fetch(boardInput).catch((e) => { toast.error(e.message); return []; });
           if (!rows.length) return;
           const cols = ["id", "name", "stage", "value", "winProb", "closeDate", "accountName", "createdAt"];
           // One CSV cell rule (R63): quotes doubled, formulas neutralised.
@@ -630,11 +637,13 @@ export default function Pipeline() {
           <div className="flex gap-3 min-w-max" data-tour-id="pipeline-board">
             {STAGES.map((s) => {
               const items = grouped[s.id] ?? [];
-              const total = items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
+              const t = totalsByStage.get(s.id);
+              const count = t?.count ?? items.length;
+              const total = t?.value ?? items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
               // The deal's own win % — the one the forecast weights by. The AI's
               // estimate was preferred here, so this column and the Forecast
               // tab disagreed about the same deals (R39).
-              const avgProb = items.length > 0
+              const avgProb = t ? t.avgWinProb : items.length > 0
                 ? Math.round(items.reduce((sum, o) => sum + Number(o.winProb ?? 0), 0) / items.length)
                 : null;
               return (
@@ -650,7 +659,7 @@ export default function Pipeline() {
                   <div className="px-3 py-2 border-b flex items-center gap-2">
                     <div className="text-sm font-medium">{s.label}</div>
                     <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>{items.length} · {fmt$(total)}</span>
+                      <span>{count} · {fmt$(total)}</span>
                       {avgProb !== null && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">avg {avgProb}%</Badge>
                       )}
@@ -679,6 +688,9 @@ export default function Pipeline() {
                         stages={STAGES}
                       />
                     ))}
+                    {count > items.length && (
+                      <p className="px-1 pt-1 text-[11px] text-muted-foreground">The latest {items.length} of {count.toLocaleString()} shown. Export CSV has them all.</p>
+                    )}
                   </div>
                 </div>
               );

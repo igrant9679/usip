@@ -90,8 +90,12 @@ describe("what the old parser already did, unchanged", () => {
   });
 
   it("the LeadRocks prospect importer still reads its file through the same parser", () => {
-    const src = readFileSync("server/routers/prospectImports.ts", "utf8");
+    // 2026-11-07 (CRMP, F32): LeadRocks is a preset of the one importer, so its
+    // file goes through imports.ts's own parse before the preset maps it.
+    const src = readFileSync("server/routers/imports.ts", "utf8");
     expect(src).toContain('import { parseCSVText } from "../services/csv";');
+    expect(src).toContain("const parsed = parseCSVText(text);\n  if (!preset)");
+    expect(src).toContain("const p = applyPreset(preset, parsed.headers, parsed.rows);");
     const { headers, rows } = parseCSVText(
       'First Name,Last Name,Linked Url,Company Website,Work Email #1\n"Ada","Lovelace","https://linkedin.com/in/ada","engines.co","ada@engines.co"\n',
     );

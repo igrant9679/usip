@@ -21,7 +21,7 @@
  * is never shown or counted, so a person restored from the audit trail comes
  * back onto their lists.
  */
-import { and, asc, desc, eq, inArray, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
 import { accounts, prospects, recordListMembers, recordLists } from "../../drizzle/schema";
 import { getDb } from "../db";
 
@@ -62,7 +62,7 @@ export const COMPANY_COLUMNS = {
 /** "Add all to…" acts on at most this many of a list's people. */
 export const MAX_LIST_PROSPECT_IDS = 5000;
 
-export type MemberPageInput = { id: number; page?: number; perPage?: number; search?: string; sort?: "added" | "name" };
+export type MemberPageInput = { id: number; page?: number; perPage?: number; search?: string; sort?: "added" | "name"; ownerUserId?: number };
 
 const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 
@@ -85,6 +85,17 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
     conds.push(companies
       ? or(like(accounts.name, s), like(accounts.domain, s), like(accounts.industry, s))!
       : or(like(prospects.firstName, s), like(prospects.lastName, s), like(prospects.title, s), like(prospects.company, s), like(prospects.email, s))!);
+  }
+  /**
+   * The owner filter (audit 2026-10-20, U31): a company's owner on a
+   * Companies list; on a People list, the owner of the company the person is
+   * filed under (People rows carry no owner of their own). Members in another
+   * workspace's company never match.
+   */
+  if (input.ownerUserId) {
+    if (companies) conds.push(eq(accounts.ownerUserId, input.ownerUserId));
+    else conds.push(exists(db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.id, prospects.accountId), eq(accounts.workspaceId, ws), eq(accounts.ownerUserId, input.ownerUserId)))));
   }
   const where = and(...conds);
   const order = input.sort === "name"

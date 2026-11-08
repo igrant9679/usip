@@ -37,7 +37,8 @@ export function RelatedRecordPicker({ value, onChange, idPrefix = "related" }: {
   const accounts = trpc.accounts.list.useQuery({ search: q, limit: 8 }, { enabled: type === "account" && ready });
   const contacts = trpc.contacts.list.useQuery({ search: q }, { enabled: type === "contact" && ready });
   const leads = trpc.leads.list.useQuery({ search: q, limit: 8 }, { enabled: type === "lead" && ready });
-  const deals = trpc.opportunities.list.useQuery(undefined, { enabled: type === "opportunity" && ready });
+  // Searched on the server, 8 at most (audit 2026-10-20, X4.1): this loaded every deal.
+  const deals = trpc.opportunities.list.useQuery({ search: q, limit: 8 }, { enabled: type === "opportunity" && ready });
   const people = trpc.prospects.list.useQuery({ page: 1, perPage: 10, search: q }, { enabled: type === "prospect" && ready });
 
   const options: { id: number; label: string; meta?: string }[] =

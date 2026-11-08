@@ -86,6 +86,24 @@ export function searchOrder(ws: number, sort?: CompanySort): SQL[] {
   return [dir(col), dir(accounts.id)];
 }
 
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/**
+ * Every company the search shows under these filters, by id (at most `cap`),
+ * and how many match: "Select all N matching" on Companies (audit 2026-10-20,
+ * F30) acts on exactly the companies the table counts.
+ */
+export async function matchingCompanyIds(ws: number, f: CompanyFilters, cap = 5000): Promise<{ ids: number[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { ids: [], total: 0 };
+  const where = and(...companyFilterConds(db, ws, f));
+  const [rows, [{ total }]] = await Promise.all([
+    db.select({ id: accounts.id }).from(accounts).where(where).orderBy(asc(accounts.id)).limit(cap),
+    db.select({ total: sql<number>`count(*)` }).from(accounts).where(where),
+  ]);
+  return { ids: rows.map((r) => r.id), total: Number(total) };
+}
+
 export async function searchWorkspaceAccounts(ws: number, opts: {
   filters?: CompanyFilters; sort?: CompanySort; page?: number; perPage?: number;
 }) {
@@ -95,6 +113,12 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
   const page = Math.max(1, opts.page ?? 1);
   const perPage = Math.min(200, Math.max(10, opts.perPage ?? 50));
 
+  const where = and(...companyFilterConds(db, ws, f));
+  return searchPage(db, ws, opts, where, page, perPage);
+}
+
+/** The search's WHERE, shared by the table and by "all matching" (F30). */
+export function companyFilterConds(db: Db, ws: number, f: CompanyFilters): SQL[] {
   const conds = [eq(accounts.workspaceId, ws)];
   if (f.archivedOnly) conds.push(isNotNull(accounts.archivedAt));
   else if (!f.includeArchived) conds.push(isNull(accounts.archivedAt));
@@ -131,8 +155,10 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
       .where(and(eq(scoreResults.workspaceId, ws), eq(scoreResults.objectType, "company"),
         eq(scoreResults.objectId, accounts.id), inArray(scoreResults.rating, set)))));
   }
+  return conds;
+}
 
-  const where = and(...conds);
+async function searchPage(db: Db, ws: number, opts: { sort?: CompanySort }, where: SQL | undefined, page: number, perPage: number) {
   // The page's ids in order, and the total, side by side.
   const [pageIds, [{ total }]] = await Promise.all([
     db.select({ id: accounts.id }).from(accounts).where(where)
