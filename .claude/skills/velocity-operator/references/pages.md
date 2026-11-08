@@ -133,10 +133,10 @@ Saved rule-based audiences that stay current (match all/any, rules over person a
 ## Proposals
 
 ### ★ Proposals — `/proposals`
-Client-facing proposals with sections, milestones, budget, requirements, a portal share link, e-sign, expiry with extension requests, score snapshots. Link to an opportunity.
+Client-facing proposals with sections, milestones, budget, requirements, a portal share link, an e-signature record on accept, Decline and Request changes on the portal, portal view counts, expiry with extension requests, score snapshots. Link to an opportunity. The **Pricing** tab is the quote: line items from the Products catalog, totals, discounts, notes and terms, saved as a new version on every change (earlier versions stay viewable), with the quote PDF and AI pricing advice; saving can set the deal's value after asking. The separate Quotes page was retired into it on 2026-11-07 and its old path now redirects to Proposals.
 
-### Quotes — `/quotes` · Products — `/products`
-Priced quotes attached to deals with line items from the Products catalog; totals, discounts, terms, sent/accepted states.
+### Products — `/products`
+The catalog proposals are priced from.
 
 ---
 

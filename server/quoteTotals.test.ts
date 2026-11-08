@@ -223,10 +223,7 @@ describe("nothing recomputes quote money", () => {
   });
 
   it("quotes.create and the Quotes dialog both use the shared module", () => {
-    // 2026-11-07 (audit F34, batch CRMD): the Quotes dialog is retired; quotes
-    // are priced in a proposal's Pricing tab and written by services/quoteFold
-    // — both read the same shared module, as the page and quotes.create did.
-    for (const rel of ["server/routers/operations.ts", "client/src/components/usip/ProposalPricing.tsx", "server/services/quoteFold.ts"]) {
+    for (const rel of ["server/routers/operations.ts", "client/src/pages/usip/Quotes.tsx"]) {
       const src = stripComments(read(rel));
       expect(src, rel).toMatch(/from\s*"@shared\/quoteTotals"/);
       expect(src, rel).toMatch(/computeQuoteTotals\(/);

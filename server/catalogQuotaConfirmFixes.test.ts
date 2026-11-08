@@ -115,9 +115,7 @@ describe("R75: a product in use is archived, not deleted", () => {
     expect(src).toContain("setActive.mutate({ id: p.id, patch: { active: false } })");
     expect(src).toContain("setActive.mutate({ id: p.id, patch: { active: true } })");
     expect(src).not.toMatch(/pricing tiers/i);
-    // 2026-11-07 (audit F34, batch CRMD): quotes are priced in a proposal's
-    // Pricing tab now (the Quotes page is retired); the same rule holds there.
-    expect(read("client/src/components/usip/ProposalPricing.tsx")).toContain("(products.data ?? []).filter((p: any) => p.active || p.id === li.productId)");
+    expect(read("client/src/pages/usip/Quotes.tsx")).toContain("(products.data ?? []).filter((p) => p.active || p.id === li.productId)");
   });
 });
 

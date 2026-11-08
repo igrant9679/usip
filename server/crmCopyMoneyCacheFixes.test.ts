@@ -120,9 +120,7 @@ describe("R79: copy that promised what isn't there", () => {
   it("no automatic enrichment, reminders, e-signature, pricing tiers or lead routing by territory", () => {
     expect(read("client/src/pages/usip/Leads.tsx")).not.toMatch(/automatically enriched/i);
     expect(read("client/src/pages/usip/Renewals.tsx")).not.toMatch(/renewal reminders/i);
-    // 2026-11-07 (audit F34): Quotes.tsx is retired; its pricing lives in
-    // ProposalPricing.tsx, which promises no e-signature either.
-    for (const f of ["client/src/pages/usip/Proposals.tsx", "client/src/components/usip/ProposalPricing.tsx", "client/src/lib/toolRegistry.ts"]) {
+    for (const f of ["client/src/pages/usip/Proposals.tsx", "client/src/pages/usip/Quotes.tsx", "client/src/lib/toolRegistry.ts"]) {
       expect(read(f), f).not.toMatch(/e-?sign/i);
     }
     expect(read("client/src/pages/usip/Products.tsx")).not.toMatch(/pricing tiers/i);

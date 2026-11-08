@@ -122,7 +122,7 @@ Whatever key the deal's pipeline defines. The SEEDED DEFAULT pipeline uses `disc
 
 ### Proposals and quotes
 - Proposal `status`: `draft` → `sent` → `under_review` → `accepted` | `not_accepted` | `revision_requested`; has sections (`sectionKey` + content), milestones (owner `lsi_media` | `client` | `both`), a share token for the client portal, optional link to an opportunity.
-- Quote: `quoteNumber`, `status` (`draft` | `sent` | `accepted` | …), line items (`name`, `quantity`, `unitPrice`, `discountPct`, `lineTotal`), totals, terms; attached to an opportunity; products come from the catalog.
+- Quote: a proposal's pricing version — `proposalId`, `version`, `supersededAt` (set when a newer version replaced it), `quoteNumber`, `status` (`draft` | `sent` | `accepted` | …), line items (`name`, `quantity`, `unitPrice`, `discountPct`, `lineTotal`), totals, notes, terms; on the proposal's linked opportunity; products come from the catalog.
 
 ### Roles (`workspace_members.role`)
 `super_admin` (everything, including workspace create/transfer/archive and demo seeding) > `admin` (settings, autonomy dials, team, sending) > `manager` (team views, approvals) > `rep` (own records and queues). Autonomy setters are admin-only; reps see the dial but cannot move it.

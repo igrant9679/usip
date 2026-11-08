@@ -68,6 +68,9 @@ const Forecast = lazyChunk(() => import("@/pages/usip/Forecast"));
 const FindProspects = lazyChunk(() => import("@/pages/usip/FindProspects"));
 const Pipeline = lazyChunk(() => import("@/pages/usip/Pipeline"));
 const Products = lazyChunk(() => import("@/pages/usip/Products"));
+// Kept, unrouted (audit F34): /quotes redirects to /proposals, where a quote
+// is the proposal's pricing. Put its <Route> line back to undo the redirect.
+const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
 const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
 const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
 const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));

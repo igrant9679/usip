@@ -30,8 +30,9 @@
  *                                   pricing advice; existing quotes were
  *                                   attached to their deal's proposal (or a
  *                                   new draft one) by services/quoteFold, so
- *                                   every one stays readable there. Remove
- *                                   this line to bring the page back.
+ *                                   every one stays readable there. The page
+ *                                   file is kept, unrouted: put its <Route>
+ *                                   line back in App.tsx to undo.
  *
  * About `/campaigns`, so nobody re-runs the investigation (2026-10-27):
  *

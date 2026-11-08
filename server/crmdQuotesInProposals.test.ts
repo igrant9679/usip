@@ -197,14 +197,27 @@ describe("F34: the client sees the pricing, and accepting records it", () => {
 });
 
 describe("F34: /quotes redirects to proposals, fold first", () => {
-  it("the route redirects through RetiredRedirect, and the page is gone", () => {
+  it("the route redirects through RetiredRedirect; the page is kept, unrouted, to undo in one line", () => {
     expect(RETIRED_ROUTES["/quotes"]).toBe("/proposals");
     const app = read("client/src/App.tsx");
     expect(app).toContain('<Route path="/quotes"><AuthGate><RetiredRedirect from="/quotes" /></AuthGate></Route>');
-    expect(app).not.toContain('@/pages/usip/Quotes"');
-    expect(existsSync(join(root, "client/src/pages/usip/Quotes.tsx"))).toBe(false);
+    expect(app).not.toContain("<Quotes />");
+    expect(existsSync(join(root, "client/src/pages/usip/Quotes.tsx"))).toBe(true);
     expect(read("client/src/lib/toolRegistry.ts")).not.toContain('"/quotes"');
+    expect(read("client/src/pages/usip/Proposals.tsx")).not.toContain('"/quotes"');
     expect(read("server/_core/rawMigrations.ts")).toContain("ALTER TABLE `quotes` ADD COLUMN `supersededAt` timestamp NULL");
     expect(read("server/_core/index.ts")).toContain("m.foldQuotesIntoProposals(db)");
+  });
+
+  it("what the Quotes page guaranteed holds in the Pricing tab that replaced it", () => {
+    const src = read("client/src/components/usip/ProposalPricing.tsx");
+    // Archived products are off new pricing (R75).
+    expect(src).toContain("(products.data ?? []).filter((p: any) => p.active || p.id === li.productId)");
+    // One arithmetic rule for line money, the server's (shared/quoteTotals).
+    expect(src).toMatch(/from "@shared\/quoteTotals"/);
+    expect(src).toContain("computeQuoteTotals(lines)");
+    expect(read("server/services/quoteFold.ts")).toContain("const totals = computeQuoteTotals(input.lineItems);");
+    // No e-signature promised, and no one-click answer recorded for the client (R79, R71).
+    expect(src).not.toMatch(/e-?sign|setStatus|quotes\.send/i);
   });
 });
