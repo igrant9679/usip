@@ -92,6 +92,49 @@ export function enrichFullyText(people: number, b?: SourceBudgets | null): strin
   return parts.filter(Boolean).join(" ");
 }
 
+/**
+ * The most one Revenue Engine prospect's Enrich can spend (runEnrichAgent in
+ * server/routers/are/prospects.ts): two AI calls, the ICP score and the
+ * dossier; and when no email is on file, one QuickEnrich lookup by LinkedIn
+ * (billed only for an email it delivers), one Reoon credit to check that
+ * hit, and the address finder's up to three patterns, each with an instant
+ * and a daily credit (the counts ENRICH_FULLY_MAX uses for the same finder).
+ * Pinned by a test that counts the AI calls in the agent.
+ */
+export const ARE_ENRICH_MAX = { aiCalls: 2, quickenrich: 1, reoonInstant: 3, reoonDaily: 4 } as const;
+
+export function areEnrichText(people: number, b?: SourceBudgets | null): string {
+  const m = ARE_ENRICH_MAX;
+  const parts = [
+    `For each person this makes ${m.aiCalls} AI calls (the ICP score and the dossier), billed to this workspace's AI provider, and when no email is on file it can use up to ${m.quickenrich} QuickEnrich credit (only when an email is found) and ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to find and check an address.`,
+    people > 1 ? `For ${n(people)} people that is ${n(people * m.aiCalls)} AI calls and at most ${n(people * m.quickenrich)} QuickEnrich and ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon.` : "",
+  ];
+  if (b) {
+    const left: string[] = [];
+    if (b.quickenrich.configured) left.push(allowanceLine("QuickEnrich pulls", true, b.quickenrich.allowance));
+    if (b.reoon.allowance) left.push(`Reoon shared key: ${n(leftOf(b.reoon.allowance)!)} of ${n(b.reoon.allowance.cap)} left today`);
+    left.push(b.ai.cap ? `AI tokens this month: ${n(b.ai.used)} of ${n(b.ai.cap)}` : `AI tokens this month: ${n(b.ai.used)} (no monthly budget set)`);
+    parts.push(`${left.join(" · ")}.`);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+/**
+ * The most writing one Revenue Engine sequence can spend (runSequenceAgent):
+ * the campaign's template when none is cached, the person's steps, and the
+ * quality check — three AI calls at most, and no vendor credits. Pinned by a
+ * test that counts the AI calls in the agent.
+ */
+export const ARE_GENERATE_MAX_AI_CALLS = 3;
+
+export function areGenerateText(ai?: SourceBudgets["ai"] | null): string {
+  const head = `This makes up to ${ARE_GENERATE_MAX_AI_CALLS} AI calls (the campaign's template if none is saved yet, this person's steps, and a quality check), billed to this workspace's AI provider. Nothing is sent: an approved prospect's sequence goes out on the campaign's cadence, within its caps and send window.`;
+  if (!ai) return head;
+  return ai.cap
+    ? `${head} This month: ${n(ai.used)} of ${n(ai.cap)} tokens used.`
+    : `${head} This month: ${n(ai.used)} tokens used (no monthly budget set).`;
+}
+
 /** "This makes 1 AI call. This month: 120,000 of 2,000,000 tokens used." */
 export function aiCallText(calls: number, ai?: SourceBudgets["ai"] | null, what?: string): string {
   const head = `This makes ${calls === 1 ? "1 AI call" : `${n(calls)} AI calls`}${what ? ` ${what}` : ""}, billed to this workspace's AI provider.`;

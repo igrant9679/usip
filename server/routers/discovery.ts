@@ -14,7 +14,7 @@
  *   - persist(runId)      — score + write to prospects with verification
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, like } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, discoveryLogs, discoveryRuns, rawFinds } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -23,6 +23,7 @@ import { workspaceProcedure } from "../_core/workspace";
 import { associateDiscoveredPeople, failOrphanedDiscoveryRuns, queueDiscovery } from "../services/discovery";
 import { alreadyInWorkspace, workspaceIdentityIndex } from "../services/prospectSources/dedupe";
 import { processRun } from "../services/discovery/consolidate";
+import { likeContains, logCursor, olderThan } from "../services/logPaging";
 
 const PersonInput = z.object({
   jobTitle: z.string().optional(),
@@ -126,7 +127,13 @@ export const discoveryRouter = router({
    *  ARE Campaign Detail page (merged with are_engine_logs client-side
    *  into one chronological timeline). */
   getLogsForCampaign: workspaceProcedure
-    .input(z.object({ campaignId: z.number(), limit: z.number().min(1).max(1000).default(300) }))
+    .input(z.object({
+      campaignId: z.number(),
+      limit: z.number().min(1).max(1000).default(300),
+      // The campaign Logs tab's search and "load older" (audit 2026-10-20, U22).
+      search: z.string().trim().max(200).optional(),
+      before: logCursor.optional(),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -147,8 +154,10 @@ export const discoveryRouter = router({
         .where(and(
           eq(discoveryRuns.workspaceId, ctx.workspace.id),
           eq(discoveryRuns.campaignId, input.campaignId),
+          input.search ? like(discoveryLogs.message, likeContains(input.search)) : undefined,
+          input.before ? olderThan(discoveryLogs.createdAt, discoveryLogs.id, input.before) : undefined,
         ))
-        .orderBy(desc(discoveryLogs.createdAt))
+        .orderBy(desc(discoveryLogs.createdAt), desc(discoveryLogs.id))
         .limit(input.limit);
       return rows;
     }),

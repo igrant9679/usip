@@ -59,6 +59,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { RejectProspectDialog, type RejectTarget } from "@/components/usip/are/RejectProspectDialog";
+import { DossierActionBar, type DossierProspect } from "@/components/usip/are/DossierActionBar";
 import { ENRICHMENT_STATES, PROSPECT_VIEW_KEYS, PROSPECT_VIEW_LABEL, type EnrichmentState, type ProspectView } from "@shared/areProspectViews";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -425,6 +426,7 @@ function useCampaignSync(campaignId: number) {
       utils.are.metrics.stepFunnel.invalidate({ campaignId });
       // Logs tab
       utils.are.engine.getLogs.invalidate({ campaignId });
+      utils.are.engine.lastTick.invalidate({ campaignId });
       // Campaign-level (header counters)
       utils.are.campaigns.get.invalidate({ id: campaignId });
       // Rejection stats (used by Rejections tab)
@@ -1104,7 +1106,10 @@ function StatusBadgeMini({ status }: { status: string }) {
   return <Badge className={`text-[10px] ${s.cls}`}>{s.label}</Badge>;
 }
 
-function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
+/** A prospect to show on the Sequences tab, from the dossier's "Open in Sequences" (U23). */
+type SequenceFocus = { prospectId: number; search: string; nonce: number };
+
+function SequencesTab({ campaignId, campaign, focus, onOpenSettings }: { campaignId: number; campaign: any; focus?: SequenceFocus | null; onOpenSettings?: () => void }) {
   const [filter, setFilter] = useState<FilterKey>("enrolled");
   const [search, setSearch] = useState("");
   const searchQ = useDebouncedValue(search.trim());
@@ -1175,6 +1180,14 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   });
 
   const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
+  // "Open in Sequences" from the dossier (U23): every status, searched to the
+  // person, with their sequence open once their row arrives.
+  useEffect(() => {
+    if (!focus) return;
+    setFilter("all");
+    setSearch(focus.search);
+    setDrawerProspectId(focus.prospectId);
+  }, [focus?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
   const [generatingStartedAt, setGeneratingStartedAt] = useState<number | null>(null);
@@ -1739,35 +1752,93 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   );
 }
 
-function LogsTab({ campaignId }: { campaignId: number }) {
+/** Lines per page of each feed on the Logs tab; "Load older" reads the next page (U22). */
+const LOG_PAGE = 300;
+/** An active campaign the engine has not worked for this long gets an amber badge (U22). */
+const TICK_STALE_MS = 30 * 60_000;
+
+function LogsTab({ campaignId, campaignStatus }: { campaignId: number; campaignStatus?: string }) {
   // Level and phase filters (audit A24): the server filters the engine feed,
   // so a rare error is found among weeks of routine lines.
   const [levelFilter, setLevelFilter] = useState<"all" | "warn" | "error">("all");
   const [phaseFilter, setPhaseFilter] = useState<string>("all");
+  // Search, server-side on both feeds (audit 2026-10-20, U22).
+  const [logSearch, setLogSearch] = useState("");
+  const logSearchQ = useDebouncedValue(logSearch.trim());
+  const engineFilter = {
+    campaignId, limit: LOG_PAGE,
+    ...(levelFilter === "error" ? { level: "error" as const } : {}),
+    ...(phaseFilter !== "all" ? { phase: phaseFilter } : {}),
+    ...(logSearchQ ? { search: logSearchQ } : {}),
+  };
+  const discoveryFilter = { campaignId, limit: LOG_PAGE, ...(logSearchQ ? { search: logSearchQ } : {}) };
   const { data: engineLogs = [], refetch: refetchEngine, isLoading: loadingEngine } =
-    trpc.are.engine.getLogs.useQuery({
-      campaignId, limit: 300,
-      ...(levelFilter === "error" ? { level: "error" } : {}),
-      ...(phaseFilter !== "all" ? { phase: phaseFilter } : {}),
-    });
+    trpc.are.engine.getLogs.useQuery(engineFilter);
   const { data: discoveryLogsForCampaign = [], refetch: refetchDiscovery, isLoading: loadingDiscovery } =
-    trpc.discovery.getLogsForCampaign.useQuery({ campaignId, limit: 300 });
+    trpc.discovery.getLogsForCampaign.useQuery(discoveryFilter);
+  // When the engine last worked this campaign: the badge beside the count (U22).
+  const lastTick = trpc.are.engine.lastTick.useQuery({ campaignId }, { refetchInterval: 60_000, refetchIntervalInBackground: false });
   const { current } = useWorkspace();
-  const runOnce = trpc.are.engine.runOnce.useMutation();
+  const sync = useCampaignSync(campaignId);
+  const utils = trpc.useUtils();
+  const runOnce = trpc.are.engine.runOnce.useMutation({ onError: (e) => toast.error(e.message) });
+
+  /**
+   * "Load older" (U22): the feed stopped at 300 lines, though 30 days are
+   * kept. Each feed pages on its own, from the oldest line it has shown,
+   * and a filter change starts again from the newest page.
+   */
+  type Older = { engine: any[]; discovery: any[]; engineMore: boolean; discoveryMore: boolean };
+  const [older, setOlder] = useState<Older>({ engine: [], discovery: [], engineMore: true, discoveryMore: true });
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  useClearOnChange({ levelFilter, phaseFilter, logSearchQ }, () => setOlder({ engine: [], discovery: [], engineMore: true, discoveryMore: true }));
+  const allEngine = [...engineLogs, ...older.engine];
+  const allDiscovery = [...discoveryLogsForCampaign, ...older.discovery];
+  const cursorOf = (rows: any[]) => {
+    const last = rows[rows.length - 1];
+    return last ? { createdAt: new Date(last.createdAt), id: Number(last.id) } : null;
+  };
+  const engineMore = older.engine.length > 0 ? older.engineMore : engineLogs.length >= LOG_PAGE;
+  const discoveryMore = older.discovery.length > 0 ? older.discoveryMore : discoveryLogsForCampaign.length >= LOG_PAGE;
+  const loadOlder = async () => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const eCur = engineMore ? cursorOf(allEngine) : null;
+      const dCur = discoveryMore ? cursorOf(allDiscovery) : null;
+      const [e, d] = await Promise.all([
+        eCur ? utils.are.engine.getLogs.fetch({ ...engineFilter, before: eCur }) : Promise.resolve(null),
+        dCur ? utils.discovery.getLogsForCampaign.fetch({ ...discoveryFilter, before: dCur }) : Promise.resolve(null),
+      ]);
+      setOlder((o) => ({
+        engine: e ? [...o.engine, ...e] : o.engine,
+        discovery: d ? [...o.discovery, ...d] : o.discovery,
+        engineMore: e ? e.length >= LOG_PAGE : (o.engine.length > 0 ? o.engineMore : false),
+        discoveryMore: d ? d.length >= LOG_PAGE : (o.discovery.length > 0 ? o.discoveryMore : false),
+      }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't load older lines");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   // Merge the two feeds into one chronological timeline. Source tag is
   // kept on each row so the row component can colour-prefix the phase
   // (engine.* vs discovery.*) without the user needing two scroll boxes.
   type UnifiedLog = { id: string | number; source: "engine" | "discovery"; phase: string; level: string; message: string; details: unknown; createdAt: Date | string; repeatCount?: number; lastSeenAt?: Date | string | null };
   const merged: UnifiedLog[] = [
-    ...engineLogs.map((l: any) => ({ id: `e-${l.id}`, source: "engine" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt, repeatCount: l.repeatCount, lastSeenAt: l.lastSeenAt })),
-    ...discoveryLogsForCampaign.map((l: any) => ({ id: `d-${l.id}`, source: "discovery" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt })),
+    ...allEngine.map((l: any) => ({ id: `e-${l.id}`, source: "engine" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt, repeatCount: l.repeatCount, lastSeenAt: l.lastSeenAt })),
+    ...allDiscovery.map((l: any) => ({ id: `d-${l.id}`, source: "discovery" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt })),
   ];
   const unified = merged
     .filter((l) => levelFilter === "all" || l.level === "error" || (levelFilter === "warn" && l.level === "warn"))
     .filter((l) => phaseFilter === "all" || l.phase === phaseFilter)
     .sort((a, b) => new Date(b.lastSeenAt ?? b.createdAt).getTime() - new Date(a.lastSeenAt ?? a.createdAt).getTime());
-  const phases = Array.from(new Set([...engineLogs, ...discoveryLogsForCampaign].map((l: any) => String(l.phase)))).sort();
+  const phases = Array.from(new Set([...allEngine, ...allDiscovery].map((l: any) => String(l.phase)))).sort();
+
+  const tickAt = lastTick.data?.at ? new Date(lastTick.data.at) : null;
+  const tickStale = campaignStatus === "active" && (!tickAt || Date.now() - tickAt.getTime() > TICK_STALE_MS);
 
   const isLoading = loadingEngine || loadingDiscovery;
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading logs…</div>;
@@ -1775,10 +1846,23 @@ function LogsTab({ campaignId }: { campaignId: number }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="text-xs text-muted-foreground">
-          {unified.length} {unified.length === 1 ? "entry" : "entries"} · engine + discovery merged, newest first · kept 30 days
+        <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
+          <span>{unified.length} {unified.length === 1 ? "entry" : "entries"} · engine + discovery merged, newest first · kept 30 days</span>
+          {/* The last tick (U22): is the engine still working this campaign? */}
+          {lastTick.isLoading ? null : (
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[10px] ${tickStale ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-border"}`}
+              title={tickAt ? `${tickAt.toLocaleString()}${lastTick.data?.phase ? ` · ${lastTick.data.phase}` : ""}${lastTick.data?.message ? ` — ${lastTick.data.message}` : ""}` : undefined}
+            >
+              {tickAt
+                ? `Last engine tick ${relativeWhen(tickAt)}${tickStale ? " — nothing since; the engine works active campaigns every few minutes" : ""}`
+                : campaignStatus === "active" ? "No engine tick recorded for this campaign yet" : "No engine tick recorded — the engine works active campaigns only"}
+            </span>
+          )}
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Input aria-label="Search the logs" value={logSearch} onChange={(e) => setLogSearch(e.target.value)}
+            placeholder="Search messages…" className="h-8 w-44 text-xs" />
           <select
             aria-label="Level"
             className="h-8 rounded-md border bg-background px-2 text-xs"
@@ -1798,7 +1882,7 @@ function LogsTab({ campaignId }: { campaignId: number }) {
             <option value="all">All phases</option>
             {phases.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
-          <Button size="sm" variant="outline" onClick={() => { refetchEngine(); refetchDiscovery(); }}>
+          <Button size="sm" variant="outline" onClick={() => { refetchEngine(); refetchDiscovery(); void lastTick.refetch(); }}>
             <RefreshCw className="size-3 mr-1" /> Refresh
           </Button>
           {rankOf(current?.role) >= rankOf("manager") && (
@@ -1809,9 +1893,11 @@ function LogsTab({ campaignId }: { campaignId: number }) {
                   const r = await runOnce.mutateAsync();
                   if (r.skipped) toast.info("A run is already going. Try again in a minute.");
                   else toast.success(`Ran ${r.campaignsProcessed} campaign${r.campaignsProcessed === 1 ? "" : "s"} in this workspace`);
+                  // A tick can change every tab, not only this feed (A74).
+                  sync.invalidateAll();
                   await refetchEngine();
-                } catch (e: any) {
-                  toast.error(e?.message ?? "Failed");
+                } catch {
+                  // runOnce's onError already said why.
                 }
               }}
               disabled={runOnce.isPending}
@@ -1824,12 +1910,21 @@ function LogsTab({ campaignId }: { campaignId: number }) {
       {unified.length === 0 ? (
         <EmptyState
           icon={ScrollText}
-          title="No activity logged yet"
-          description="Engine ticks fire every 3 minutes. Trigger a discovery run from the Scraper tab to populate this feed faster."
+          title={logSearchQ || levelFilter !== "all" || phaseFilter !== "all" ? "No lines match" : "No activity logged yet"}
+          description={logSearchQ || levelFilter !== "all" || phaseFilter !== "all"
+            ? "Try a different search, or clear the level and phase filters."
+            : "Engine ticks fire every 3 minutes. Trigger a discovery run from the Scraper tab to populate this feed faster."}
         />
       ) : (
         <div className="border rounded-xl bg-card divide-y max-h-[640px] overflow-y-auto">
           {unified.map((l) => <LogRow key={l.id} log={l} />)}
+        </div>
+      )}
+      {(engineMore || discoveryMore) && unified.length > 0 && (
+        <div className="flex justify-center">
+          <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" disabled={loadingOlder} onClick={() => void loadOlder()}>
+            {loadingOlder ? <Loader2 className="size-3 animate-spin" /> : <History className="size-3" />} Load older
+          </Button>
         </div>
       )}
     </div>
@@ -2488,6 +2583,14 @@ function ARECampaignDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
+  // The dossier's "Open in Sequences" (U23).
+  const [seqFocus, setSeqFocus] = useState<SequenceFocus | null>(null);
+  const openInSequences = (p: DossierProspect) => {
+    const nm = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
+    setDossierOpen(false);
+    setTab("sequences");
+    setSeqFocus({ prospectId: p.id, search: p.email || nm, nonce: Date.now() });
+  };
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -4105,12 +4208,12 @@ function ARECampaignDetailPage() {
 
           {/* ── Sequences tab ── */}
           <TabsContent value="sequences" className="mt-4">
-            <SequencesTab campaignId={campaignId} campaign={campaign} />
+            <SequencesTab campaignId={campaignId} campaign={campaign} focus={seqFocus} onOpenSettings={() => setTab("settings")} />
           </TabsContent>
 
           {/* ── Logs tab ── */}
           <TabsContent value="logs" className="mt-4">
-            <LogsTab campaignId={campaignId} />
+            <LogsTab campaignId={campaignId} campaignStatus={campaign.status} />
           </TabsContent>
         </Tabs>
       </div>
@@ -4139,6 +4242,14 @@ function ARECampaignDetailPage() {
                 <div className="text-xs text-muted-foreground">
                   {[selectedProspect.title, selectedProspect.companyName].filter(Boolean).join(" · ")}
                 </div>
+                {/* Review without switching tabs (U23): the row's own actions, here. */}
+                <DossierActionBar
+                  prospect={selectedProspect}
+                  campaignId={campaignId}
+                  onReject={setRejectTarget}
+                  onOpenInSequences={openInSequences}
+                  onChanged={invalidateCampaign}
+                />
               </div>
             )}
           </SheetHeader>
