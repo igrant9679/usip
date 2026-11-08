@@ -73,6 +73,7 @@ import { resolveVerifiedEmail } from "../../services/scraper";
 import { suppressionBlockingNewEmail } from "../../services/suppression";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
+import { finderMissKey, isDefinitiveFinderMiss, quickenrichMissKey, recentMisses, recordMiss } from "../../services/are/lookupMisses";
 import { buildBrandContext } from "../../services/brandContext";
 import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 // The A/B metadata row must be keyed by the same step index + variant key the
@@ -183,6 +184,9 @@ Score each dimension 0-20 and provide a total score 0-100.
 // campaign router needs the same merge for every campaign at once.
 import { buildEffectiveIcp, scoringTargetsOf } from "../../services/are/effectiveIcp";
 import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/placeFit";
+
+/** Reads and tries of one step edit before it gives up on a sequence that keeps changing (A75). */
+export const SEQUENCE_EDIT_ATTEMPTS = 3;
 
 /** How the Rejections tab names a rejection with no reason recorded. */
 const NO_REASON = "No reason given";
@@ -501,6 +505,9 @@ Produce:
       : await suppressionBlockingNewEmail(workspaceId, {
           linkedinUrl: prospect.linkedinUrl, companyDomain: prospect.companyDomain, personProspectId: prospect.personProspectId,
         }).catch(() => "unchecked");
+    // Lookups that came back empty for this person lately are not paid for
+    // again (audit A75, services/are/lookupMisses.ts).
+    const skippedLookups: string[] = [];
     if (!prospect.email && !emailBlocked) {
       try {
         // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
@@ -510,10 +517,16 @@ Produce:
         // the address itself. Same finder and the same Reoon gate as the
         // sweep's pass: a QuickEnrich address is never send-safe on their
         // word, and an invalid verdict means it is NOT written.
-        if (!effCompanyDomain && prospect.linkedinUrl) {
+        const qeMissKey = quickenrichMissKey(prospect.linkedinUrl);
+        const qeMissedAt = !effCompanyDomain && qeMissKey ? (await recentMisses(workspaceId, [qeMissKey])).get(qeMissKey) : undefined;
+        if (qeMissedAt) skippedLookups.push(`QuickEnrich (no record on ${qeMissedAt.toISOString().slice(0, 10)})`);
+        if (!effCompanyDomain && prospect.linkedinUrl && !qeMissedAt) {
           const qeKey = await getQuickEnrichKey(workspaceId);
           if (qeKey) {
             const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl, { workspaceId, feature: "are.enrichAgent" });
+            // Only "not in their database, and nothing about the employer
+            // either" is kept: a no-email record's domain is worth asking for.
+            if (qe.reason === "no_match" && !qe.email && !qe.companyDomain && !qe.companyName) await recordMiss(workspaceId, qeMissKey, "quickenrich:no_match");
             if (qe.companyDomain) {
               effCompanyDomain = qe.companyDomain;
               qeFilledDomain = true;
@@ -538,16 +551,24 @@ Produce:
           }
         }
         if (!resolvedEmail && effCompanyDomain) {
-          const found = await resolveVerifiedEmail({
-            firstName: prospect.firstName,
-            lastName: prospect.lastName,
-            companyDomain: effCompanyDomain,
-            companyWebsite: effCompanyDomain, // no separate website column on the queue
-            workspaceId,
-          });
-          if (found.email) {
-            resolvedEmail = found.email;
-            resolvedStatus = found.status;
+          const fMissKey = finderMissKey(prospect.firstName, prospect.lastName, effCompanyDomain);
+          const fMissedAt = fMissKey ? (await recentMisses(workspaceId, [fMissKey])).get(fMissKey) : undefined;
+          if (fMissedAt) {
+            skippedLookups.push(`the email finder (no address on ${fMissedAt.toISOString().slice(0, 10)})`);
+          } else {
+            const found = await resolveVerifiedEmail({
+              firstName: prospect.firstName,
+              lastName: prospect.lastName,
+              companyDomain: effCompanyDomain,
+              companyWebsite: effCompanyDomain, // no separate website column on the queue
+              workspaceId,
+            });
+            if (found.email) {
+              resolvedEmail = found.email;
+              resolvedStatus = found.status;
+            } else if (isDefinitiveFinderMiss(found.reason)) {
+              await recordMiss(workspaceId, fMissKey, `finder:${found.reason}`);
+            }
           }
         }
       } catch (e) {
@@ -571,6 +592,9 @@ Produce:
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
         `Found email for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} → ${resolvedEmail} (${resolvedStatus ?? "unknown"})`.trim());
+    } else if (skippedLookups.length) {
+      await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
+        `Did not pay to look up ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}'s email again: ${skippedLookups.join(" and ")} found nothing within the last 30 days.`.replace(/\s+/g, " "));
     }
 
     // People-as-master: the agent's findings also land on the canonical
@@ -1224,6 +1248,8 @@ export async function runSequenceAgent(
         sequenceQualityScore: null,
         sequenceQualityBreakdown: { fixed: true, note: "Fixed-copy campaign: identical steps for every prospect; no quality pass" },
         sequenceRewriteCount: 0,
+        // Every write of the steps bumps the version a step edit checks (A75).
+        sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1`,
         // A person wrote this copy; the research avoid-rule hold is for AI copy.
         copyHoldReason: null,
         // Results still count who it went to (phase 6); there is no check to tag pains.
@@ -1291,6 +1317,8 @@ export async function runSequenceAgent(
       sequenceQualityScore: quality.score,
       sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback, ...(brief.violations.length ? { avoidViolations: brief.violations } : {}) },
       sequenceRewriteCount: 0,
+      // Every write of the steps bumps the version a step edit checks (A75).
+      sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1`,
       copyHoldReason,
       ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),
     }).where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId)));
@@ -2237,49 +2265,71 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [intel] = await db
-        .select()
-        .from(prospectIntelligence)
-        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
+      /**
+       * Read, change one step, write back only if nobody wrote in between
+       * (audit 2026-10-20, A75 "edit races"). The steps are one JSON array, so
+       * two people editing different steps at once each wrote back the array
+       * they had read, and the second save silently undid the first; a
+       * regenerate landing mid-edit was overwritten the same way. Every write
+       * of the array bumps sequenceVersion; this one writes only on the version
+       * it read, and on a clash reads again and re-applies its one step.
+       */
+      let saved: { updatedStep: Record<string, unknown> & { subject: string; body: string }; resolvedStepIndex: number } | null = null;
+      for (let attempt = 0; attempt < SEQUENCE_EDIT_ATTEMPTS && !saved; attempt++) {
+        const [intel] = await db
+          .select()
+          .from(prospectIntelligence)
+          .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
 
-      const steps = intelArray<Record<string, unknown>>(intel.generatedSequence);
-      if (steps.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
-      }
+        const steps = intelArray<Record<string, unknown>>(intel.generatedSequence);
+        if (steps.length === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Prospect has no generated sequence to edit" });
+        }
 
-      // Resolve which row in the array to edit.
-      let targetIdx = -1;
-      if (typeof input.arrayIndex === "number" && input.arrayIndex >= 0 && input.arrayIndex < steps.length) {
-        targetIdx = input.arrayIndex;
-      } else if (typeof input.stepIndex === "number") {
-        targetIdx = steps.findIndex((s) =>
-          s.stepIndex === input.stepIndex || (s as { step?: number }).step === input.stepIndex,
-        );
-      }
-      if (targetIdx === -1) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Could not locate the step to edit" });
-      }
+        // Resolve which row in the array to edit.
+        let targetIdx = -1;
+        if (typeof input.arrayIndex === "number" && input.arrayIndex >= 0 && input.arrayIndex < steps.length) {
+          targetIdx = input.arrayIndex;
+        } else if (typeof input.stepIndex === "number") {
+          targetIdx = steps.findIndex((s) =>
+            s.stepIndex === input.stepIndex || (s as { step?: number }).step === input.stepIndex,
+          );
+        }
+        if (targetIdx === -1) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Could not locate the step to edit" });
+        }
 
-      // Update the targeted step. Normalize to the LLM shape (stepIndex+body)
-      // so future edits and the SequencesTab display work consistently.
-      const old = steps[targetIdx];
-      const resolvedStepIndex =
-        typeof old.stepIndex === "number"
-          ? (old.stepIndex as number)
-          : typeof (old as { step?: number }).step === "number"
-            ? ((old as { step?: number }).step as number)
-            : targetIdx;
-      const updatedStep = {
-        ...old,
-        stepIndex: resolvedStepIndex,
-        subject: input.subject ?? (old.subject as string | undefined) ?? "",
-        body: input.body,
-      };
-      const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
-      await db.update(prospectIntelligence).set({ generatedSequence: updated })
-        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
+        // Update the targeted step. Normalize to the LLM shape (stepIndex+body)
+        // so future edits and the SequencesTab display work consistently.
+        const old = steps[targetIdx];
+        const resolvedStepIndex =
+          typeof old.stepIndex === "number"
+            ? (old.stepIndex as number)
+            : typeof (old as { step?: number }).step === "number"
+              ? ((old as { step?: number }).step as number)
+              : targetIdx;
+        const updatedStep = {
+          ...old,
+          stepIndex: resolvedStepIndex,
+          subject: input.subject ?? (old.subject as string | undefined) ?? "",
+          body: input.body,
+        };
+        const updated = steps.map((s, i) => (i === targetIdx ? updatedStep : s));
+        const [res] = await db.update(prospectIntelligence)
+          .set({ generatedSequence: updated, sequenceVersion: sql`${prospectIntelligence.sequenceVersion} + 1` })
+          .where(and(
+            eq(prospectIntelligence.prospectQueueId, input.prospectId),
+            eq(prospectIntelligence.workspaceId, ctx.workspace.id),
+            eq(prospectIntelligence.sequenceVersion, Number(intel.sequenceVersion ?? 0)),
+          ));
+        if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1) saved = { updatedStep, resolvedStepIndex };
+      }
+      if (!saved) {
+        throw new TRPCError({ code: "CONFLICT", message: "This sequence kept changing while you saved. Reload it and make your edit again." });
+      }
+      const { updatedStep, resolvedStepIndex } = saved;
 
       // Push the edit into any not-yet-sent execution queue rows so the
       // dispatcher uses the edited content. Only `scheduled` rows are

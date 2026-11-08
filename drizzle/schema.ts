@@ -4246,6 +4246,8 @@ export const prospectIntelligence = mysqlTable(
     sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
     sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
+    /** Bumped on every write of generatedSequence; a step edit writes only on the version it read (migration 0330, audit A75). */
+    sequenceVersion: int("sequenceVersion").default(0).notNull(),
     /** Research avoid-rule hold (migration 0203): set when the generated copy breaks one; enrollment skips the prospect until a person releases or regenerates. */
     copyHoldReason: varchar("copyHoldReason", { length: 500 }),
     /** Research phase 6 (migration 0206): the research this prospect's copy was written from, for results. */
@@ -4832,6 +4834,24 @@ export const domainScrapeCache = mysqlTable(
   }),
 );
 export type DomainScrapeCache = typeof domainScrapeCache.$inferSelect;
+
+/**
+ * A paid email lookup that came back empty, so the same lookup is not paid
+ * for again for LOOKUP_MISS_TTL_DAYS (migration 0330, audit A75). Keys:
+ * "qe:li:<linkedin slug>" and "finder:<first>|<last>|<domain>".
+ * services/are/lookupMisses.ts is the only reader and writer.
+ */
+export const vendorLookupMisses = mysqlTable(
+  "vendor_lookup_misses",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    lookupKey: varchar("lookupKey", { length: 400 }).notNull(),
+    reason: varchar("reason", { length: 64 }).notNull(),
+    missedAt: timestamp("missedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byKey: uniqueIndex("ux_vlm_key").on(t.workspaceId, t.lookupKey) }),
+);
 
 
 /* ──────────────────────────────────────────────────────────────────────────

@@ -5130,6 +5130,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── Batch ARES (audit 2026-10-20 final pass), migrations 0330–0339 ──
+
+  // A75: a step edit writes only on the sequence version it read, and a paid
+  // email lookup that came back empty is remembered. Additive: every existing
+  // dossier starts at version 0, and the miss table starts empty.
+  {
+    name: "0330_sequence_version_and_lookup_misses.sql",
+    statements: [
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `sequenceVersion` int NOT NULL DEFAULT 0",
+      "CREATE TABLE IF NOT EXISTS `vendor_lookup_misses` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `lookupKey` varchar(400) NOT NULL, `reason` varchar(64) NOT NULL, `missedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_vlm_key` (`workspaceId`, `lookupKey`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
