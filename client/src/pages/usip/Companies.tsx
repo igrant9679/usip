@@ -256,7 +256,9 @@ export default function Companies() {
     research: research || undefined,
     researchSectorIds: researchSectors.size ? Array.from(researchSectors).map(Number) : undefined,
   };
-  const { data, isLoading, error, refetch } = trpc.companies.search.useQuery({ filters, sort, page, perPage });
+  // The previous page stays on screen while the next one loads, with the pager
+  // (audit 2026-10-20, U28): it dropped to a skeleton and lost the pager.
+  const { data, isLoading, isPlaceholderData, error, refetch } = trpc.companies.search.useQuery({ filters, sort, page, perPage }, { placeholderData: (prev) => prev });
   // Selection belongs to the rows it was made on (R4).
   useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));
   const rows = (data?.data ?? []) as any[];
@@ -495,7 +497,7 @@ export default function Companies() {
                     : <Button size="sm" className="mt-3 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})}><Sparkles className="size-4" /> Sync companies from prospects</Button>}
                 </div>
               ) : (
-                <table className="w-full text-sm">
+                <table className={cn("w-full text-sm transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="w-10 px-3 py-1.5"><Checkbox aria-label="Select all on this page" checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>

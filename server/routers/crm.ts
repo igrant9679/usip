@@ -1267,6 +1267,19 @@ export const leadsRouter = router({
     }))
     .query(({ ctx, input }) => searchLeads(ctx.workspace.id, input)),
 
+  /** Leads and contacts a new lead would duplicate, for the New lead dialog (F36). */
+  duplicateCheck: workspaceProcedure
+    .input(z.object({
+      email: z.string().max(320).optional(),
+      firstName: z.string().max(120).optional(),
+      lastName: z.string().max(120).optional(),
+      company: z.string().max(200).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const { findLeadDuplicates } = await import("../services/leadDuplicates");
+      return findLeadDuplicates(ctx.workspace.id, input);
+    }),
+
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -1294,11 +1307,24 @@ export const leadsRouter = router({
         company: z.string().optional(),
         title: z.string().optional(),
         source: z.string().optional(),
+        /** Create even though a lead or contact already has this address (F36). */
+        allowDuplicate: z.boolean().default(false),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: raw }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { allowDuplicate, ...input } = raw;
+      // One address, one lead, unless the person creating it says otherwise
+      // (audit 2026-10-20, F36): a second lead for a known address was made
+      // and nobody was told.
+      if (!allowDuplicate) {
+        const { findLeadDuplicates, describeLeadDuplicates } = await import("../services/leadDuplicates");
+        const dupes = await findLeadDuplicates(ctx.workspace.id, input);
+        if (dupes.length > 0) {
+          throw new TRPCError({ code: "CONFLICT", message: `Already here: ${describeLeadDuplicates(dupes)}. Open it, or create the lead anyway.` });
+        }
+      }
       // Apply lead-routing rules first; fall back to creator as owner. Rules on
       // Score see the score the lead is created with, not 0 (audit P13).
       const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
@@ -1421,11 +1447,15 @@ export const leadsRouter = router({
       ? await db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email, accountId: contacts.accountId })
         .from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, ctx.workspace.id))).limit(1)
       : [];
+    // Who the new records go to unless the converter picks someone (audit
+    // 2026-10-20, F31): the lead's owner, while they still work here.
+    const leadOwnerId = await activeOwnerOrNull(ctx.workspace.id, lead.ownerUserId);
     return {
       alreadyConverted: lead.status === "converted",
       accountMatches,
       contactMatch: contactMatch ?? null,
       newAccountName: lead.company ?? `${lead.firstName} ${lead.lastName}`,
+      leadOwnerUserId: leadOwnerId,
     };
   }),
 
@@ -1453,6 +1483,8 @@ export const leadsRouter = router({
       createOpportunity: z.boolean().default(false),
       opportunityValue: z.number().min(0).optional(),
       opportunityName: z.string().trim().min(1).max(200).optional(),
+      /** Who owns what this creates; omitted keeps the lead's owner (F31). */
+      ownerUserId: z.number().int().positive().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1463,6 +1495,12 @@ export const leadsRouter = router({
       if (lead.status === "converted") throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
       await assertRowInWorkspace(db, "account", input.accountId, ws);
       await assertRowInWorkspace(db, "contact", input.contactId, ws);
+      await assertOwnerInWorkspace(ws, input.ownerUserId);
+      // The lead keeps its owner through the conversion (audit 2026-10-20,
+      // F31): the new company, contact and deal took the converting user. A
+      // pick in the dialog wins; a lead owner who has left falls back to the
+      // converter, as the territory owner does below.
+      const keptOwner = input.ownerUserId ?? (await activeOwnerOrNull(ws, lead.ownerUserId)) ?? ctx.user.id;
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const domain = businessDomainFromEmail(lead.email) || null;
@@ -1497,7 +1535,7 @@ export const leadsRouter = router({
         if (accountCreated) {
           const accR = await tx.insert(accounts).values({
             workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain),
-            ownerUserId: territoryOwner ?? ctx.user.id, territoryId: territory?.territoryId ?? undefined,
+            ownerUserId: input.ownerUserId ?? territoryOwner ?? keptOwner, territoryId: territory?.territoryId ?? undefined,
           });
           accountId = Number((accR as any)[0]?.insertId ?? 0);
         }
@@ -1507,7 +1545,7 @@ export const leadsRouter = router({
         const contactCreated = contactId == null;
         if (contactCreated) {
           const conR = await tx.insert(contacts).values({
-            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
+            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: keptOwner,
           });
           contactId = Number((conR as any)[0]?.insertId ?? 0);
         }
@@ -1517,7 +1555,7 @@ export const leadsRouter = router({
           const oR = await tx.insert(opportunities).values({
             workspaceId: ws, accountId: accountId!, pipelineId: deal.pipelineId,
             name: input.opportunityName ?? `${convName} – New opportunity`,
-            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: ctx.user.id,
+            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: keptOwner,
             ...stageDatesForNewDeal(deal.meta),
           } as never);
           opportunityId = Number((oR as any)[0]?.insertId ?? 0);
@@ -1590,13 +1628,13 @@ export const leadsRouter = router({
           if (done.contactCreated) {
             await m.fireRecordCreated(ws, "contact", contactId, {
               email: lead.email, title: lead.title, accountId, source: "lead_convert",
-            }, ctx.user.id);
+            }, keptOwner);
           }
           if (opportunityId && deal) {
             await m.fireRecordCreated(ws, "opportunity", opportunityId, {
               name: input.opportunityName ?? `${convName} – New opportunity`,
               stage: deal.key, value: Number(input.opportunityValue ?? 0), winProb: deal.winProb, accountId,
-            }, ctx.user.id);
+            }, keptOwner);
           }
           // The "when a lead converts" rule people actually want.
           await m.fireRecordUpdated(ws, "lead", lead.id, lead, {

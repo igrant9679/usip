@@ -192,6 +192,23 @@ export const prospectsRouter = router({
       return out;
     }),
 
+  /**
+   * Of these people, who works at a company flagged "do not contact now"
+   * (audit 2026-10-20, F36). The Add to… review asks before enrolling them.
+   * A mutation only so up to 5,000 ids travel in a POST body rather than a
+   * query string; it reads and writes nothing (AUTO_AUDIT_SKIP).
+   */
+  doNotContactCompanies: workspaceProcedure
+    .input(z.object({
+      prospectIds: z.array(z.number().int().positive()).max(5000).optional(),
+      contactIds: z.array(z.number().int().positive()).max(5000).optional(),
+      leadIds: z.array(z.number().int().positive()).max(5000).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { doNotContactCompaniesFor } = await import("../services/doNotContactCompanies");
+      return doNotContactCompaniesFor(ctx.workspace.id, input);
+    }),
+
   /** Fetch a single prospect (powers the /prospects/:id detail page). */
   get: workspaceProcedure
     .input(z.object({ id: z.number().int() }))
@@ -823,6 +840,8 @@ export const prospectsRouter = router({
         verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
         /** Filter by which discovery run produced/last-touched the row. */
         discoveryRunId: z.number().int().optional(),
+        /** One company's people: /v2/people?companyId= (audit 2026-10-20, F36). */
+        companyId: z.number().int().positive().optional(),
         /** Sequence membership: "yes" = enrolled in any sequence, "no" = not. */
         enrolled: z.enum(["yes", "no"]).optional(),
         /** Server-side text filters (case-insensitive contains). */
@@ -878,6 +897,7 @@ export const prospectsRouter = router({
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
       else conditions.push(or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected"))!);
       if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
+      if (input.companyId) conditions.push(eq(prospects.accountId, input.companyId));
       // Sequence membership — join via enrollments.prospectId (migration 0085).
       if (input.enrolled === "yes") {
         conditions.push(
@@ -1395,6 +1415,9 @@ export const prospectsRouter = router({
             title: prospect.title ?? null, source: "Prospecting", status: "new",
           }, ctx.user.id))
           .catch(() => { /* workflow firing is best-effort */ });
+        // Scored when made, off the request (audit 2026-10-20, F33): the lead
+        // sat at the default score until someone pressed Recompute.
+        void import("./leadScoring").then((m) => m.scoreNewLeadInBackground(ctx.workspace.id, newLeadId)).catch(() => {});
       }
 
       // Whether a lead was made, not whether the click worked (R56): an

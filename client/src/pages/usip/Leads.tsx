@@ -377,19 +377,53 @@ export default function Leads() {
 
 function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const utils = trpc.useUtils();
+  // A lead or contact that already has this address (or this name at this
+  // company) is shown before anything is saved (audit 2026-10-20, F36); the
+  // server refuses the duplicate too unless "Create anyway" is pressed.
+  const [dupes, setDupes] = useState<Array<{ kind: string; id: number; name: string; email: string | null; company: string | null; matchedBy: string }> | null>(null);
+  const [pending, setPending] = useState<null | { firstName: string; lastName: string; email?: string; company?: string; title?: string; source: string }>(null);
+  const [checking, setChecking] = useState(false);
   const create = trpc.leads.create.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); onOpenChange(false); toast.success("Lead created"); },
+    onSuccess: () => { utils.leads.invalidate(); onOpenChange(false); setDupes(null); setPending(null); toast.success("Lead created"); },
     onError: (e) => toast.error("Failed to create lead", { description: e.message }),
   });
+  const submitLead = async (v: NonNullable<typeof pending>) => {
+    setChecking(true);
+    try {
+      const found = await utils.leads.duplicateCheck.fetch({ email: v.email, firstName: v.firstName, lastName: v.lastName, company: v.company });
+      if (found.length > 0) { setPending(v); setDupes(found); return; }
+    } catch {
+      /* the server checks again on create */
+    } finally {
+      setChecking(false);
+    }
+    create.mutate(v);
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { setDupes(null); setPending(null); } onOpenChange(o); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>New lead</DialogTitle></DialogHeader>
+        {dupes && pending && (
+          <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950/30">
+            <p className="font-medium text-amber-900 dark:text-amber-200">This person may already be here</p>
+            <ul className="mt-1 space-y-0.5 text-xs text-amber-900/90 dark:text-amber-200/90">
+              {dupes.map((d) => (
+                <li key={`${d.kind}-${d.id}`}>
+                  {d.kind === "lead" ? "Lead" : "Contact"} <strong>{d.name || d.email}</strong>{d.company ? ` at ${d.company}` : ""}, same {d.matchedBy}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex justify-end gap-2">
+              <Button type="button" size="sm" variant="ghost" onClick={() => { setDupes(null); setPending(null); }}>Back</Button>
+              <Button type="button" size="sm" variant="outline" disabled={create.isPending} onClick={() => create.mutate({ ...pending, allowDuplicate: true })}>Create anyway</Button>
+            </div>
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
-            create.mutate({
+            void submitLead({
               firstName: String(f.get("firstName")),
               lastName: String(f.get("lastName")),
               email: String(f.get("email") ?? "") || undefined,
@@ -412,7 +446,7 @@ function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           <Field name="source" label="Source" placeholder="manual / webform / event…" />
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={create.isPending}>Create</Button>
+            <Button type="submit" disabled={create.isPending || checking}>Create</Button>
           </div>
         </form>
       </DialogContent>

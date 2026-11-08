@@ -159,6 +159,8 @@ export default function CompanyProfile() {
           <section className="rounded-lg border border-border">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">People at this company ({contacts?.length ?? 0})</div>
+              {/* People filtered to this company, with every People filter and bulk action (audit 2026-10-20, F36). */}
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setLocation(`/v2/people?companyId=${id}`)}>Open in People</Button>
             </div>
             {contacts && contacts.length > 0 ? (
               <div className="overflow-x-auto"><table className="w-full text-sm">
