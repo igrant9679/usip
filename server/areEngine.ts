@@ -123,7 +123,7 @@ import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
 import { campaignNeverTarget } from "./services/research/neverTarget";
 import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/research/downstreamAccounts";
-import { perSectorSliceGroups, pickFallback, researchTargeting, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
+import { perSectorSliceGroups, pickFallback, researchTargeting, sliceGroupKey, vendorGroupFor, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
@@ -2523,6 +2523,10 @@ type DiscoveryState = {
   src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
   /** When each source last returned people and they were saved, by source id (audit F12: "true last success"). */
   ok?: Record<string, number>;
+  /** The per-sector group the vendor searches took last run (F37 remainder), by sliceGroupKey. */
+  vg?: string | null;
+  /** Each group's own vendor page cursors, by sliceGroupKey: a cursor belongs to the search that made it. */
+  vgc?: Record<string, { qe?: QuickenrichPageState | null; ap?: ApolloPageState | null; ws?: string | null }>;
 };
 
 /**
@@ -2615,8 +2619,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // covers the full ICP grid without increasing per-tick API spend.
   // F37 (audit 2026-10-20): when blank fields fall back to the researched
   // sectors, each sector's titles are searched with its own industries and
-  // places, not with every other sector's. Only the rotating queries change;
-  // the vendor searches below still take the combined lists.
+  // places, not with every other sector's. The vendor searches below take
+  // one sector a run, in turn (vendorGroupFor, batch ARES).
   const sectorGroups = perSectorSliceGroups({
     mode: fallback,
     own: {
@@ -2693,6 +2697,26 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   const slice = ordered[0];
   const query = slice.q;
   const sourceState: Record<string, { empty: number; nextAt: number | null; held?: boolean }> = { ...(persistedState.src ?? {}) };
+
+  /**
+   * F37 remainder (audit 2026-10-20): the paid vendor searches pair a sector's
+   * titles with only its own industries and places too. One group per run,
+   * taken in turn, so each vendor is still asked once a run and its daily cap
+   * is spent no faster; each group keeps its own page cursors. With no
+   * per-sector groups the vendors take the combined lists, as before.
+   */
+  const vendorGroup = vendorGroupFor(sectorGroups, persistedState.vg ?? null);
+  const vendorTargeting = vendorGroup
+    ? { titles: vendorGroup.group.titles, industries: vendorGroup.group.industries, geos: vendorGroup.group.geos, keywords: vendorGroup.group.keywords }
+    : { titles, industries, geos, keywords };
+  const vendorCursors = vendorGroup
+    ? (persistedState.vgc?.[vendorGroup.key] ?? {})
+    : { qe: persistedState.qe ?? null, ap: persistedState.ap ?? null, ws: persistedState.ws ?? null };
+  if (vendorGroup) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `Vendor searches this run use researched group ${vendorGroup.index + 1} of ${vendorGroup.count} (titles: ${vendorTargeting.titles.slice(0, 3).join(", ") || "—"}; industries: ${vendorTargeting.industries.slice(0, 3).join(", ") || "—"}; places: ${vendorTargeting.geos.slice(0, 3).join(", ") || "—"}); the next run takes the next group.`,
+      { vendorGroup: vendorGroup.index + 1, groups: vendorGroup.count });
+  }
 
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
@@ -2784,7 +2808,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // scraper sources ignore it and stay bounded per call as before.
   const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>> = {
     warmysender: (remaining) =>
-      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining, persistedState.ws ?? null, neverTarget).then(({ raw, nextCursor }) => {
+      discoverViaRegistrySource(campaign, "warmysender", vendorTargeting, remaining, vendorCursors.ws ?? null, neverTarget).then(({ raw, nextCursor }) => {
         warmysenderNextCursor = nextCursor;
         return {
           sourceType: "warmysender" as const,
@@ -2795,7 +2819,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // No cursor in, none kept: LeadOcean says a cursor is a place in one walk and
     // must not be stored. Its per-workspace viewed list moves the search forward.
     leadocean: (remaining) =>
-      discoverViaRegistrySource(campaign, "leadocean", { titles, industries, geos, keywords, size }, remaining, null, neverTarget).then(({ raw, refused, restUntil }) => ({
+      discoverViaRegistrySource(campaign, "leadocean", { ...vendorTargeting, size }, remaining, null, neverTarget).then(({ raw, refused, restUntil }) => ({
         sourceType: "leadocean" as const,
         query,
         raw,
@@ -2809,7 +2833,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         raw,
       })),
     quickenrich: (remaining) =>
-      discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null, remaining).then(({ raw, nextQe }) => {
+      discoverViaQuickenrich(campaign, { titles: vendorTargeting.titles, industries: vendorTargeting.industries, geos: vendorTargeting.geos }, vendorCursors.qe ?? null, remaining).then(({ raw, nextQe }) => {
         quickenrichNextPage = nextQe;
         return {
           sourceType: "quickenrich" as const,
@@ -2827,7 +2851,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         };
       }),
     apollo: (remaining) =>
-      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining).then(({ raw, nextAp }) => {
+      discoverViaApollo(campaign, { ...vendorTargeting, overrides: size }, vendorCursors.ap ?? null, remaining).then(({ raw, nextAp }) => {
         apolloNextPage = nextAp;
         return {
           sourceType: "apollo" as const,
@@ -3048,12 +3072,25 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // The QuickEnrich page cursor rides the same JSON: the advanced state
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).
-    qe: quickenrichNextPage ?? persistedState.qe ?? null,
+    qe: vendorGroup ? (persistedState.qe ?? null) : (quickenrichNextPage ?? persistedState.qe ?? null),
     // Apollo's page cursor, kept the same way.
-    ap: apolloNextPage ?? persistedState.ap ?? null,
+    ap: vendorGroup ? (persistedState.ap ?? null) : (apolloNextPage ?? persistedState.ap ?? null),
     // null is an answer here (the walk wrapped): only "did not search" keeps the old one.
-    ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null),
+    ws: vendorGroup ? (persistedState.ws ?? null) : (warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null)),
     li: linkedinNextPage !== undefined ? linkedinNextPage : (persistedState.li ?? null),
+    // F37 remainder: the group the vendors took, and each live group's own
+    // cursors (a group no longer in the research is dropped).
+    ...(vendorGroup ? {
+      vg: vendorGroup.key,
+      vgc: {
+        ...Object.fromEntries(Object.entries(persistedState.vgc ?? {}).filter(([k]) => (sectorGroups ?? []).some((g) => sliceGroupKey(g) === k))),
+        [vendorGroup.key]: {
+          qe: quickenrichNextPage ?? vendorCursors.qe ?? null,
+          ap: apolloNextPage ?? vendorCursors.ap ?? null,
+          ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (vendorCursors.ws ?? null),
+        },
+      },
+    } : {}),
   };
   try {
     await db.update(areCampaigns).set({ discoveryQueryState: newState as any })
