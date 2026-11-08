@@ -21,6 +21,7 @@ import { escapeHtml } from "@shared/escapeHtml";
 import { isLockedOut, noteFailure, profileKey } from "../services/accountLockout";
 import { makeEmailChangeToken, readEmailChangeToken } from "../services/emailChangeToken";
 import { BACKUP_CODE_COUNT, backupCodesLeft, clearBackupCodes, replaceBackupCodes } from "../services/mfaBackupCodes";
+import { openTotpSecret, sealTotpSecret } from "../services/totpSecret";
 
 /**
  * The setup key as a QR code to scan (audit 2026-10-20, U21): the dialog had
@@ -283,12 +284,15 @@ export const profileRouter = router({
      * with several entries all called Velocity. Only this user has seen the
      * pending key, and disconnecting or an admin reset clears it.
      */
-    const secret = u?.pending?.trim() || generateTotpSecret();
-    if (secret !== u?.pending) {
-      await db.update(users).set({ mfaTotpSecret: secret, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+    // Stored encrypted (services/totpSecret.ts); a pending key saved before
+    // that reads as it is, and is re-saved encrypted here.
+    const pending = openTotpSecret(u?.pending);
+    const secret = pending || generateTotpSecret();
+    if (secret !== pending || u?.pending === secret) {
+      await db.update(users).set({ mfaTotpSecret: sealTotpSecret(secret), mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
     }
     const otpauthUrl = totpAuthUrl(secret, u?.email ?? "account");
-    return { secret, otpauthUrl, qrDataUrl: await totpQrDataUrl(otpauthUrl), reused: secret === u?.pending };
+    return { secret, otpauthUrl, qrDataUrl: await totpQrDataUrl(otpauthUrl), reused: secret === pending };
   }),
 
   /** Confirm enrollment with a live code from the authenticator app. */
@@ -305,7 +309,9 @@ export const profileRouter = router({
       if (!u?.secret) throw new TRPCError({ code: "BAD_REQUEST", message: "Start enrollment first." });
       if (u.enabledAt) return { ok: true, alreadyConnected: true };
       const { matchTotpStep, totpRefusal } = await import("../services/totp");
-      const step = matchTotpStep(u.secret, input.code);
+      // An unreadable secret matches nothing (services/totpSecret.ts).
+      const key = openTotpSecret(u.secret);
+      const step = key ? matchTotpStep(key, input.code) : null;
       if (step === null || !(await useTotpStep(db, ctx.user.id, step))) {
         throw new TRPCError({ code: "FORBIDDEN", message: totpRefusal(step) });
       }
@@ -345,7 +351,8 @@ export const profileRouter = router({
       // Turning 2FA off is a credential check like the others (G32).
       assertNotLocked(ctx.user.id);
       const { matchTotpStep } = await import("../services/totp");
-      const step = input.code ? matchTotpStep(u.secret, input.code) : null;
+      const key = openTotpSecret(u.secret);
+      const step = input.code && key ? matchTotpStep(key, input.code) : null;
       const codeOk = step !== null && (await useTotpStep(db, ctx.user.id, step));
       const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
       if (!codeOk && !pwOk) {
@@ -383,7 +390,8 @@ export const profileRouter = router({
       }
       assertNotLocked(ctx.user.id);
       const { matchTotpStep } = await import("../services/totp");
-      const step = input.code ? matchTotpStep(u.secret, input.code) : null;
+      const key = openTotpSecret(u.secret);
+      const step = input.code && key ? matchTotpStep(key, input.code) : null;
       const codeOk = step !== null && (await useTotpStep(db, ctx.user.id, step));
       const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
       if (!codeOk && !pwOk) {

@@ -37,6 +37,7 @@ import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { registerPasswordAuthRoutes } from "./passwordAuth";
 import { appRouter } from "./routers";
 import { base32Decode, verifyTotp } from "./services/totp";
+import { openTotpSecret } from "./services/totpSecret";
 
 const SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 const EMAIL = "tester@velocity.test";
@@ -158,7 +159,9 @@ describe("re-opening the setup dialog keeps the key the app already has (tracker
     const b = await caller().profile.startTotpEnrollment();
     expect(b.secret).toBe(a.secret);
     expect(b.reused).toBe(true);
-    expect(me().mfaTotpSecret).toBe(a.secret);
+    // The key is stored encrypted since 2026-11-07 (services/totpSecret.ts):
+    // what is kept still opens to the key the app already has.
+    expect(openTotpSecret(me().mfaTotpSecret)).toBe(a.secret);
     // The entry added from the first opening confirms.
     await caller().profile.confirmTotpEnrollment({ code: codeFor(a.secret, nowStep()) });
     expect(me().mfaTotpEnabledAt).toBeTruthy();

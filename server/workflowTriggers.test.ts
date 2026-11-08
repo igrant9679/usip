@@ -470,12 +470,15 @@ describe("trigger coverage (the inventory)", () => {
     }
     // The payload must carry what the condition editor offers, or wiring the
     // gate in silently kills every existing "stuck deals over $50k" rule.
-    const payloads = [...src.matchAll(/daysInStage: deal\.daysInStage,[\s\S]{0,300}?ruleName: rule\.name,/g)];
+    // 2026-11-07 (F46): both loops build the payload with the engine's
+    // buildDealStuckPayload, which the dry run shares; its keys are pinned there.
+    const payloads = [...src.matchAll(/const payload = buildDealStuckPayload\(deal, rule\.name\);/g)];
     expect(payloads.length, "both deal_stuck payloads not found").toBe(2);
-    for (const p of payloads) {
-      expect(p[0]).toContain("value:");
-      expect(p[0]).toContain("winProb:");
-    }
+    const engine = read("server/services/workflowEngine.ts");
+    const builder = engine.slice(engine.indexOf("export function buildDealStuckPayload("), engine.indexOf("export async function runTaskOverdueCron("));
+    expect(builder).toContain("daysInStage: deal.daysInStage,");
+    expect(builder).toContain("value:");
+    expect(builder).toContain("winProb:");
   });
 
   it("the condition editor only offers fields that exist", () => {
@@ -535,7 +538,11 @@ describe("trigger coverage (the inventory)", () => {
       router.includes("patch: z.record("),
       "workflows.update takes a free-form record again — every gate `create` enforces (live trigger, workspaceId, fireCount) can be walked around by editing the rule afterwards",
     ).toBe(false);
-    expect([...router.matchAll(/z\.enum\(LIVE_TRIGGER_IDS/g)].length).toBe(2);
+    // 2026-11-07 (F46): create, update, and the dry run's draft rule, which
+    // likewise accepts only a live trigger.
+    expect([...router.matchAll(/z\.enum\(LIVE_TRIGGER_IDS/g)].length).toBe(3);
+    const update = router.slice(router.indexOf("  update: managerProcedure"), router.indexOf("  toggle: managerProcedure"));
+    expect(update).toContain("triggerType: z.enum(LIVE_TRIGGER_IDS");
   });
 
   it("run history names the record that set it off", () => {
@@ -694,9 +701,14 @@ describe("record payload vocabulary", () => {
      * — the exact failure this file was written for. Parsed from runAction.
      */
     const engine = read("server/services/workflowEngine.ts");
-    const allowedStart = engine.indexOf("const ALLOWED: Record<string");
+    // 2026-11-07 (F46, G71): update_field's allowlist moved to
+    // @shared/workflowTriggers (UPDATE_FIELD_ALLOWED), so the dry run and the
+    // editor's field picker read the same one; runAction uses it as ALLOWED.
+    expect(engine).toContain("const ALLOWED = UPDATE_FIELD_ALLOWED;");
+    const shared = read("shared/workflowTriggers.ts");
+    const allowedStart = shared.indexOf("export const UPDATE_FIELD_ALLOWED: Record<string");
     expect(allowedStart, "update_field's ALLOWED map moved").toBeGreaterThan(-1);
-    const allowedBlock = engine.slice(allowedStart, engine.indexOf("};", allowedStart));
+    const allowedBlock = shared.slice(allowedStart, shared.indexOf("};", allowedStart));
     const updateField = [...allowedBlock.matchAll(/([a-z]+):\s*\{/g)].map((m) => m[1]!);
 
     const enrollBlock = engine.slice(engine.indexOf(`case "enroll_sequence":`), engine.indexOf(`case "update_field":`));

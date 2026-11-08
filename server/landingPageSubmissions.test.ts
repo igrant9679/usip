@@ -70,6 +70,7 @@ vi.mock("./_core/activeMembers", async (importActual) => ({
 
 import { appRouter } from "./routers";
 import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
+import { issueSubmitToken, landingScope } from "./services/publicCaptureGuard";
 
 interface Recorded {
   inserts: { table: unknown; values: Record<string, unknown> }[];
@@ -167,8 +168,10 @@ function page(over: Record<string, unknown> = {}) {
   };
 }
 
+// A page served ten seconds ago: the minimum-time check (F47, 2026-11-07) is
+// not what these tests are about, so each submit carries a genuine token.
 const submit = (data: Record<string, unknown>, slug = "demo") =>
-  appRouter.createCaller(publicCtx()).landingPages.submit({ slug, data });
+  appRouter.createCaller(publicCtx()).landingPages.submit({ slug, data, submitToken: issueSubmitToken(landingScope(slug), Date.now() - 10_000) });
 
 const submissionOf = (r: Recorded) => r.inserts.find((i) => i.table === landingPageSubmissions);
 
@@ -343,6 +346,9 @@ describe("landingPages.submit — the submission row", () => {
         // exhausted queue. What it pins is unchanged: a configured sequence
         // still enrols.
         [], // archivedWorkspaceIds: nothing archived (cache cleared below)
+        // 2026-11-07 (audit F47): the submit reads the workspace's Turnstile
+        // pair before acting; none is set up here.
+        [], // workspace_integrations: no Turnstile
         [{ id: 9 }], // the sequence is in this page's workspace
         [], // enrollmentDedupe: no active enrollment for this email
       ],

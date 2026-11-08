@@ -5249,6 +5249,38 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // The authenticator secret is stored encrypted (services/totpSecret.ts,
+  // follow-up to the final pass, 2026-11-07): iv:tag:ciphertext in hex is
+  // about 122 characters, so the column widens from 64. Widening a varchar
+  // keeps every value; the boot pass in secretBackfill.ts encrypts the old
+  // plaintext rows and checks each write read back whole.
+  {
+    name: "0350_totp_secret_encrypted.sql",
+    statements: [
+      "ALTER TABLE `users` MODIFY COLUMN `mfa_totp_secret` varchar(255) NULL",
+    ],
+  },
+
+  // A booking's own reschedule-or-cancel page (audit 2026-10-20, F47). Nullable
+  // and unset on every existing meeting: only new bookings get a token, and a
+  // UNIQUE index allows any number of NULLs.
+  {
+    name: "0380_meeting_manage_token.sql",
+    statements: [
+      "ALTER TABLE `meetings` ADD COLUMN `manageToken` varchar(64) NULL",
+      "CREATE UNIQUE INDEX `ux_meetings_manage_token` ON `meetings` (`manageToken`)",
+    ],
+  },
+
+  // Form views, for a per-form conversion rate (audit 2026-10-20, F47). Starts
+  // at 0 for every form: views were never counted before.
+  {
+    name: "0381_form_view_count.sql",
+    statements: [
+      "ALTER TABLE `forms` ADD COLUMN `viewCount` int NOT NULL DEFAULT 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
