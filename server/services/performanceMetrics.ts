@@ -42,7 +42,7 @@
  *     the denominator would understate the rate forever. `opensTracked` is
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
-import { and, desc, eq, exists, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, inArray, isNotNull, isNull, lt, ne, sql, type Column, type SQL } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
@@ -61,6 +61,27 @@ import {
 } from "../../drizzle/schema";
 import { bookedMeetingStatuses } from "@shared/meetingStatus";
 import { normalizeVariantKey } from "@shared/variantKeys";
+
+/**
+ * What's Working's filters (audit 2026-10-20, F20): one campaign, and a
+ * window of time — [since, until), the workspace's own days, resolved by the
+ * router. Every measure below reads its own clock: a send by when it went, a
+ * signal by when it arrived, a sourced prospect by when it was found. The
+ * optimisation analyzers call these with no scope, as before.
+ */
+export interface MetricsScope {
+  campaignId?: number;
+  since?: Date;
+  until?: Date;
+}
+
+/** The scope's time window on one column; nothing when unbounded. */
+function within(col: Column, scope: MetricsScope): SQL[] {
+  const out: SQL[] = [];
+  if (scope.since) out.push(gte(col, scope.since));
+  if (scope.until) out.push(lt(col, scope.until));
+  return out;
+}
 
 /** Percentage (0-100, one decimal) guarded against a zero denominator. */
 export function rate(numerator: number, denominator: number): number {
@@ -96,7 +117,7 @@ export interface SequenceStepStats {
  */
 export async function getSequenceStepStats(
   workspaceId: number,
-  opts: { sequenceId?: number } = {},
+  opts: { sequenceId?: number; since?: Date; until?: Date } = {},
 ): Promise<SequenceStepStats[]> {
   const db = await getDb();
   if (!db) return [];
@@ -108,6 +129,7 @@ export async function getSequenceStepStats(
     eq(emailDrafts.status, "sent" as never),
   ];
   if (opts.sequenceId !== undefined) sentWhere.push(eq(emailDrafts.sequenceId, opts.sequenceId));
+  sentWhere.push(...within(emailDrafts.sentAt, opts));
 
   // Opens are DISTINCT MESSAGES opened, as the module header says (audit
   // 2026-10-20, A63): summing openCount summed pixel hits, so one message
@@ -135,6 +157,8 @@ export async function getSequenceStepStats(
     eq(emailDrafts.status, "sent" as never),
   ];
   if (opts.sequenceId !== undefined) replyWhere.push(eq(emailDrafts.sequenceId, opts.sequenceId));
+  // Replies to the messages sent in the window, so a rate's two sides are one population.
+  replyWhere.push(...within(emailDrafts.sentAt, opts));
 
   const replyRows = await db
     .select({
@@ -213,10 +237,12 @@ export interface SourceYieldStats {
  * Counts are DISTINCT prospects, so a prospect who got four sends still counts
  * once toward `contacted` and can't inflate a source's apparent reach.
  */
-export async function getSourceYieldStats(workspaceId: number): Promise<SourceYieldStats[]> {
+export async function getSourceYieldStats(workspaceId: number, scope: MetricsScope = {}): Promise<SourceYieldStats[]> {
   const db = await getDb();
   if (!db) return [];
+  const inCampaign = (col: Column) => (scope.campaignId !== undefined ? [eq(col, scope.campaignId)] : []);
 
+  // Found in the window: by when the prospect was found (F20).
   const discovered = await db
     .select({
       sourceType: prospectQueue.sourceType,
@@ -224,7 +250,7 @@ export async function getSourceYieldStats(workspaceId: number): Promise<SourceYi
       avgIcp: sql<number>`coalesce(avg(${prospectQueue.icpMatchScore}), 0)`,
     })
     .from(prospectQueue)
-    .where(eq(prospectQueue.workspaceId, workspaceId))
+    .where(and(eq(prospectQueue.workspaceId, workspaceId), ...inCampaign(prospectQueue.campaignId), ...within(prospectQueue.createdAt, scope)))
     .groupBy(prospectQueue.sourceType);
 
   // Contacted = at least one dispatched send, counted once per prospect.
@@ -238,6 +264,8 @@ export async function getSourceYieldStats(workspaceId: number): Promise<SourceYi
     .where(and(
       eq(areExecutionQueue.workspaceId, workspaceId),
       eq(areExecutionQueue.status, "sent" as never),
+      ...inCampaign(areExecutionQueue.campaignId),
+      ...within(areExecutionQueue.executedAt, scope),
     ))
     .groupBy(prospectQueue.sourceType);
 
@@ -254,10 +282,15 @@ export async function getSourceYieldStats(workspaceId: number): Promise<SourceYi
     .innerJoin(prospectQueue, eq(areSignalLog.prospectQueueId, prospectQueue.id))
     .where(and(
       eq(areSignalLog.workspaceId, workspaceId),
+      ...inCampaign(areSignalLog.campaignId),
+      ...within(areSignalLog.processedAt, scope),
+      // Contacted in the same window and campaign, so replied stays within contacted.
       exists(db.select({ one: sql`1` }).from(areExecutionQueue).where(and(
         eq(areExecutionQueue.prospectQueueId, prospectQueue.id),
         eq(areExecutionQueue.workspaceId, workspaceId),
         eq(areExecutionQueue.status, "sent" as never),
+        ...inCampaign(areExecutionQueue.campaignId),
+        ...within(areExecutionQueue.executedAt, scope),
       ))),
     ))
     .groupBy(prospectQueue.sourceType, areSignalLog.signalType);
@@ -329,7 +362,7 @@ export interface ReplyMix {
  * campaign replies. Any analyzer that later reasons over "reply mix" would have
  * been learning from private mail against a meaningless denominator.
  */
-export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
+export async function getReplyMix(workspaceId: number, scope: MetricsScope = {}): Promise<ReplyMix> {
   const db = await getDb();
   if (!db) return { classes: [], attributed: 0, unattributedInbound: 0 };
 
@@ -341,7 +374,7 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
    * table counted CRM drafts and the source table counted engine prospects:
    * three populations under one word.
    */
-  const repliers = await areRepliers(db, workspaceId);
+  const repliers = await areRepliers(db, workspaceId, scope);
   const latestClass = new Map<number, string | null>();
   if (repliers.size > 0) {
     const replyRows = await db
@@ -351,6 +384,7 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
         eq(emailReplies.workspaceId, workspaceId),
         genuineReplyScope(),
         isNotNull(emailReplies.campaignId),
+        ...(scope.campaignId !== undefined ? [eq(emailReplies.campaignId, scope.campaignId)] : []),
         inArray(emailReplies.prospectQueueId, Array.from(repliers)),
       ))
       .orderBy(emailReplies.id);
@@ -360,7 +394,7 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
   const [unmatched] = await db
     .select({ n: sql<number>`count(*)` })
     .from(emailReplies)
-    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId), isNull(emailReplies.campaignId)));
+    .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId), isNull(emailReplies.campaignId), ...within(emailReplies.receivedAt, scope)));
 
   const counts = new Map<string, number>();
   repliers.forEach((pid) => {
@@ -380,11 +414,16 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
  * never sent anything (a hand-posted signal, a reply to another product's
  * mail) have nothing to attribute to, so they are left out everywhere.
  */
-async function areRepliers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<Set<number>> {
+async function areRepliers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: MetricsScope = {}): Promise<Set<number>> {
   const signalled = await db
     .select({ prospectQueueId: areSignalLog.prospectQueueId })
     .from(areSignalLog)
-    .where(and(eq(areSignalLog.workspaceId, workspaceId), eq(areSignalLog.signalType, "email_reply")));
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      eq(areSignalLog.signalType, "email_reply"),
+      ...(scope.campaignId !== undefined ? [eq(areSignalLog.campaignId, scope.campaignId)] : []),
+      ...within(areSignalLog.processedAt, scope),
+    ));
   const ids = Array.from(new Set(signalled.map((s) => Number(s.prospectQueueId))));
   if (ids.length === 0) return new Set();
   const sent = await db
@@ -394,6 +433,8 @@ async function areRepliers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, w
       eq(areExecutionQueue.workspaceId, workspaceId),
       eq(areExecutionQueue.status, "sent" as never),
       inArray(areExecutionQueue.prospectQueueId, ids),
+      ...(scope.campaignId !== undefined ? [eq(areExecutionQueue.campaignId, scope.campaignId)] : []),
+      ...within(areExecutionQueue.executedAt, scope),
     ));
   return new Set(sent.map((s) => Number(s.prospectQueueId)));
 }
@@ -476,7 +517,7 @@ export function computeAreStepCells(sends: AreStepSendRow[], signals: VariantSig
  * 2026-10-20, A22). It read CRM Sequence drafts (email_drafts), a different
  * product, under the engine's name; that table is still on the page, labelled.
  */
-export async function getAreStepStats(workspaceId: number): Promise<AreStepStats[]> {
+export async function getAreStepStats(workspaceId: number, scope: MetricsScope = {}): Promise<AreStepStats[]> {
   const db = await getDb();
   if (!db) return [];
   const sends = await db
@@ -489,12 +530,23 @@ export async function getAreStepStats(workspaceId: number): Promise<AreStepStats
       trackingToken: areExecutionQueue.trackingToken,
     })
     .from(areExecutionQueue)
-    .where(and(eq(areExecutionQueue.workspaceId, workspaceId), eq(areExecutionQueue.status, "sent" as never)));
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.status, "sent" as never),
+      ...(scope.campaignId !== undefined ? [eq(areExecutionQueue.campaignId, scope.campaignId)] : []),
+      ...within(areExecutionQueue.executedAt, scope),
+    ));
   if (sends.length === 0) return [];
+  // Replies and meetings that arrived in the window, from the people sent to in it (F20).
   const signals = await db
     .select({ prospectQueueId: areSignalLog.prospectQueueId, signalType: areSignalLog.signalType })
     .from(areSignalLog)
-    .where(and(eq(areSignalLog.workspaceId, workspaceId), inArray(areSignalLog.signalType, ["email_reply", "meeting_booked"])));
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      inArray(areSignalLog.signalType, ["email_reply", "meeting_booked"]),
+      ...(scope.campaignId !== undefined ? [eq(areSignalLog.campaignId, scope.campaignId)] : []),
+      ...within(areSignalLog.processedAt, scope),
+    ));
   const names = await db
     .select({ id: areCampaigns.id, name: areCampaigns.name })
     .from(areCampaigns)

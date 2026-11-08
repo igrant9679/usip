@@ -74,7 +74,8 @@ describe("the campaign list and the wizard's personas (A62)", () => {
     expect((await caller().are.campaigns.list({ limit: 2, offset: 0 })).map((c) => c.id)).toEqual([3, 2]);
     expect((await caller().are.campaigns.list({ limit: 2, offset: 2 })).map((c) => c.id)).toEqual([1]);
     expect(await caller().are.campaigns.count({})).toEqual({ total: 3 });
-    expect(list).toContain("{ limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE },");
+    // 2026-11-07 (audit F15): the same page, with the Archived view's switch beside it.
+    expect(list).toContain("{ limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE, archived: showArchived },");
   });
 
   it("a persona brings its places, its size and itself", () => {

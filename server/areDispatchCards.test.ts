@@ -67,7 +67,8 @@ describe("the tab renders one row per dispatch", () => {
   const tab = page.slice(page.indexOf('<TabsContent value="ab"'), page.indexOf('<TabsContent value="signals"'));
 
   it("queries the per-dispatch proc", () => {
-    expect(page).toContain("trpc.are.prospects.getDispatches.useQuery({ campaignId })");
+    // 2026-11-07 (audit U24): the query waits for the Step performance tab to open; same input.
+    expect(page).toContain('trpc.are.prospects.getDispatches.useQuery({ campaignId }, { enabled: opened("ab") })');
   });
 
   it("maps table rows over dispatches, keyed by execution id", () => {

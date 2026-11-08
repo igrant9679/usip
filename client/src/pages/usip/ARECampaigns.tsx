@@ -15,6 +15,9 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Checkbox } from "@/components/ui/checkbox";
 import { trpc } from "@/lib/trpc";
 import {
+  Archive,
+  ArchiveRestore,
+  Copy,
   ArrowLeft,
   ArrowRight,
   Bot,
@@ -171,11 +174,14 @@ export default function ARECampaigns() {
   // A page at a time, with the count (audit 2026-10-20, A62): the list showed
   // the newest 50 and nothing said there were more.
   const [listPage, setListPage] = useState(1);
+  // Archived campaigns (F15) have their own view; the list shows the rest.
+  const [showArchived, setShowArchived] = useState(false);
+  useEffect(() => setListPage(1), [showArchived]);
   const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery(
-    { limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE },
+    { limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE, archived: showArchived },
     { placeholderData: (prev) => prev },
   );
-  const { data: campaignCount } = trpc.are.campaigns.count.useQuery({});
+  const { data: campaignCount } = trpc.are.campaigns.count.useQuery({ archived: showArchived });
   const listPages = Math.max(1, Math.ceil((campaignCount?.total ?? 0) / CAMPAIGN_PAGE));
   // ?new=1 (the hub's New Campaign, A76) opens the wizard, once.
   const [showCreate, setShowCreate] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1");
@@ -327,9 +333,33 @@ export default function ARECampaigns() {
   retrySetStatus.current = setStatus.mutate;
   // The same confirm as the campaign page (A52): Activate starts real sending.
   const confirmActivate = useConfirmActivate();
-  // Delete is a manager's (A18); the server refuses anyone else.
+  // Delete is an admin's since F15 (archive is the everyday way out); the server refuses anyone else.
   const { current: currentWs } = useWorkspace();
-  const canDelete = rankOf(currentWs?.role ?? "rep") >= ROLE_RANK.manager;
+  const canDelete = rankOf(currentWs?.role ?? "rep") >= ROLE_RANK.admin;
+
+  // Archive, unarchive and clone (F15). Archive pauses an active campaign.
+  const archive = trpc.are.campaigns.archive.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.paused ? "Campaign paused and archived. Nothing more is sent from it; Unarchive brings it back." : "Campaign archived. Unarchive brings it back.");
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate(); utils.are.campaigns.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unarchive = trpc.are.campaigns.unarchive.useMutation({
+    onSuccess: () => {
+      toast.success("Campaign unarchived. It is back in the list, as it was; activate it when you are ready.");
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate(); utils.are.campaigns.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const clone = trpc.are.campaigns.clone.useMutation({
+    onSuccess: (r) => {
+      toast.success(`"${r.name}" created as a draft. Nothing runs until you activate it.`);
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      navigate(`/are/campaigns/${r.id}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: (r) => {
@@ -398,12 +428,24 @@ export default function ARECampaigns() {
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         {/* Which is which: sequences vs campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
         <OutreachExplainer current="campaigns" />
+        <div className="flex items-center gap-1" role="group" aria-label="Which campaigns">
+          <Button size="sm" variant={showArchived ? "outline" : "default"} className="h-7 text-xs" aria-pressed={!showArchived} onClick={() => setShowArchived(false)}>Campaigns</Button>
+          <Button size="sm" variant={showArchived ? "default" : "outline"} className="h-7 text-xs gap-1" aria-pressed={showArchived} onClick={() => setShowArchived(true)}>
+            <Archive className="size-3" /> Archived
+          </Button>
+        </div>
         {/* Campaign list */}
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">
             <Loader2 className="size-5 animate-spin" /> Loading campaigns…
           </div>
         ) : !campaigns || campaigns.length === 0 ? (
+          showArchived ? (
+          <div className="rounded-xl border border-dashed p-12 text-center">
+            <Archive className="size-10 text-muted-foreground/40 mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">No archived campaigns. Archive one from its row or its page to put it away without deleting it.</p>
+          </div>
+          ) : (
           <div className="rounded-xl border border-dashed p-12 text-center">
             <Bot className="size-10 text-muted-foreground/40 mx-auto mb-3" />
             <p className="text-sm text-muted-foreground mb-4">No campaigns yet. Create your first autonomous prospecting campaign.</p>
@@ -411,6 +453,7 @@ export default function ARECampaigns() {
               <Plus className="size-4" /> Create Campaign
             </Button>
           </div>
+          )
         ) : (
           <div className="space-y-2">
             {campaigns.map((c) => (
@@ -436,7 +479,7 @@ export default function ARECampaigns() {
                     >
                       <Pause className="size-3" /> Pause
                     </Button>
-                  ) : c.status === "paused" || c.status === "draft" ? (
+                  ) : (c.status === "paused" || c.status === "draft") && !c.archivedAt ? (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -447,6 +490,29 @@ export default function ARECampaigns() {
                       <Play className="size-3" /> Activate
                     </Button>
                   ) : null}
+                  <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={clone.isPending}
+                    title="Copy this campaign's setup into a new draft"
+                    onClick={() => clone.mutate({ id: c.id })}>
+                    <Copy className="size-3" /> Clone
+                  </Button>
+                  {c.archivedAt ? (
+                    <Button size="sm" variant="ghost" className="gap-1 text-xs" disabled={unarchive.isPending}
+                      onClick={() => unarchive.mutate({ id: c.id })}>
+                      <ArchiveRestore className="size-3" /> Unarchive
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="ghost" className="gap-1 text-xs text-muted-foreground" disabled={archive.isPending}
+                      onClick={() => confirmAction({
+                        title: `Archive "${c.name}"?`,
+                        description: c.status === "active"
+                          ? "It is paused and leaves the list: nothing more is sent from it. Its people, steps and replies are kept, and Unarchive brings it back."
+                          : "It leaves the list. Its people, steps and replies are kept, and Unarchive brings it back.",
+                        confirmLabel: "Archive",
+                        destructive: false,
+                      }, () => archive.mutate({ id: c.id }))}>
+                      <Archive className="size-3" /> Archive
+                    </Button>
+                  )}
                   {canDelete && (
                   <Button aria-label="Delete campaign"
                     size="sm"

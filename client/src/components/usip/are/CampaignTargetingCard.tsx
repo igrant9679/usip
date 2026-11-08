@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { CheckCircle2, Crosshair, Loader2 } from "lucide-react";
 import { TagInput } from "@/components/usip/research/ResearchFields";
+import { useRegisterDraft } from "./settingsDrafts";
 import {
   overridesWithTargeting, sameTargeting, targetingFromOverrides, targetingProblem,
   type CampaignTargeting,
@@ -47,6 +48,16 @@ export function CampaignTargetingCard({ campaign }: { campaign: { id: number; ic
       setDraft(null);
       utils.are.campaigns.get.invalidate({ id: campaign.id });
     },
+  });
+  // The Settings tab's one Save writes this draft too (U11).
+  useRegisterDraft("targeting", {
+    label: "Targeting",
+    count: dirty ? 1 : 0,
+    save: async () => {
+      if (problem) { toast.error(problem); throw new Error(problem); }
+      await save.mutateAsync({ id: campaign.id, icpOverrides: overridesWithTargeting(campaign.icpOverrides, t) });
+    },
+    discard: () => setDraft(null),
   });
 
   /**

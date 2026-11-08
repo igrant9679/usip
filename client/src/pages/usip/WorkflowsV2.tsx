@@ -22,6 +22,7 @@ import { useConfirmAutoEnrol } from "@/hooks/useConfirmAutoEnrol";
 import { ruleState, runSummary } from "@/lib/segmentAutoEnrol";
 import { isDeadTrigger } from "@shared/workflowTriggers";
 import { cn } from "@/lib/utils";
+import { groupByEffect } from "@/lib/autopilotEffects";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -335,76 +336,96 @@ export default function WorkflowsV2() {
             </ul>
           </div>
 
-          {/* Autopilots */}
+          {/* Autopilots, grouped by what each does when it acts (audit
+              2026-10-20, U20): sends to people, spends credits, changes
+              records. Each dial still shows its last run inline. */}
           <Section icon={Bot} title="Autopilots">
-            <div data-tour-id="autonomy-autopilots" className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {autopilots.map((a) => (
-                <div key={a.key} className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3">
-                  <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: a.mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: a.mode === "off" ? undefined : "#7c3aed" }}>
-                    {a.mode === "auto" ? <Zap className="size-4" /> : <a.icon className="size-4" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <Link href={a.href} className="text-sm font-medium hover:underline">{a.label}</Link>
-                    <div className="text-[11px] text-muted-foreground">{a.blurb} · last run {fmtWhen(a.lastRunAt)}</div>
+            <div data-tour-id="autonomy-autopilots" className="space-y-5">
+              {groupByEffect(autopilots).map((g) => (
+                <div key={g.effect} role="group" aria-labelledby={`autopilot-group-${g.effect}`} className="space-y-2">
+                  <div>
+                    <h3 id={`autopilot-group-${g.effect}`} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g.title}</h3>
+                    <p className="text-[11px] text-muted-foreground">{g.blurb}</p>
                   </div>
-                  <Select value={a.mode} onValueChange={a.set}>
-                    <SelectTrigger className="h-7 w-[128px] text-xs shrink-0"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="off">Off</SelectItem>
-                      <SelectItem value="approval">Approve</SelectItem>
-                      {!NO_AUTO.has(a.key) && <SelectItem value="auto">Autonomous</SelectItem>}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ))}
-            </div>
-            {/* Enrichment Sweep needs an attended-run button: its "Approve" mode
-                means "runs when you press this", so without a button that mode
-                could never do anything at all. */}
-            {(sweepAp.data as any) && (sweepAp.data as any).mode !== "off" && (
-              <div className="rounded-xl border bg-card p-3 shadow-sm flex flex-wrap items-center gap-3 mt-3">
-                <Database className="size-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">Run an enrichment sweep now</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {(sweepAp.data as any).candidates} ready to verify
-                    {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable via QuickEnrich (LinkedIn lookup, 1 credit per hit)` : ""}
-                    {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} waiting on a company domain (found via LinkedIn/QuickEnrich enrichment)` : ""}
-                    {/* Key-gated again since 2026-08-12: the free Apollo domain
-                        pre-pass is gone (owner removed Apollo from the
-                        waterfall), so a keyless sweep now genuinely does
-                        nothing — the gate is honest, not overclaiming. */}
-                    {!(sweepAp.data as any).reoonConfigured ? " · add a Reoon key to run the sweep — every found address is verified before it is stored" : ""}
-                  </div>
-                  {(sweepAp.data as any).lastResult && (
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      Last sweep {fmtWhen((sweepAp.data as any).lastResult.at)}: swept{" "}
-                      {(sweepAp.data as any).lastResult.attempted ?? 0} —{" "}
-                      {describeSweepResult((sweepAp.data as any).lastResult)}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {g.rows.map((a) => (
+                      <div key={a.key} className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3">
+                        <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: a.mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: a.mode === "off" ? undefined : "#7c3aed" }}>
+                          {a.mode === "auto" ? <Zap className="size-4" /> : <a.icon className="size-4" />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <Link href={a.href} className="text-sm font-medium hover:underline">{a.label}</Link>
+                          <div className="text-[11px] text-muted-foreground">{a.blurb} · last run {fmtWhen(a.lastRunAt)}</div>
+                        </div>
+                        <Select value={a.mode} onValueChange={a.set}>
+                          <SelectTrigger className="h-7 w-[128px] text-xs shrink-0"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="off">Off</SelectItem>
+                            <SelectItem value="approval">Approve</SelectItem>
+                            {!NO_AUTO.has(a.key) && <SelectItem value="auto">Autonomous</SelectItem>}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                    {/* Email auto-send is a switch, not a mode, and it sends: it belongs here. */}
+                    {g.effect === "sends" && (
+                  <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3">
+                    <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed1f" : "hsl(var(--muted))", color: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed" : undefined }}>
+                      {(emailAuto.data as any)?.aiAutoSendEnabled ? <Zap className="size-4" /> : <Mail className="size-4" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <Link href="/v2/emails" className="text-sm font-medium hover:underline">Email auto-send</Link>
+                      <div className="text-[11px] text-muted-foreground">AI drafts send themselves when the recipient's lead score clears the threshold</div>
                     </div>
+                    <Switch aria-label="Email auto-send" checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
+                  </div>
+                    )}
+                  </div>
+                  {/* The sweep's attended run spends credits: it sits with them. */}
+                  {g.effect === "spends" && (
+                    <>
+                    {/* Enrichment Sweep needs an attended-run button: its "Approve" mode
+                        means "runs when you press this", so without a button that mode
+                        could never do anything at all. */}
+                    {(sweepAp.data as any) && (sweepAp.data as any).mode !== "off" && (
+                      <div className="rounded-xl border bg-card p-3 shadow-sm flex flex-wrap items-center gap-3 mt-3">
+                        <Database className="size-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium">Run an enrichment sweep now</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {(sweepAp.data as any).candidates} ready to verify
+                            {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable via QuickEnrich (LinkedIn lookup, 1 credit per hit)` : ""}
+                            {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} waiting on a company domain (found via LinkedIn/QuickEnrich enrichment)` : ""}
+                            {/* Key-gated again since 2026-08-12: the free Apollo domain
+                                pre-pass is gone (owner removed Apollo from the
+                                waterfall), so a keyless sweep now genuinely does
+                                nothing — the gate is honest, not overclaiming. */}
+                            {!(sweepAp.data as any).reoonConfigured ? " · add a Reoon key to run the sweep — every found address is verified before it is stored" : ""}
+                          </div>
+                          {(sweepAp.data as any).lastResult && (
+                            <div className="text-[11px] text-muted-foreground mt-0.5">
+                              Last sweep {fmtWhen((sweepAp.data as any).lastResult.at)}: swept{" "}
+                              {(sweepAp.data as any).lastResult.attempted ?? 0} —{" "}
+                              {describeSweepResult((sweepAp.data as any).lastResult)}
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="shrink-0 gap-1.5"
+                          disabled={runSweep.isPending || !(sweepAp.data as any).reoonConfigured}
+                          onClick={() => runSweep.mutate({ limit: 25 })}
+                        >
+                          {runSweep.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                          {runSweep.isPending ? "Sweeping…" : "Sweep 25"}
+                        </Button>
+                      </div>
+                    )}
+                    </>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0 gap-1.5"
-                  disabled={runSweep.isPending || !(sweepAp.data as any).reoonConfigured}
-                  onClick={() => runSweep.mutate({ limit: 25 })}
-                >
-                  {runSweep.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-                  {runSweep.isPending ? "Sweeping…" : "Sweep 25"}
-                </Button>
-              </div>
-            )}
-            <div className="rounded-xl border bg-card p-3 shadow-sm flex items-center gap-3 mt-3">
-              <span className="shrink-0 size-9 rounded-full flex items-center justify-center" style={{ backgroundColor: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed1f" : "hsl(var(--muted))", color: (emailAuto.data as any)?.aiAutoSendEnabled ? "#7c3aed" : undefined }}>
-                {(emailAuto.data as any)?.aiAutoSendEnabled ? <Zap className="size-4" /> : <Mail className="size-4" />}
-              </span>
-              <div className="min-w-0 flex-1">
-                <Link href="/v2/emails" className="text-sm font-medium hover:underline">Email auto-send</Link>
-                <div className="text-[11px] text-muted-foreground">AI drafts send themselves when the recipient's lead score clears the threshold</div>
-              </div>
-              <Switch aria-label="Email auto-send" checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
+              ))}
             </div>
           </Section>
 

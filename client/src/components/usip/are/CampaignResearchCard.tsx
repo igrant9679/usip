@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { neverTargetFromOverrides } from "@shared/researchTargeting";
+import { useRegisterDraft } from "./settingsDrafts";
 
 const NONE = "none";
 
@@ -39,6 +40,18 @@ export function CampaignResearchCard({ campaignId, campaign }: { campaignId: num
   const chosen = (sectors.data ?? []).find((s) => String(s.id) === sector);
   const draftChosen = chosen && chosen.status === "draft";
   const neverTarget = neverTargetFromOverrides(campaign?.icpOverrides);
+  const payload = () => ({
+    id: campaignId,
+    researchSectorId: sector === NONE ? null : Number(sector),
+    personaId: persona === NONE ? null : Number(persona),
+  });
+  // The Settings tab's one Save writes this draft too (U11).
+  useRegisterDraft("research", {
+    label: "Research",
+    count: (sector !== savedSector ? 1 : 0) + (persona !== savedPersona ? 1 : 0),
+    save: () => update.mutateAsync(payload()),
+    discard: () => { setSector(savedSector); setPersona(savedPersona); },
+  });
 
   return (
     <div className="space-y-3 text-xs">
@@ -92,11 +105,7 @@ export function CampaignResearchCard({ campaignId, campaign }: { campaignId: num
       <Button
         size="sm"
         disabled={!dirty || update.isPending}
-        onClick={() => update.mutate({
-          id: campaignId,
-          researchSectorId: sector === NONE ? null : Number(sector),
-          personaId: persona === NONE ? null : Number(persona),
-        })}
+        onClick={() => update.mutate(payload())}
       >
         Save
       </Button>

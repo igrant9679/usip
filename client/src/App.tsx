@@ -143,6 +143,7 @@ const AREPerformance = lazyChunk(() => import("@/pages/usip/AREPerformance"));
 const AREIcpAgent = lazyChunk(() => import("@/pages/usip/AREIcpAgent"));
 const ARECampaigns = lazyChunk(() => import("@/pages/usip/ARECampaigns"));
 const ARECampaignDetail = lazyChunk(() => import("@/pages/usip/ARECampaignDetail"));
+const AREApprovals = lazyChunk(() => import("@/pages/usip/AREApprovals"));
 const AREProspectRedirect = lazyChunk(() => import("@/pages/usip/AREProspectRedirect"));
 const ARESettings = lazyChunk(() => import("@/pages/usip/ARESettings"));
 const HelpCenter = lazyChunk(() => import("@/pages/usip/HelpCenter"));
@@ -585,6 +586,7 @@ function Router() {
       <Route path="/are/icp"><AuthGate><AREIcpAgent /></AuthGate></Route>
       <Route path="/are/campaigns"><AuthGate><ARECampaigns /></AuthGate></Route>
       <Route path="/are/campaigns/:id"><AuthGate><ARECampaignDetail /></AuthGate></Route>
+      <Route path="/are/approvals"><AuthGate><AREApprovals /></AuthGate></Route>
       <Route path="/are/prospects/:id"><AuthGate><AREProspectRedirect /></AuthGate></Route>
       <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
