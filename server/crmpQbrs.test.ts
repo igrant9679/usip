@@ -17,7 +17,9 @@ vi.mock("./audit", async (a) => ({ ...(await a<typeof import("./audit")>()), rec
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
-import { buildIcs, foldIcsLine, icsText } from "@shared/ics";
+// shared/ics.ts became one module at the merge with PR 59 (2026-11-07):
+// the general builder is buildCalendarIcs; buildIcs is the booking's.
+import { buildCalendarIcs, foldIcsLine, icsText } from "@shared/ics";
 import { groupQbrs, isQbrOverdue } from "@shared/qbrSchedule";
 
 const WS = 2, OTHER = 7, REP = 21;
@@ -111,7 +113,7 @@ describe("QBRs are grouped into upcoming, overdue and completed (U27)", () => {
 
 describe("the calendar invite is an .ics file built here (U27)", () => {
   it("a timed QBR blocks its slot, in UTC, with escaped text and CRLF lines", () => {
-    const ics = buildIcs({ uid: "qbr-5@velocity", title: "QBR: Acme, Inc; Q4", description: "Agenda:\n- Roadmap", start: new Date("2026-11-20T19:00:00Z"), end: new Date("2026-11-20T19:45:00Z"), stamp: T0 });
+    const ics = buildCalendarIcs({ product: "QBR", uid: "qbr-5@velocity", title: "QBR: Acme, Inc; Q4", description: "Agenda:\n- Roadmap", start: new Date("2026-11-20T19:00:00Z"), end: new Date("2026-11-20T19:45:00Z"), stamp: T0 });
     expect(ics.split("\r\n")).toEqual([
       "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Velocity//QBR//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
       "BEGIN:VEVENT", "UID:qbr-5@velocity", "DTSTAMP:20261118T150000Z",
@@ -121,7 +123,7 @@ describe("the calendar invite is an .ics file built here (U27)", () => {
     ]);
   });
   it("a day-only QBR is an all-day entry that ends the next day", () => {
-    const ics = buildIcs({ uid: "q", title: "QBR", start: new Date("2026-11-30T12:00:00Z"), allDay: true, day: "2026-11-30", stamp: T0 });
+    const ics = buildCalendarIcs({ product: "QBR", uid: "q", title: "QBR", start: new Date("2026-11-30T12:00:00Z"), allDay: true, day: "2026-11-30", stamp: T0 });
     expect(ics).toContain("DTSTART;VALUE=DATE:20261130\r\nDTEND;VALUE=DATE:20261201\r\n");
   });
   it("long lines fold at 75 octets and text escapes backslashes", () => {
@@ -133,7 +135,7 @@ describe("the calendar invite is an .ics file built here (U27)", () => {
     const src = read("client/src/pages/usip/QBRs.tsx");
     expect(src).toContain("groupQbrs((data ?? []) as Array<QbrLike & Record<string, any>>, new Date(), localToday())");
     const invite = src.slice(src.indexOf("function downloadInvite"), src.indexOf("function whenFromForm"));
-    expect(invite).toContain("buildIcs({");
+    expect(invite).toContain("buildCalendarIcs({");
     expect(invite).toContain(`new Blob([ics], { type: "text/calendar;charset=utf-8" })`);
     expect(invite).not.toMatch(/trpc|fetch\(|mutate/);
     expect(src).toContain(`<Field name="scheduledTime" label="Time (optional)" type="time" />`);

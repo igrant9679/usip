@@ -45,7 +45,8 @@ export const users = mysqlTable("users", {
   elsieEnabled: boolean("elsie_enabled"),
   /** TOTP MFA (migration 0116): base32 secret + activation time. A secret
    *  with NULL enabled-at = enrollment started but not yet confirmed. */
-  mfaTotpSecret: varchar("mfa_totp_secret", { length: 64 }),
+  // Encrypted at rest (services/totpSecret.ts, migration 0350): iv:tag:ciphertext hex.
+  mfaTotpSecret: varchar("mfa_totp_secret", { length: 255 }),
   mfaTotpEnabledAt: timestamp("mfa_totp_enabled_at"),
   /**
    * Forgot-password (migration 0142). The SHA-256 HASH of the reset token, not
@@ -639,6 +640,10 @@ export const meetings = mysqlTable(
     // the calendar event is created only when the prospect confirms one.
     proposalToken: varchar("proposalToken", { length: 64 }),
     proposalSentAt: timestamp("proposalSentAt"),
+    // A booking's own page, /m/b/:token, where the person who booked can
+    // reschedule or cancel (Migration 0380, audit F47). Set on bookings made
+    // through a booking link or the chat agent; null on everything else.
+    manageToken: varchar("manageToken", { length: 64 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -647,6 +652,7 @@ export const meetings = mysqlTable(
     byOwner: index("ix_meeting_owner").on(t.workspaceId, t.ownerUserId),
     byRel: index("ix_meeting_rel").on(t.relatedType, t.relatedId),
     byProposalToken: uniqueIndex("ux_meetings_proposal_token").on(t.proposalToken),
+    byManageToken: uniqueIndex("ux_meetings_manage_token").on(t.manageToken),
   }),
 );
 export type Meeting = typeof meetings.$inferSelect;
@@ -673,6 +679,10 @@ export const forms = mysqlTable(
     autoEnrollSequenceId: int("autoEnrollSequenceId"),               // enroll the new lead into this sequence
     redirectUrl: text("redirectUrl"),
     submitCount: int("submitCount").default(0).notNull(),
+    // Visitors who opened the form, once per visitor per day, so the list can
+    // show a conversion rate (Migration 0381, audit F47; same rule as
+    // landing_pages.viewCount).
+    viewCount: int("viewCount").default(0).notNull(),
     createdByUserId: int("createdByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -6424,6 +6434,12 @@ export const savedReports = mysqlTable(
     scheduleFreq: mysqlEnum("scheduleFreq", ["none", "daily", "weekly", "monthly"]).default("none").notNull(),
     scheduleRecipients: text("scheduleRecipients"), // comma-separated emails
     scheduleLastSentAt: timestamp("scheduleLastSentAt"),
+    /* The last send attempt and how it went (migration 0410, audit 2026-10-20 F45). */
+    scheduleLastAttemptAt: timestamp("scheduleLastAttemptAt"),
+    /** "sent" | "failed" */
+    scheduleLastResult: varchar("scheduleLastResult", { length: 16 }),
+    scheduleLastError: varchar("scheduleLastError", { length: 500 }),
+    scheduleLastSentTo: int("scheduleLastSentTo"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

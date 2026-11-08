@@ -6,7 +6,7 @@
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
  * IS NULL, IN and NOT IN, exists()/notExists() around one of its own selects, LIKE and NOT LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*), SUM(col) or AVG(col), a counted `sum(case when col = 'x' then 1 else 0 end)` (also <> and IN), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
+ * LIMIT, GROUP BY with count(*), count(col), count(distinct col), SUM(col) or AVG(col), a counted `sum(case when col = 'x' then 1 else 0 end)` (also <> and IN), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
  * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?` and `<> ?`, `DATE(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
@@ -254,6 +254,12 @@ export function makeSqlFakeDb(opts: {
             return c[2] === "<>" ? !hit : hit;
           }).length;
         }
+        // COUNT(DISTINCT col) and COUNT(col): non-null values only, as SQL counts
+        // them (2026-11-07, the report builder's group total, audit F45).
+        const cd = text.match(/^count\(distinct (`\w+`\.`\w+`)\)$/i);
+        if (cd) return new Set(qs.map((q) => lookup(q, cd[1])).filter((v) => v != null).map((v) => String(norm(v)))).size;
+        const cc = text.match(/^count\((`\w+`\.`\w+`)\)$/i);
+        if (cc) return qs.filter((q) => lookup(q, cc[1]) != null).length;
         // AVG(col): the mean of the non-null values, as SQL takes it.
         const av = text.match(/avg\((`\w+`\.`\w+`)\)/i);
         if (av) {

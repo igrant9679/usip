@@ -62,6 +62,7 @@ import {
   addMonths, closedIn, closeMonthKey, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
   monthKey, monthToDateRanges, openTotals, zonedYmd, type Range,
 } from "../services/dealMetrics";
+import { leadCounts } from "../services/activityMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
@@ -2588,7 +2589,6 @@ export const opportunitiesRouter = router({
     const deals = await loadMetricDeals(db, wid);
     const countOf = async (table: typeof leads | typeof customers | typeof proposals, where: ReturnType<typeof and>) =>
       Number((await db.select({ n: sql<number>`count(*)` }).from(table).where(where))[0]?.n ?? 0);
-    const createdIn = (range: Range) => and(sql`${leads.createdAt} >= ${range.start}`, lt(leads.createdAt, range.end));
     const open = openTotals(deals);
     // The pipeline as it stood when this month began: deals that existed then
     // and were still open — open now, or closed since. The old figure summed
@@ -2605,10 +2605,12 @@ export const opportunitiesRouter = router({
     const closedWonNow = closedIn(deals, "won", span.current).count;
     const closedWonPrev = closedIn(deals, "won", span.previous).count;
     // Active means still being worked: "Active Leads" counted every lead ever
-    // made, the unqualified and the converted too (G53).
-    const activeLeads = await countOf(leads, and(eq(leads.workspaceId, wid), ne(leads.status, "unqualified"), ne(leads.status, "converted")));
-    const leadsNow = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.current)));
-    const leadsPrev = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.previous)));
+    // made, the unqualified and the converted too (G53). The lead numbers are
+    // the metrics module's (audit 2026-10-20, F44).
+    const leadNums = await leadCounts(db, wid, tz);
+    const activeLeads = leadNums.active;
+    const leadsNow = leadNums.createdThisMonth;
+    const leadsPrev = leadNums.createdSameDaysLastMonth;
     const custNow = await countOf(customers, eq(customers.workspaceId, wid));
     const custPrev = await countOf(customers, and(eq(customers.workspaceId, wid), isNotNull(customers.createdAt), lt(customers.createdAt, r.month.start)));
     const delta = (a: number, b: number) => b === 0 ? (a > 0 ? null : 0) : Math.round(((a - b) / b) * 100);

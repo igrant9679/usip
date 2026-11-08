@@ -27,6 +27,7 @@ import { areExecutionQueue } from "../../drizzle/schema";
 import { assertOutboundNotPaused, isOutboundPaused } from "../services/outboundPause";
 import { assertSendAllowed } from "../sendLimits";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { emailEngagement, emailsSent } from "../services/activityMetrics";
 import { seriesSince, trackingSeries } from "../services/email/trackingSeries";
 
 /**
@@ -492,78 +493,59 @@ export const smtpConfigRouter = router({
       return trackingSeries(events, bouncedDrafts, input.days, tz, nowMs);
     }),
 
-  /** Aggregate analytics summary for the workspace */
+  /**
+   * Aggregate analytics summary for the workspace.
+   *
+   * One metrics service for this page and the Emails page (audit 2026-10-20,
+   * F44/O42): "Emails sent" is the sitewide send log, as on the Emails page,
+   * Analytics and Home; engagement is counted per path on the rows that own
+   * it, each rate over the sends that can produce it; reply rates come from
+   * matched replies, per email on the sequence/CRM path and per person on the
+   * Revenue Engine path; and a campaign's "clicks" are site visits from its
+   * links, because campaign links are not rewritten for click tracking.
+   */
   getAnalyticsSummary: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const allSent = await db
-      .select({
-        id: emailDrafts.id,
-        sentAt: emailDrafts.sentAt,
-        openCount: emailDrafts.openCount,
-        clickCount: emailDrafts.clickCount,
-      })
-      .from(emailDrafts)
-      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
-
-    // Campaign (ARE) sends live in are_execution_queue, not email_drafts —
-    // this summary read drafts only, so the Email Analytics page showed zero
-    // for every campaign send while Analytics (fixed 2026-08-26) counted
-    // them. Same two-source funnel emailActivity.stats uses; kept in step.
-    const [areEng] = await db
-      .select({
-        sent: sql<number>`count(*)`,
-        opened: sql<number>`sum(case when ${areExecutionQueue.openedAt} is not null then 1 else 0 end)`,
-      })
-      .from(areExecutionQueue)
-      .where(and(
-        eq(areExecutionQueue.workspaceId, ctx.workspace.id),
-        eq(areExecutionQueue.channel, "email"),
-        eq(areExecutionQueue.status, "sent"),
-      ));
-    const areSent = Number(areEng?.sent ?? 0);
-    const areOpened = Number(areEng?.opened ?? 0);
-
-    /**
-     * Draft-path mail (sequence, CRM, AI drafts) and Revenue Engine mail are
-     * counted SEPARATELY, and each rate is over the sends that can produce it
-     * (audit 2026-10-20, O42). The click rate divided draft clicks by draft
-     * AND campaign sends, though a campaign send records no click of its own,
-     * so every campaign email pulled it down; and campaign opens were added
-     * to the draft open COUNTER as if they were counts. "Opened" is the same
-     * on both paths (opened at least once), so the open rate is still over
-     * all sends, as the Emails page computes it.
-     */
-    const draftSent = allSent.length;
-    const totalSent = draftSent + areSent;
-    const draftOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length;
-    const uniqueClicked = allSent.filter((d) => (d.clickCount ?? 0) > 0).length;
-    const uniqueOpened = draftOpened + areOpened;
-    const rate = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
-    // Opens and clicks counted per event: draft-path mail only, the one path with counters.
-    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0);
-    const totalClicks = allSent.reduce((s, d) => s + (d.clickCount ?? 0), 0);
+    const ws = ctx.workspace.id;
+    const [sent, e] = await Promise.all([emailsSent(db, ws), emailEngagement(db, ws)]);
 
     // Daily breakdown for the last 30 workspace days, read for those days only.
     const nowMs = Date.now();
-    const tz = await getWorkspaceTimezone(ctx.workspace.id, nowMs);
+    const tz = await getWorkspaceTimezone(ws, nowMs);
     const recentEvents = await db
       .select({ type: emailTrackingEvents.type, createdAt: emailTrackingEvents.createdAt })
       .from(emailTrackingEvents)
-      .where(and(eq(emailTrackingEvents.workspaceId, ctx.workspace.id), gte(emailTrackingEvents.createdAt, seriesSince(30, nowMs))));
+      .where(and(eq(emailTrackingEvents.workspaceId, ws), gte(emailTrackingEvents.createdAt, seriesSince(30, nowMs))));
     // Days with activity only, as before.
     const dailyBreakdown = trackingSeries(recentEvents, [], 30, tz, nowMs)
       .filter((p) => p.opens > 0 || p.clicks > 0)
       .map(({ date, opens, clicks }) => ({ date, opens, clicks }));
 
     return {
-      totalSent, draftSent, campaignSent: areSent,
-      uniqueOpened, draftOpened, campaignOpened: areOpened,
-      openRate: rate(uniqueOpened, totalSent),
-      draftOpenRate: rate(draftOpened, draftSent),
-      campaignOpenRate: rate(areOpened, areSent),
-      uniqueClicked, clickRate: rate(uniqueClicked, draftSent),
-      totalOpens, totalClicks, dailyBreakdown,
+      totalSent: sent.sent,
+      trackedSent: e.trackedSent,
+      draftSent: e.draft.sent,
+      campaignSent: e.campaign.sent,
+      uniqueOpened: e.draft.opened + e.campaign.opened,
+      draftOpened: e.draft.opened,
+      campaignOpened: e.campaign.opened,
+      openRate: e.rates.open,
+      draftOpenRate: e.rates.draftOpen,
+      campaignOpenRate: e.rates.campaignOpen,
+      uniqueClicked: e.draft.clicked,
+      clickRate: e.rates.click,
+      campaignPeople: e.campaign.people,
+      campaignSiteVisitors: e.campaign.siteVisitors,
+      campaignSiteVisitRate: e.rates.campaignSiteVisit,
+      draftReplied: e.draft.replied,
+      draftReplyRate: e.rates.draftReply,
+      campaignRepliedPeople: e.campaign.repliedPeople,
+      campaignReplyRate: e.rates.campaignReply,
+      // Opens and clicks counted per event: draft-path mail only, the one path with counters.
+      totalOpens: e.draft.opens,
+      totalClicks: e.draft.clicks,
+      dailyBreakdown,
     };
   }),
 
@@ -603,15 +585,9 @@ export const smtpConfigRouter = router({
     // fraction of real volume and the bounce rate read several times too high
     // (audit 2026-09-20). The numerator's bounce webhooks resolve campaign
     // bounces into email_suppressions/drafts either way.
-    const [sentRow] = await db
-      .select({ cnt: count(emailDrafts.id) })
-      .from(emailDrafts)
-      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
-    const [areSentRow] = await db
-      .select({ cnt: count(areExecutionQueue.id) })
-      .from(areExecutionQueue)
-      .where(and(eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "sent")));
-    const totalSent = (sentRow?.cnt ?? 0) + (areSentRow?.cnt ?? 0);
+    // The tracked email sends, from the metrics module (F44/O42): this counted
+    // every Revenue Engine step marked sent, LinkedIn ones included, as an email.
+    const totalSent = (await emailEngagement(db, ctx.workspace.id)).trackedSent;
     const bounceRate = totalSent > 0 ? Math.round((totalBounced / totalSent) * 1000) / 10 : 0;
 
     return { hardBounces, softBounces, spamComplaints, totalBounced, totalSent, bounceRate, suppressedEmails };

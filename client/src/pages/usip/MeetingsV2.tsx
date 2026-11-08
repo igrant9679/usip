@@ -17,6 +17,7 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -343,6 +344,8 @@ export default function MeetingsV2() {
   return (
     <Shell title="Meetings">
       <div data-tour-id="meetings-list" className="flex flex-col h-full min-h-0">
+        {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+        <SendingStatusBar surface="meetings" className="shrink-0" />
         {/* Header */}
         <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />

@@ -167,6 +167,7 @@ export default function ResearchMarket() {
                         {scored.map((k) => (
                           <Badge key={k} variant="outline" className="text-[10px]">{SECTOR_SCORE_LABEL[k]} {scores[k]}/5</Badge>
                         ))}
+                        <Badge variant="outline" className={`text-[10px] ${scored.length < SECTOR_SCORE_KEYS.length ? "text-amber-700 dark:text-amber-300" : ""}`}>{scored.length} of {SECTOR_SCORE_KEYS.length} scored</Badge>
                         <Badge variant="outline" className="text-[10px] gap-1"><Users className="size-3" /> {s.personaCount}</Badge>
                       </div>
                     </div>
@@ -281,6 +282,9 @@ export default function ResearchMarket() {
         stale={draft.stale}
         saving={save.isPending}
         onDiscard={draft.discard}
+        merge={draft.merge}
+        current={market?.content}
+        mine={c}
         onSave={() => save.mutate({ id, expectedRevision: draft.baseRevision, content: c as unknown as Record<string, unknown> })}
       />
 

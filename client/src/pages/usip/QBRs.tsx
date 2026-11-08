@@ -7,7 +7,7 @@ import { CalendarCheck2, CalendarPlus, Plus, Sparkles, Presentation } from "luci
 import { useMemo, useState, type ReactNode } from "react";
 import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { toast } from "sonner";
-import { buildIcs } from "@shared/ics";
+import { buildCalendarIcs } from "@shared/ics";
 import { groupQbrs, qbrDay, qbrEnd, qbrHasTime, QBR_DURATIONS, type QbrLike } from "@shared/qbrSchedule";
 
 /** The viewer's calendar day, "YYYY-MM-DD". */
@@ -32,7 +32,8 @@ function downloadInvite(q: QbrLike & { aiPrep?: unknown }, customerName: string)
   if (!q.scheduledAt) return;
   const start = new Date(q.scheduledAt);
   const prep = q.aiPrep as { agenda?: string[] } | null | undefined;
-  const ics = buildIcs({
+  const ics = buildCalendarIcs({
+    product: "QBR",
     uid: `qbr-${q.id}@velocity`,
     title: `QBR: ${customerName}`,
     description: prep?.agenda?.length ? `Agenda:\n${prep.agenda.map((a) => `- ${a}`).join("\n")}` : "Quarterly business review",

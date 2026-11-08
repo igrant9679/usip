@@ -9,9 +9,11 @@ import { readableErrorMessage } from "@/lib/trpcErrorMessage";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { componentMaxes, tierBands as bandsFor, tierThresholdProblem } from "@shared/leadScoreModel";
-import { leadTierLabel, type LeadTier } from "@shared/leadTier";
+import { gradeForTier, leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
-import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge } from "lucide-react";
+import { componentsWhatIf, DEFAULT_SCORE_CONFIG, tierHistogram, tierMoves, TIER_ORDER, type ScoreConfig, type WhatIfLead } from "@shared/leadScoreMath";
+import { AiFitDetails } from "@/components/usip/AiFitDetails";
+import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge, RotateCcw, BarChart3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -35,13 +37,20 @@ type Cfg = {
   notifyOnSalesReady: boolean;
 };
 
-const DEFAULTS: Cfg = {
-  firmoOrgTypeWeight: 15, firmoTitleWeight: 15, firmoCompletenessWeight: 10,
-  behavOpenPoints: 5, behavOpenMax: 15, behavClickPoints: 10, behavClickMax: 20,
-  behavReplyPoints: 25, behavStepPoints: 3, behavBouncePenalty: -10, behavUnsubPenalty: -15,
-  behavDecayPctPer30d: 10, aiFitMax: 30,
-  tierWarmMin: 31, tierHotMin: 61, tierSalesReadyMin: 81, notifyOnSalesReady: true,
-};
+/** The scorer's own defaults, from the shared module the server scores with (U17). */
+const DEFAULTS: Cfg = { ...DEFAULT_SCORE_CONFIG, notifyOnSalesReady: true };
+
+/** The weights and thresholds alone: what the scorer reads. */
+export function weightsOf(cfg: Cfg): ScoreConfig {
+  const { notifyOnSalesReady: _n, ...w } = cfg;
+  return w;
+}
+
+/** Fields whose on-screen value differs from the saved one: what "Unsaved changes" counts (U17). */
+export function unsavedFields(cfg: Cfg, saved: Partial<Cfg> | null | undefined): string[] {
+  if (!saved) return [];
+  return [...Object.keys(FIELD_LABELS), "notifyOnSalesReady"].filter((k) => (cfg as Record<string, unknown>)[k] !== (saved as Record<string, unknown>)[k]);
+}
 
 /** Field names as the form labels them, for a refused save (P121). */
 const FIELD_LABELS: Record<string, string> = {
@@ -126,12 +135,27 @@ export default function LeadScoring() {
   const tierBands = useMemo(() => bandsFor(cfg).map((b) => ({ ...b, color: BAND_COLOR[b.name] })), [cfg]);
   // Out-of-order thresholds can't be saved (P116); say why next to Save.
   const tierProblem = tierThresholdProblem(cfg);
+  // What differs from the saved rules, said beside Save (audit U17).
+  const unsaved = serverCfg ? unsavedFields(cfg, serverCfg as Partial<Cfg>) : [];
+  const atDefaults = Object.keys(DEFAULTS).every((k) => (cfg as Record<string, unknown>)[k] === (DEFAULTS as Record<string, unknown>)[k]);
 
   return (
     <Shell title="Lead Scoring">
       <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three components, added up and capped at 100: firmographic up to ${max.firmographic}, behavioral up to ${max.behavioral}, AI fit up to ${max.aiFit} (${max.sum} pts in all).`}
         icon={<Gauge className="size-5" />}
       >
+        {serverCfg && unsaved.length > 0 && (
+          <span role="status" className="text-xs rounded px-2 py-1 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title={unsaved.map((k) => FIELD_LABELS[k] ?? "Notify on Sales-Ready").join(", ")}>
+            Unsaved changes ({unsaved.length})
+          </span>
+        )}
+        {serverCfg && unsaved.length > 0 && (
+          <Button variant="ghost" onClick={() => setCfg({ ...DEFAULTS, ...(serverCfg as Partial<Cfg>) } as Cfg)}>Discard changes</Button>
+        )}
+        {/* The scorer's defaults into the form; nothing is saved until Save (U17). */}
+        <Button variant="outline" className="bg-card" disabled={!serverCfg || atDefaults} onClick={() => setCfg(DEFAULTS)} title="Put the default weights and thresholds in the form. Save keeps them.">
+          <RotateCcw className="size-4" /> Reset to defaults
+        </Button>
         {isAdmin && (
           <>
             <Button variant="outline" className="bg-card" onClick={askRecompute} disabled={recomputeAll.isPending || jobActive}>
@@ -225,7 +249,9 @@ export default function LeadScoring() {
             </div>
           </div>
 
-          <BreakdownPreview cfg={cfg} unsaved={Object.keys(FIELD_LABELS).some((k) => (cfg as Record<string, unknown>)[k] !== (serverCfg as Record<string, unknown>)[k])} />
+          <WhatIfHistogram cfg={cfg} saved={{ ...DEFAULTS, ...(serverCfg as Partial<Cfg>) } as Cfg} />
+
+          <BreakdownPreview cfg={cfg} unsaved={unsaved.some((k) => k !== "notifyOnSalesReady")} />
         </div>
       )}
     </Shell>
@@ -266,17 +292,17 @@ function BreakdownPreview({ cfg, unsaved }: { cfg: Cfg; unsaved: boolean }) {
   useEffect(() => {
     if (!selected && leads && leads.length) setSelected(leads[0].id);
   }, [leads, selected]);
-  // Scored with the weights on screen while they are unsaved (P118), once
-  // typing pauses; the preview had always shown the saved weights.
-  const weights = useMemo(() => {
-    const { notifyOnSalesReady: _n, ...w } = cfg;
-    return w;
-  }, [cfg]);
-  const previewCfg = useDebouncedValue(weights);
+  // The server sends the lead's inputs and its saved score once; the bars are
+  // scored here, in the browser, with the weights on screen as they are typed,
+  // by the same shared functions the server saves a score with (audit U17;
+  // P118 had the server re-score on every pause in typing).
+  const weights = useMemo(() => weightsOf(cfg), [cfg]);
   const { data: bd, isFetching, error: bdError, refetch: refetchBd } = trpc.leadScoring.breakdown.useQuery(
-    { leadId: selected ?? 0, cfg: unsaved ? previewCfg : undefined },
+    { leadId: selected ?? 0 },
     { enabled: !!selected, placeholderData: (prev) => prev },
   );
+  const local = useMemo(() => (bd?.inputs ? componentsWhatIf(bd.inputs as WhatIfLead, weights) : null), [bd, weights]);
+  const max = componentMaxes(weights);
   const utils = trpc.useUtils();
   const recompute = trpc.leadScoring.recompute.useMutation({
     onSuccess: () => { utils.leadScoring.breakdown.invalidate(); utils.leads.invalidate(); toast.success("Recomputed"); },
@@ -311,14 +337,17 @@ function BreakdownPreview({ cfg, unsaved }: { cfg: Cfg; unsaved: boolean }) {
       ) : (
         <div className="grid gap-4 md:grid-cols-3">
           {/* The three add up to the total (P34), behaviour below zero included (P33). */}
-          <Bar label="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
-          <Bar label="Behavioral" value={bd.behavioral.value} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
-          <Bar label="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons} />
+          <Bar label="Firmographic" value={local?.firmo.value ?? bd.firmographic.value} max={max.firmographic} reasons={local?.firmo.reasons ?? bd.firmographic.reasons} />
+          <Bar label="Behavioral" value={local?.behav.value ?? bd.behavioral.value} max={max.behavioral} reasons={local?.behav.reasons ?? bd.behavioral.reasons} />
+          <Bar label="AI Fit" value={local?.aiFit.value ?? bd.aiFit.value} max={max.aiFit} reasons={local?.aiFit.reasons ?? bd.aiFit.reasons}>
+            {/* The stored assessment in full (audit U32). */}
+            <AiFitDetails details={bd.aiFit.details} />
+          </Bar>
           <div className="md:col-span-3 text-xs space-y-0.5">
             <div className="font-medium">
-              Total {bd.total}/100 · {leadTierLabel(bd.tier as LeadTier)} (Grade {bd.grade}) — the three added up, capped at 0-100
+              Total {local?.score.total ?? bd.total}/100 · {leadTierLabel((local?.score.tier ?? bd.tier) as LeadTier)} (Grade {local ? gradeForTier(local.score.tier) : bd.grade}) — the three added up, capped at 0-100
             </div>
-            <div className="text-muted-foreground">{savedScoreLine(bd.saved as SavedScore, bd.total, { unsavedWeights: unsaved })}</div>
+            <div className="text-muted-foreground">{savedScoreLine(bd.saved as SavedScore, local?.score.total ?? bd.total, { unsavedWeights: unsaved })}</div>
           </div>
           <div className="md:col-span-3">
             <div className="text-xs font-medium mb-1">90-day history</div>
@@ -330,13 +359,61 @@ function BreakdownPreview({ cfg, unsaved }: { cfg: Cfg; unsaved: boolean }) {
   );
 }
 
-function Bar({ label, value, max, reasons }: { label: string; value: number; max: number; reasons: string[] }) {
+/**
+ * Where the newest leads land with the weights on screen against the saved
+ * ones (audit 2026-10-20, U17): a tier histogram scored in the browser from
+ * a sample the server sends once, so it follows every keystroke.
+ */
+function WhatIfHistogram({ cfg, saved }: { cfg: Cfg; saved: Cfg }) {
+  const { data, isLoading, error, refetch } = trpc.leadScoring.whatIfSample.useQuery(undefined, { staleTime: 60_000 });
+  const sample = (data?.leads ?? []) as WhatIfLead[];
+  const draft = useMemo(() => tierHistogram(sample, weightsOf(cfg)), [sample, cfg]);
+  const now = useMemo(() => tierHistogram(sample, weightsOf(saved)), [sample, saved]);
+  const moves = useMemo(() => tierMoves(sample, weightsOf(saved), weightsOf(cfg)), [sample, saved, cfg]);
+  const peak = Math.max(1, ...TIER_ORDER.map((t) => Math.max(draft[t], now[t])));
+  return (
+    <div className="lg:col-span-3 rounded-lg border bg-card p-4">
+      <div className="text-sm font-medium mb-1 flex items-center gap-2"><BarChart3 className="size-4" /> What if: leads by tier</div>
+      <div className="text-xs text-muted-foreground mb-3">
+        {data ? `The newest ${sample.length.toLocaleString()} of ${data.totalLeads.toLocaleString()} leads, scored here with the weights above against the saved ones. Each lead's AI fit is its last assessment.` : "The newest leads, scored with the weights above against the saved ones."}
+      </div>
+      {error ? (
+        <QueryError compact what="the leads to score" message={error.message} onRetry={() => refetch()} />
+      ) : isLoading ? (
+        <div className="text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin inline" /> Loading…</div>
+      ) : sample.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No leads yet.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-4 gap-3" role="img" aria-label={TIER_ORDER.map((t) => `${leadTierLabel(t)}: ${draft[t]} with these weights, ${now[t]} saved`).join("; ")}>
+            {TIER_ORDER.map((t) => (
+              <div key={t} className="flex flex-col items-center gap-1">
+                <div className="h-24 w-full flex items-end justify-center gap-1">
+                  <div className="w-1/3 rounded-t bg-muted-foreground/30" style={{ height: `${(now[t] / peak) * 100}%` }} title={`Saved weights: ${now[t]}`} />
+                  <div className="w-1/3 rounded-t" style={{ height: `${(draft[t] / peak) * 100}%`, background: BAND_COLOR[leadTierLabel(t)] ?? "#64748b" }} title={`These weights: ${draft[t]}`} />
+                </div>
+                <div className="text-xs font-medium">{leadTierLabel(t)}</div>
+                <div className="text-[11px] text-muted-foreground tabular-nums">{draft[t]}{draft[t] !== now[t] ? ` (saved ${now[t]})` : ""}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-muted-foreground mt-2">
+            {moves.up || moves.down ? `${moves.up} would move up a tier, ${moves.down} down.` : "No lead changes tier."} Grey bars are the saved weights.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Bar({ label, value, max, reasons, children }: { label: string; value: number; max: number; reasons: string[]; children?: React.ReactNode }) {
   const pct = Math.max(0, Math.min(100, Math.round((value / Math.max(1, max)) * 100)));
   return (
     <div className="rounded border p-3 bg-background">
       <div className="flex items-baseline justify-between"><div className="text-xs uppercase text-muted-foreground">{label}</div><div className="font-mono text-sm tabular-nums">{value}/{max}</div></div>
       <div className="h-2 mt-1 mb-2 bg-muted rounded overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} /></div>
       <ul className="text-[11px] text-muted-foreground space-y-0.5">{reasons.slice(0, 6).map((r, i) => <li key={i}>• {r}</li>)}</ul>
+      {children && <div className="mt-2 border-t pt-2">{children}</div>}
     </div>
   );
 }

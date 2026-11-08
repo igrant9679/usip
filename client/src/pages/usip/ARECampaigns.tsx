@@ -2,6 +2,7 @@
  * ARE Campaigns — list and create autonomous prospecting campaigns
  */
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -391,6 +392,8 @@ export default function ARECampaigns() {
         </Button>
       </PageHeader>
       <AreSubNav />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="are" />
 
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         {/* Which is which: sequences vs campaigns vs a campaign's sequences (owner ask 2026-09-04). */}

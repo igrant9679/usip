@@ -15,6 +15,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { applyReplyAction, classifyReply, runConversationAutopilotForWorkspace, REPLY_CLASSES } from "../services/replyClassifier";
 import { genuineReplyScope, genuineSocialReplyScope, notOurOutreachScope } from "../services/replyScope";
+import { replySummary } from "../services/activityMetrics";
 
 export const conversationsRouter = router({
   list: workspaceProcedure
@@ -48,34 +49,11 @@ export const conversationsRouter = router({
   stats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { total: 0, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
-    // Aggregate in SQL — counting tens of thousands of rows in JS is wasteful.
-    const [row] = await db.select({
-      total: sql<number>`count(*)`,
-      unhandled: sql<number>`sum(case when \`handledAt\` is null then 1 else 0 end)`,
-      needsClassify: sql<number>`sum(case when \`classifiedAt\` is null then 1 else 0 end)`,
-      willingToMeet: sql<number>`sum(case when \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
-      meetingsProposed: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
-    // `email_replies` is NOT "replies to our outbound" — inboundReplyPoller
-    // inserts a row for EVERY inbound message, with draftId NULL when it
-    // matches no send. Unscoped, this counted the owner's entire synced
-    // mailbox: live on 2026-08-16 it reported 70,484 unhandled replies in LSI
-    // where the true figure is 0, and `total === unhandled` exactly, because
-    // ordinary inbox mail is never "handled" in this sense.
-    //
-    // Home and Analytics both render this procedure, so all three surfaces
-    // were wrong together. attention.ts has always scoped it correctly and
-    // Home even queries that too — then showed this number instead.
-    }).from(emailReplies).where(and(
-      eq(emailReplies.workspaceId, ctx.workspace.id),
-      genuineReplyScope(),
-    ));
-    return {
-      total: Number(row?.total ?? 0),
-      unhandled: Number(row?.unhandled ?? 0),
-      needsClassify: Number(row?.needsClassify ?? 0),
-      willingToMeet: Number(row?.willingToMeet ?? 0),
-      meetingsProposed: Number(row?.meetingsProposed ?? 0),
-    };
+    // Genuine replies only, from the metrics module (audit 2026-10-20, F44):
+    // the Emails page's "inbound" and this total are one count. Unscoped, this
+    // counted the owner's entire synced mailbox — 70,484 "unhandled replies" in
+    // LSI on 2026-08-16 against a true 0 (services/replyScope.ts).
+    return replySummary(db, ctx.workspace.id);
   }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {

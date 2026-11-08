@@ -6,7 +6,7 @@
  * campaigns, but reusable across sequences and prospect search.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, personaCategories, personas, researchSectors } from "../../drizzle/schema";
 import { cleanPersonaResearch } from "@shared/researchShape";
@@ -155,14 +155,37 @@ export const PRESET_PERSONAS = [
  * (audit 2026-10-20, P31). Any member, viewers included, could do both.
  */
 export const personasRouter = router({
+  /**
+   * Every persona, with how many of this workspace's Revenue Engine campaigns
+   * use it and how many of those are active (audit 2026-10-20, U18: "used by
+   * N campaigns"), counted in one grouped read.
+   */
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    return db
+    const rows = await db
       .select()
       .from(personas)
       .where(eq(personas.workspaceId, ctx.workspace.id))
       .orderBy(desc(personas.updatedAt));
+    const ids = rows.map((r) => r.id);
+    const used = ids.length
+      ? await db
+        .select({
+          personaId: areCampaigns.personaId,
+          n: sql<number>`count(*)`,
+          active: sql<number>`sum(case when ${areCampaigns.status} = 'active' then 1 else 0 end)`,
+        })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), inArray(areCampaigns.personaId, ids)))
+        .groupBy(areCampaigns.personaId)
+      : [];
+    const byId = new Map(used.map((u) => [u.personaId, u]));
+    return rows.map((r) => ({
+      ...r,
+      campaignCount: Number(byId.get(r.id)?.n ?? 0),
+      activeCampaignCount: Number(byId.get(r.id)?.active ?? 0),
+    }));
   }),
 
   listPresets: workspaceProcedure.query(() => PRESET_PERSONAS),

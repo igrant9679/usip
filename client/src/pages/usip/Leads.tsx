@@ -27,6 +27,7 @@ import { EditLeadDialog } from "@/components/usip/EditLeadDialog";
 import { pressable } from "@/lib/pressable";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { csvCell } from "@shared/csvCell";
+import { scoredAgo } from "@/lib/leadScoreText";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 /** leads.sendAdHocEmailBulk's cap (server/routers/crm.ts LEAD_BULK_SEND_MAX). */
@@ -342,6 +343,8 @@ export default function Leads() {
                           two different fabrications of a score nobody took. */}
                       <span className={`ml-2 inline-block px-1.5 rounded text-xs ${l.grade ? GRADE_TONE[l.grade] ?? NEUTRAL_TONE : NEUTRAL_TONE}`}>{l.grade ?? "—"}</span>
                       {(() => { const t = tierBadge(l.grade); return <span className={`ml-1 inline-block px-1.5 rounded text-xs ${t.cls}`}>{t.label}</span>; })()}
+                      {/* When this score was worked out (F41). */}
+                      <div className="text-[10px] text-muted-foreground" title={l.scoredAt ? new Date(l.scoredAt).toLocaleString() : undefined}>{scoredAgo(l.scoredAt)}</div>
                     </td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       {(l as any).aiNextAction ? (

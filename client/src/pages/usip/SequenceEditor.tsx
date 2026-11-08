@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { SequenceReport } from "@/components/usip/SequenceReport";
 import { StepTemplatePicker } from "@/components/usip/StepTemplatePicker";
 import { SequenceSendingSettings } from "@/components/usip/SequenceSendingSettings";
+import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
+import { SequenceScheduleSettings } from "@/components/usip/SequenceScheduleSettings";
+import { SequenceTimelinePreview } from "@/components/usip/SequenceTimelinePreview";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -131,7 +135,7 @@ export default function SequenceEditor() {
    * saved, so a sequence could appear to say something it does not send.
    */
   const updateSteps = trpc.sequences.updateSteps.useMutation({
-    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); },
+    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); utils.sequenceTimeline.preview.invalidate({ sequenceId: id }); },
     onError: (e) => {
       toast.error(e.message);
       void seqQ.refetch().then((r) => { if (r.data) setSteps(Array.isArray((r.data as any).steps) ? (r.data as any).steps : []); });
@@ -222,6 +226,8 @@ export default function SequenceEditor() {
   return (
     <Shell title={seq.name}>
       <div className="flex flex-col h-full min-h-0">
+        {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+        <SendingStatusBar surface="sequences" className="shrink-0" />
         {/* header */}
         <div className="relative shrink-0 px-4 pt-2.5 pb-0 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
@@ -267,6 +273,8 @@ export default function SequenceEditor() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto">
+          {/* This sequence's drafts that wait, linked to exactly those (U15). */}
+          <SequenceReviewBanner sequenceId={id} className="mx-4 mt-3 md:mx-6" />
           {/* EDITOR */}
           {tab === "Editor" && (
             <div className="max-w-2xl mx-auto p-4 md:p-6">
@@ -353,6 +361,8 @@ export default function SequenceEditor() {
                   <div className="pt-1"><AddStepButton accent={accent} open={addOpen} setOpen={setAddOpen} onAdd={addStep} /></div>
                 </div>
               )}
+              {/* When the steps really happen, with the engine's own rules (audit 2026-10-20, U4). */}
+              {steps.length > 0 && <SequenceTimelinePreview sequenceId={id} accent={accent} className="mt-5" />}
             </div>
           )}
 
@@ -409,7 +419,9 @@ export default function SequenceEditor() {
                 <h2 className="text-sm font-semibold mb-2">Scheduling</h2>
                 {/* The window the engine really uses (O39): this printed a fixed weekday 8-to-5 window whatever was set, and the default is 08:00–18:00. */}
                 <p className="text-[12px] text-muted-foreground">{describeSendWindow(seq.settings)}</p>
-                <p className="text-[12px] text-muted-foreground mt-1">Sending also waits for the workspace send window in Settings. Change this sequence's window from its canvas, under Sequence settings.</p>
+                <p className="text-[12px] text-muted-foreground mt-1 mb-3">Sending also waits for the workspace send window in Settings.</p>
+                {/* Its own zone and window, here as on the canvas (audit 2026-10-20, U15). */}
+                <SequenceScheduleSettings sequenceId={id} settings={seq.settings} accent={accent} disabled={seq.status === "archived"} />
               </div>
               {/* Review or auto-send, and recipient time, for this sequence (F22, F18). */}
               <SequenceSendingSettings sequenceId={id} settings={seq.settings} accent={accent} />

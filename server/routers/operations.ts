@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
@@ -49,15 +49,18 @@ import { filtersNotApplied } from "@shared/dashboardPresets";
 import { assertInWorkspace, assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
-import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
+import { buildDealStuckPayload, evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
 import { describeRuleActions } from "../services/workflowDryRun";
+import { DryRunRefusal, dryRunRuleAgainstRecord } from "../services/workflowRecordDryRun";
+import { searchWorkflowRecords, workflowEditorOptions } from "../services/workflowEditorData";
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
 import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
 import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
-import { zonedDowHour } from "@shared/availability";
+import { wallTimeToUtcMs, zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { activitiesWhere, activityCountsByType } from "../services/activityMetrics";
 import { dayRangeBounds } from "../services/calendarDeadline";
 import { addMonths, closedIn, instantMonthKey, loadMetricDeals, monthKey, monthLabel, monthToDateRanges, zonedYmd } from "../services/dealMetrics";
 import crypto from "crypto";
@@ -201,17 +204,8 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
        * out-of-enum value in strict mode. The shared handler uses
        * "workflow_fired", which is in it.
        */
-      const payload = {
-        entity: "opportunity",
-        id: deal.id,
-        name: deal.name,
-        stage: deal.stage,
-        daysInStage: deal.daysInStage,
-        value: Number(deal.value ?? 0),
-        winProb: deal.winProb,
-        ownerUserId: deal.ownerId ?? null,
-        ruleName: rule.name,
-      };
+      // One builder for both deal_stuck sites and the dry run (F46).
+      const payload = buildDealStuckPayload(deal, rule.name);
       // deal_stuck was the one trigger that IGNORED its own conditions: both
       // loops ran the actions on every stuck deal, so a rule scoped to
       // "negotiation only, over $50k" alerted on every stalled deal in the
@@ -391,6 +385,66 @@ export const workflowsRouter = router({
   }),
 
   /**
+   * Try a rule against one real record (audit 2026-10-20, F46): the payload its
+   * trigger would carry, which gates and conditions pass, and what each action
+   * would do to that record. Reads only: nothing is written, sent or logged.
+   * Takes the editor's unsaved draft, or a saved rule by id.
+   */
+  dryRun: managerProcedure
+    .input(z.object({
+      id: z.number().int().positive().optional(),
+      draft: z.object({
+        triggerType: z.enum(LIVE_TRIGGER_IDS as unknown as [LiveTrigger, ...LiveTrigger[]]),
+        triggerConfig: z.record(z.string(), z.any()).optional(),
+        conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.any() })).optional(),
+        actions: z.array(z.object({ type: z.string(), params: z.record(z.string(), z.any()) })).optional(),
+      }).optional(),
+      recordType: z.enum(["lead", "contact", "opportunity", "task"]),
+      recordId: z.number().int().positive(),
+      signal: z.string().max(40).optional(),
+      fromStage: z.string().max(60).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let rule = input.draft ?? null;
+      if (!rule) {
+        if (!input.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a rule to try." });
+        const [saved] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
+        if (!saved) throw new TRPCError({ code: "NOT_FOUND" });
+        rule = saved as never;
+      }
+      try {
+        return await dryRunRuleAgainstRecord(db, ctx.workspace.id, rule as never, {
+          recordType: input.recordType, recordId: input.recordId, signal: input.signal ?? null, fromStage: input.fromStage ?? null,
+        });
+      } catch (e) {
+        if (e instanceof DryRunRefusal) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+        throw e;
+      }
+    }),
+
+  /** Names for the editor's pickers (G71): members, sequences and stages. */
+  editorOptions: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { users: [], sequences: [], stages: [], campaigns: [] };
+    return workflowEditorOptions(db, ctx.workspace.id);
+  }),
+
+  /** Records by name, for the dry run's record picker and the editor's account picker (F46, G71). */
+  searchRecords: workspaceProcedure
+    .input(z.object({
+      type: z.enum(["lead", "contact", "opportunity", "task", "account"]),
+      q: z.string().max(80).optional(),
+      ids: z.array(z.number().int().positive()).max(50).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return searchWorkflowRecords(db, ctx.workspace.id, input.type, input.q, input.ids);
+    }),
+
+  /**
    * Check all deal_stuck workflow rules for a workspace and fire any that match.
    * Called by the nightly batch job (or manually from admin panel).
    */
@@ -446,17 +500,8 @@ export const workflowsRouter = router({
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
-          const payload = {
-            entity: "opportunity",
-            id: deal.id,
-            name: deal.name,
-            stage: deal.stage,
-            daysInStage: deal.daysInStage,
-            value: Number(deal.value ?? 0),
-            winProb: deal.winProb,
-            ownerUserId: deal.ownerId ?? null,
-            ruleName: rule.name,
-          };
+          // The same builder as the nightly sweep above (F46).
+          const payload = buildDealStuckPayload(deal, rule.name);
           // Conditions honoured here too — the manual check and the nightly
           // cron must agree about which deals a rule covers.
           if (!evalConditions(normalizeConditions(rule.conditions), payload)) continue;
@@ -1279,13 +1324,9 @@ async function resolveWidgetData(
   };
 
   /* ── Helper: base activity conditions (dates, and the person who did it) ── */
-  const actBase = (...more: any[]) => {
-    const conds: any[] = [eq(activities.workspaceId, workspaceId), ...more];
-    if (filters.ownerUserId) conds.push(eq(activities.actorUserId, filters.ownerUserId));
-    if (range.from) conds.push(sql`${activities.occurredAt} >= ${range.from}`);
-    if (range.to) conds.push(sql`${activities.occurredAt} <= ${range.to}`);
-    return and(...conds);
-  };
+  // The metrics module's definition (audit 2026-10-20, F44), so every
+  // activity widget counts what the rest of the product calls an activity.
+  const actBase = (...more: any[]) => activitiesWhere(workspaceId, { from: range.from, to: range.to, actorUserId: filters.ownerUserId }, ...more);
 
   /* ── Helper: the last six months, in the workspace's zone ── */
   // Stepped from the 1st: setMonth() on the 29th–31st skipped a month and showed
@@ -1352,12 +1393,9 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
       }
       case "activity_counts": {
-        const byType = await db.select({ type: activities.type, n: sql<number>`count(*)` })
-          .from(activities).where(actBase()).groupBy(activities.type);
-        const of = (t: string) => Number(byType.find((r: { type: string }) => r.type === t)?.n ?? 0);
-        const total = byType.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
-        return { type: w.type, title: w.title, value: total, format: "number",
-          breakdown: { calls: of("call"), emails: of("email"), meetings: of("meeting") } };
+        const c = await activityCountsByType(db, workspaceId, { from: range.from, to: range.to, actorUserId: filters.ownerUserId });
+        return { type: w.type, title: w.title, value: c.total, format: "number",
+          breakdown: { calls: c.calls, emails: c.emails, meetings: c.meetings } };
       }
       case "meetings_booked": {
         const actConds = actBase(eq(activities.type, "meeting"));
@@ -1438,8 +1476,11 @@ async function resolveWidgetData(
       return { type: w.type, title: w.title, series: out };
     }
     if (cfg.metric === "activities") {
+      // Only the six months it shows (O41/G58): this read every activity ever logged.
+      const first = months[0]!.key.split("-").map(Number);
+      const sixMonthsAgo = new Date(wallTimeToUtcMs(tz, first[0]!, first[1]!, 1, 0));
       const acts = await db.select({ type: activities.type, occurredAt: activities.occurredAt })
-        .from(activities).where(actBase());
+        .from(activities).where(actBase(gte(activities.occurredAt, sixMonthsAgo)));
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
         const idx = at(instantMonthKey(tz, a.occurredAt));

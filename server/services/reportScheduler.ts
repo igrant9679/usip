@@ -221,14 +221,30 @@ export async function emailSavedReport(reportId: number, workspaceId: number): P
   const [r] = await db.select().from(savedReports)
     .where(and(eq(savedReports.id, reportId), eq(savedReports.workspaceId, workspaceId))).limit(1);
   if (!r) return { ok: false, reason: "Report not found" };
+  // Every attempt's outcome is kept, so the Reports page can say when the
+  // report last went and why the last try did not (audit 2026-10-20, F45).
+  // Recording only: when a report is due still reads scheduleLastSentAt.
+  const outcome = async (res: { ok: boolean; reason?: string; sentTo?: number }) => {
+    try {
+      await db.update(savedReports).set({
+        scheduleLastAttemptAt: new Date(),
+        scheduleLastResult: res.ok ? "sent" : "failed",
+        scheduleLastError: res.ok ? null : String(res.reason ?? "Send failed").slice(0, 500),
+        ...(res.ok ? { scheduleLastSentAt: new Date(), scheduleLastSentTo: res.sentTo ?? null } : {}),
+      } as never).where(and(eq(savedReports.id, r.id), eq(savedReports.workspaceId, r.workspaceId)));
+    } catch (e) {
+      console.warn("[ReportScheduler] could not record the outcome:", (e as Error)?.message ?? e);
+    }
+    return res;
+  };
   const configured = String(r.scheduleRecipients ?? "").split(/[,;\s]+/).map((e) => e.trim()).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
-  if (configured.length === 0) return { ok: false, reason: "No valid recipients configured" };
+  if (configured.length === 0) return outcome({ ok: false, reason: "No valid recipients configured" });
 
   // A revoked member must stop receiving the workspace's data, not just stop
   // being able to log in and look at it.
   const recipients = activeRecipients(configured, await revokedMemberEmails(db, r.workspaceId));
   if (recipients.length === 0) {
-    return { ok: false, reason: "All configured recipients are deactivated members" };
+    return outcome({ ok: false, reason: "All configured recipients are deactivated members" });
   }
   const result = await runSpec(r.workspaceId, r.config as ReportSpec);
   const tz = await getWorkspaceTimezone(r.workspaceId);
@@ -237,9 +253,8 @@ export async function emailSavedReport(reportId: number, workspaceId: number): P
     subject: `Velocity report: ${r.name}`,
     html: renderReportHtml(r.name, result, tz),
   });
-  if (!send.ok) return { ok: false, reason: send.reason };
-  await db.update(savedReports).set({ scheduleLastSentAt: new Date() }).where(eq(savedReports.id, r.id));
-  return { ok: true, sentTo: recipients.length };
+  if (!send.ok) return outcome({ ok: false, reason: send.reason });
+  return outcome({ ok: true, sentTo: recipients.length });
 }
 
 /** Hourly cron tick (registered in _core/index.ts). */

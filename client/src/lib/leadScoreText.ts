@@ -27,6 +27,17 @@ export function savedScoreLine(saved: SavedScore, total: number, opts: { unsaved
   return `Saved, ${when}.`;
 }
 
+/**
+ * A lead's last score, for the Leads table (audit 2026-10-20, F41): the
+ * hourly re-score keeps scores current on its own, so the table says when
+ * each one was worked out, and "not scored yet" for one never scored.
+ */
+export function scoredAgo(scoredAt: Date | string | null | undefined, now: number = Date.now()): string {
+  if (!scoredAt) return "not scored yet";
+  const at = new Date(scoredAt).getTime();
+  return Number.isFinite(at) ? `scored ${relativeTime(at, now)}` : "not scored yet";
+}
+
 function relativeTime(at: number, now: number): string {
   const mins = Math.round((now - at) / 60000);
   if (mins < 1) return "just now";

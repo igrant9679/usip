@@ -49,10 +49,52 @@ export function weightedScore(scores: Partial<Record<SectorScoreKey, number | nu
   return max ? Math.round((sum / max) * 100) : null;
 }
 
+/**
+ * How many of the five scores are set (audit 2026-10-20, U30). The weighted
+ * score leaves an unset one out, so a sector scored on one line can read 100;
+ * the scorecard says "n of 5 scored" beside it.
+ */
+export function scoredCount(scores: Partial<Record<SectorScoreKey, number | null>>): number {
+  return SECTOR_SCORE_KEYS.filter((k) => scores[k] != null).length;
+}
+
+/* ── Money flow ─────────────────────────────────────────────────────────── */
+
+/** A money-flow node's column: where money comes from (0), who passes it on (1), who receives it (2). */
+export type MoneyColumn = 0 | 1 | 2;
+
+/**
+ * The money-flow links a sector states, resolved to the nodes they name
+ * (audit 2026-10-20, U30). An end matches a source, an intermediary's name or
+ * a recipient's type, ignoring case and spaces at the ends; money flows left
+ * to right, so a link must run to a later column. `unmatched` are links
+ * naming no node (or running backwards), for the editor to point out; the
+ * diagram draws `links` and nothing else.
+ */
+export function statedMoneyLinks(flow: SectorContent["facts"]["moneyFlow"]): {
+  links: { from: { col: MoneyColumn; label: string }; to: { col: MoneyColumn; label: string } }[];
+  unmatched: { from: string; to: string }[];
+} {
+  const nodes = new Map<string, { col: MoneyColumn; label: string }>();
+  const add = (label: string, col: MoneyColumn) => { const k = label.trim().toLowerCase(); if (k && !nodes.has(k)) nodes.set(k, { col, label }); };
+  flow.sources.forEach((s) => add(s, 0));
+  flow.intermediaries.forEach((i) => add(i.name, 1));
+  flow.recipients.forEach((r) => add(r.type, 2));
+  const links: { from: { col: MoneyColumn; label: string }; to: { col: MoneyColumn; label: string } }[] = [];
+  const unmatched: { from: string; to: string }[] = [];
+  for (const l of flow.links ?? []) {
+    const a = nodes.get(l.from.trim().toLowerCase());
+    const b = nodes.get(l.to.trim().toLowerCase());
+    if (a && b && a.col < b.col) links.push({ from: a, to: b });
+    else unmatched.push(l);
+  }
+  return { links, unmatched };
+}
+
 /** Highest score first; sectors with no score last, by name. */
-export function scorecard(sectors: ReportSector[], weights: ScoreWeights): (ReportSector & { score: number | null })[] {
+export function scorecard(sectors: ReportSector[], weights: ScoreWeights): (ReportSector & { score: number | null; scored: number })[] {
   return sectors
-    .map((s) => ({ ...s, score: weightedScore(s.content.scores, weights) }))
+    .map((s) => ({ ...s, score: weightedScore(s.content.scores, weights), scored: scoredCount(s.content.scores) }))
     .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.content.name.localeCompare(b.content.name));
 }
 

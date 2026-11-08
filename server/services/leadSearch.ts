@@ -21,6 +21,8 @@ export const LEAD_LIST_COLUMNS = {
   phone: leads.phone, company: leads.company, title: leads.title, source: leads.source,
   status: leads.status, score: leads.score, grade: leads.grade, ownerUserId: leads.ownerUserId,
   aiNextAction: leads.aiNextAction, aiNextActionNote: leads.aiNextActionNote, createdAt: leads.createdAt,
+  // When the lead was last scored, shown under its score (audit 2026-10-20, F41).
+  scoredAt: leads.scoredAt,
 };
 
 const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);

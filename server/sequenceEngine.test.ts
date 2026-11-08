@@ -65,6 +65,11 @@ vi.mock("drizzle-orm", () => ({
   notInArray: (col: any, vals: any[]) => ({ type: "notInArray", col, vals }),
   lte: (col: any, val: any) => ({ type: "lte", col, val }),
   or: (...args: any[]) => ({ type: "or", args }),
+  // 2026-11-07: getEnrollmentStats counts in SQL through services/sequenceAnalytics
+  // (audit 2026-10-20, O41), which imports these.
+  gt: (col: any, val: any) => ({ type: "gt", col, val }),
+  gte: (col: any, val: any) => ({ type: "gte", col, val }),
+  sql: (strings: TemplateStringsArray, ...vals: any[]) => ({ type: "sql", strings, vals }),
 }));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -73,6 +78,7 @@ function makeSelectChain(rows: any[]) {
   const chain: any = {
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
+    groupBy: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue(rows),
   };
   // Also allow awaiting the chain directly (without .limit)
@@ -339,13 +345,13 @@ describe("Sequence Execution Engine", () => {
 
   describe("getEnrollmentStats", () => {
     it("returns correct counts by status", async () => {
+      // 2026-11-07: counted in SQL, grouped by status (audit 2026-10-20, O41),
+      // so the database answers one row per status rather than every enrolment.
       const rows = [
-        { status: "active" },
-        { status: "active" },
-        { status: "paused" },
-        { status: "finished" },
-        { status: "exited" },
-        { status: "exited" },
+        { status: "active", n: 2 },
+        { status: "paused", n: 1 },
+        { status: "finished", n: 1 },
+        { status: "exited", n: 2 },
       ];
 
       mockSelect.mockReturnValueOnce(makeSelectChain(rows));

@@ -19,7 +19,8 @@ export function ReportInsights({ result, viz, accent }: { result: any; viz: stri
   /* grouped: chart of group → aggregate + tiles */
   if (result.grouped) {
     const series = result.rows.map((r: any) => ({ label: String(r.group), value: Number(r.agg) || 0 }));
-    const total = series.reduce((s: number, x: any) => s + x.value, 0);
+    // Over every group when the server says (F45), not just this page's.
+    const total = result.totals?.agg != null ? Number(result.totals.agg) : series.reduce((s: number, x: any) => s + x.value, 0);
     const top = [...series].sort((a: any, b: any) => b.value - a.value)[0];
     const aggLabel = result.columns[1]?.label ?? "Value";
     // An average doesn't add up across groups, so it gets no total or share.
@@ -27,7 +28,7 @@ export function ReportInsights({ result, viz, accent }: { result: any; viz: stri
     return (
       <div className="space-y-3 border-b border-border/70 px-4 py-3">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Tile label="Groups" value={result.rows.length} />
+          <Tile label="Groups" value={(result.total ?? result.rows.length).toLocaleString()} />
           {additive && <Tile label={`Total ${aggLabel.toLowerCase()}`} value={fmtN(total)} />}
           <Tile label="Top group" value={top ? String(top.label).slice(0, 18) : "—"} />
           {additive && <Tile label="Top share" value={top && total > 0 ? `${Math.round((top.value / total) * 100)}%` : "—"} />}
@@ -39,41 +40,26 @@ export function ReportInsights({ result, viz, accent }: { result: any; viz: stri
     );
   }
 
-  /* flat: rows-per-day trend when a date column exists + numeric sums */
+  /* flat: rows and each number column's total, over every matching row (F45) */
   const dateCol = result.columns.find((c: any) => c.kind === "date");
-  const numCols = result.columns.filter((c: any) => c.kind === "number").slice(0, 2);
+  const numCols = result.columns.filter((c: any) => c.kind === "number" && (!result.totals || c.key in result.totals)).slice(0, 3);
   const tiles = [
-    <Tile key="rows" label="Rows" value={result.rows.length} />,
-    ...numCols.map((c: any) => (
-      <Tile key={c.key} label={`Sum ${c.label.toLowerCase()}`} value={fmtN(result.rows.reduce((s: number, r: any) => s + (Number(r[c.key]) || 0), 0))} />
-    )),
+    <Tile key="rows" label="Rows" value={(result.total ?? result.rows.length).toLocaleString()} />,
+    ...numCols.map((c: any) => {
+      const avg = result.totalKinds?.[c.key] === "avg";
+      const v = result.totals && c.key in result.totals
+        ? Number(result.totals[c.key] ?? 0)
+        : result.rows.reduce((s: number, r: any) => s + (Number(r[c.key]) || 0), 0);
+      return <Tile key={c.key} label={`${avg ? "Avg" : "Sum"} ${c.label.toLowerCase()}`} value={fmtN(v)} />;
+    }),
   ];
-  let trend: { label: string; value: number }[] | null = null;
-  if (dateCol) {
-    const byDay = new Map<string, number>();
-    for (const r of result.rows) {
-      const v = r[dateCol.key];
-      if (!v) continue;
-      const d = new Date(v as string);
-      if (Number.isNaN(d.getTime())) continue;
-      const k = d.toISOString().slice(0, 10);
-      byDay.set(k, (byDay.get(k) ?? 0) + 1);
-    }
-    if (byDay.size >= 2) {
-      trend = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-30)
-        .map(([k, n]) => ({ label: k.slice(5), value: n }));
-    }
-  }
+  // The per-day chart that sat here counted this PAGE's rows by UTC day. A
+  // date grouped by day, week or month is the real chart, in the workspace's zone.
   return (
     <div className="space-y-3 border-b border-border/70 px-4 py-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{tiles}</div>
-      {trend && (
-        <div className="rounded-xl border bg-card p-3 shadow-sm">
-          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Rows per day · {dateCol.label}
-          </div>
-          <DashboardChartRenderer data={{ type: "area", series: trend }} height={200} />
-        </div>
+      {dateCol && (
+        <p className="text-[11.5px] text-muted-foreground">To chart this over time, group by {dateCol.label.toLowerCase()} by day, week or month.</p>
       )}
     </div>
   );

@@ -35,6 +35,11 @@ type Task = {
   relatedId?: number | null;
 };
 
+/** The open call queue shows this many, soonest due first; the counts above are whole. */
+const CALL_QUEUE_LIMIT = 200;
+/** The latest completed calls shown. */
+const DONE_SHOWN = 10;
+
 function recordHref(t: Task): string | null {
   if (!t.relatedType || !t.relatedId) return null;
   switch (t.relatedType) {
@@ -200,17 +205,23 @@ export default function Calls() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const { data, isLoading, error, refetch } = trpc.tasks.list.useQuery({});
-  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
+  // Call tasks only, filtered, ordered and bounded on the server (audit
+  // 2026-10-20, O41): this read every task in the workspace to keep the call
+  // tasks, and counted them in the browser, on the browser's day. The counts
+  // are tasks.stats for call tasks: the workspace's day, the Tasks page's rule.
+  const { data, isLoading, error, refetch } = trpc.tasks.list.useQuery({ type: "call", status: "open", limit: CALL_QUEUE_LIMIT, order: "soonest" });
+  const { data: doneData } = trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent" });
+  const { data: counts } = trpc.tasks.stats.useQuery({ type: "call" });
+  const setStatus = trpc.tasks.setStatus.useMutation({
+    onSuccess: () => { utils.tasks.list.invalidate(); utils.tasks.stats.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
 
-  const calls = useMemo(() => ((data ?? []) as Task[]).filter((t) => (t.type ?? "").toLowerCase() === "call"), [data]);
-
+  const open = useMemo(() => (data ?? []) as Task[], [data]);
+  const done = useMemo(() => (doneData ?? []) as Task[], [doneData]);
+  // Open or in progress, as the Tasks page counts it.
+  const openCount = counts?.open ?? open.length;
   const now = new Date().getTime();
-  const startOfTomorrow = new Date(); startOfTomorrow.setHours(24, 0, 0, 0);
-  const open = calls.filter((c) => c.status === "open");
-  const done = calls.filter((c) => c.status === "done");
-  const dueToday = open.filter((c) => c.dueAt && new Date(c.dueAt).getTime() < startOfTomorrow.getTime());
-  const overdue = open.filter((c) => c.dueAt && new Date(c.dueAt).getTime() < now);
 
   // open queue sorted by due date (nulls last)
   const queue = [...open].sort((a, b) => {
@@ -269,10 +280,10 @@ export default function Calls() {
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {stat("Open calls", open.length)}
-            {stat("Due today", dueToday.length, dueToday.length ? "warning" : undefined)}
-            {stat("Overdue", overdue.length, overdue.length ? "danger" : undefined)}
-            {stat("Completed", done.length)}
+            {stat("Open calls", openCount)}
+            {stat("Due today", counts?.dueToday ?? 0, counts?.dueToday ? "warning" : undefined)}
+            {stat("Overdue", counts?.overdue ?? 0, counts?.overdue ? "danger" : undefined)}
+            {stat("Completed", counts?.completed ?? done.length)}
           </div>
 
           <AiCallQueue accent={accent} />
@@ -299,13 +310,16 @@ export default function Calls() {
                 queue.map((c) => <Row key={c.id} c={c} />)
               )}
             </div>
+            {open.length >= CALL_QUEUE_LIMIT ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">Showing the first {CALL_QUEUE_LIMIT} open calls, soonest due first.</p>
+            ) : null}
           </section>
 
           {done.length > 0 && (
             <section>
-              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2 text-muted-foreground"><Check className="size-4" /> Completed ({done.length})</h2>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2 text-muted-foreground"><Check className="size-4" /> Completed ({counts?.completed ?? done.length}{(counts?.completed ?? 0) > done.length ? `, latest ${done.length}` : ""})</h2>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm opacity-80">
-                {done.slice(0, 10).map((c) => <Row key={c.id} c={c} />)}
+                {done.map((c) => <Row key={c.id} c={c} />)}
               </div>
             </section>
           )}
