@@ -348,7 +348,10 @@ describe("trigger coverage (the inventory)", () => {
      */
     const bulk = [
       "server/routers/imports.ts",
-      "server/routers/prospectImports.ts",
+      // 2026-11-07 (CRMP, F32): the LeadRocks importer became a preset of
+      // imports.ts; its mapping and the import's Undo are bulk paths too.
+      "server/services/importPresets.ts",
+      "server/services/importUndo.ts",
       "server/routers/unipile.ts",
       "server/routers/linkedinFinder.ts",
       "server/routers/placesSearch.ts",

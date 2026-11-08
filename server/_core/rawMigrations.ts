@@ -5177,6 +5177,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F32 and R86: one import pipeline. The uploaded file is
+  // kept here under a token for a day, so validation and commit read it
+  // instead of the browser sending it again; the last validation's error rows
+  // ride with it for the full error report. An import records where it went,
+  // which preset read it and the companies it created, so "Undo this import"
+  // can remove what that import made and nothing else. All additive and
+  // nullable: existing imports read as before (and cannot be undone, having
+  // recorded no companies).
+  {
+    name: "0371_import_files.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `import_files` (`id` int AUTO_INCREMENT PRIMARY KEY, `token` varchar(64) NOT NULL, `workspaceId` int NOT NULL, `userId` int NOT NULL, `filename` varchar(255) NOT NULL, `preset` varchar(32) NULL, `content` longtext NOT NULL, `byteSize` int NOT NULL DEFAULT 0, `rowCount` int NOT NULL DEFAULT 0, `lastErrorRows` json NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `expiresAt` timestamp NOT NULL, UNIQUE KEY `ux_import_files_token` (`token`), KEY `ix_import_files_owner` (`workspaceId`, `userId`))",
+      "ALTER TABLE `contact_imports` ADD COLUMN `destination` varchar(16) NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `preset` varchar(32) NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `createdAccountIds` json NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoneAt` timestamp NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoneByUserId` int NULL",
+      "ALTER TABLE `contact_imports` ADD COLUMN `undoSummary` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

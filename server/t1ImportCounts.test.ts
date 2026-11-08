@@ -83,7 +83,13 @@ describe("errors are counted and reported in full", () => {
     expect(page).not.toContain("{errorRows.length}");
     expect(page).not.toContain("errorRows.length > 20");
     expect(page).toContain("… and {errorCount - 20} more.");
+    // 2026-11-07 (CRMP, F32): the report is built on the server from every
+    // error row the validation kept with the upload, with each row's own
+    // columns; the page downloads it. Still every row, not the first 200.
     const report = page.slice(page.indexOf("function downloadErrorReport"), page.indexOf("const totalRows"));
-    expect(report).toContain("...errorRows.map((r) =>");
+    expect(report).toContain("const r = await utils.imports.errorReport.fetch({ fileToken });");
+    const router = readFileSync("server/routers/imports.ts", "utf8");
+    expect(router).toContain("if (read.fileToken) await saveImportFileErrors(wsId, ctx.user.id, read.fileToken, errorRows);");
+    expect(router).toContain("const errs = f.lastErrorRows ?? [];");
   });
 });

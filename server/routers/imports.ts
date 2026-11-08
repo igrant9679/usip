@@ -18,6 +18,13 @@ import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonic
 import { normalizedAccountFields } from "../services/company/normalize";
 import { describeWriteError } from "../services/dbWriteError";
 import { assertOwnerInWorkspace } from "../services/foreignIds";
+import { normalizeLinkedinUrl } from "../services/suppression";
+import { csvCell } from "@shared/csvCell";
+import { requireMinRole } from "../_core/workspace";
+import {
+  deleteImportFile, loadImportFile, saveImportFile, saveImportFileErrors, setImportFilePreset, type ImportPreset,
+} from "../services/importFiles";
+import { applyPreset, detectPreset, type PresetExtra } from "../services/importPresets";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -215,6 +222,8 @@ export type ImportRowClass = {
   emailKey: string | null;
   /** name+company identity, when derivable — the caller records it. */
   nameKey: string | null;
+  /** The LinkedIn profile ("in/jane-doe"), when the row has one — the caller records it. */
+  linkedinKey?: string | null;
 };
 
 export function classifyImportRow(
@@ -226,6 +235,15 @@ export function classifyImportRow(
     seenNameKeys: Set<string>;
     matchOnNameCompany: boolean;
     skipDuplicates: boolean;
+    /**
+     * LinkedIn profiles already in the destination and earlier in this file
+     * (audit 2026-10-20, F32). A profile is one person however its URL is
+     * spelled, so it is a duplicate key like an address; the LeadRocks
+     * importer this pipeline replaced deduped on it. Optional: a caller that
+     * passes neither set gets the email and name rules alone.
+     */
+    existingLinkedin?: Set<string>;
+    seenLinkedin?: Set<string>;
     /**
      * Which fields this row must carry, from `requiredFieldKeysFor(destination)`.
      *
@@ -268,19 +286,25 @@ export function classifyImportRow(
 
   const emailKey = mapped.email ? mapped.email.toLowerCase() : null;
   const nameKey = nameCompanyKey(mapped.firstName, mapped.lastName, mapped.company);
+  const linkedinKey = mapped.linkedinUrl ? normalizeLinkedinUrl(mapped.linkedinUrl) : null;
+  const linkedinDup = !!linkedinKey && !!(opts.existingLinkedin?.has(linkedinKey) || opts.seenLinkedin?.has(linkedinKey));
 
   if (emailKey) {
     const dup = opts.existingEmails.has(emailKey) || opts.seenEmails.has(emailKey);
-    if (dup) {
+    if (dup || linkedinDup) {
       return {
         status: opts.skipDuplicates ? "duplicate" : "ok",
-        reason: "Duplicate email",
+        reason: dup ? "Duplicate email" : "Duplicate LinkedIn profile",
         isDuplicate: true,
         emailKey,
         nameKey,
+        linkedinKey,
       };
     }
-    return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey };
+    return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey, linkedinKey };
+  }
+  if (linkedinDup) {
+    return { status: opts.skipDuplicates ? "duplicate" : "ok", reason: "Duplicate LinkedIn profile", isDuplicate: true, emailKey, nameKey, linkedinKey };
   }
 
   // No email: email dedup is structurally blind to this row. Fall back to
@@ -294,10 +318,11 @@ export function classifyImportRow(
         isDuplicate: true,
         emailKey,
         nameKey,
+        linkedinKey,
       };
     }
   }
-  return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey };
+  return { status: "ok", reason: "", isDuplicate: false, emailKey, nameKey, linkedinKey };
 }
 
 export function nameCompanyKey(
@@ -337,7 +362,7 @@ async function existingRowsForDestination(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   wsId: number,
   destination: ImportDestination,
-): Promise<Array<{ email: string | null; firstName: string | null; lastName: string | null; companyName: string | null }>> {
+): Promise<Array<{ email: string | null; firstName: string | null; lastName: string | null; companyName: string | null; linkedinUrl: string | null }>> {
   if (destination === "prospects") {
     return db
       .select({
@@ -345,6 +370,7 @@ async function existingRowsForDestination(
         firstName: prospects.firstName,
         lastName: prospects.lastName,
         companyName: prospects.company,
+        linkedinUrl: prospects.linkedinUrl,
       })
       .from(prospects)
       .where(eq(prospects.workspaceId, wsId));
@@ -355,9 +381,20 @@ async function existingRowsForDestination(
       firstName: contacts.firstName,
       lastName: contacts.lastName,
       companyName: contacts.companyName,
+      linkedinUrl: contacts.linkedinUrl,
     })
     .from(contacts)
     .where(eq(contacts.workspaceId, wsId));
+}
+
+/** LinkedIn profiles already in the destination, normalized ("in/jane-doe"). */
+function linkedinKeysOf(rows: Array<{ linkedinUrl: string | null }>): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    const k = r.linkedinUrl ? normalizeLinkedinUrl(r.linkedinUrl) : null;
+    if (k) out.add(k);
+  }
+  return out;
 }
 
 /* ─── Wizard-fidelity helpers (pure, exported for tests) ─────────────────── */
@@ -410,16 +447,89 @@ export function summarizeErrorReasons(
     .slice(0, 8);
 }
 
+/* ─── The one pipeline's input (audit 2026-10-20, F32, R86) ─────────────── */
+
+/** A file as the importer reads it: through its preset when it has one. */
+type ImportRead = {
+  headers: string[];
+  rows: Record<string, string>[];
+  /** Per row, what a preset knows that no column holds; null without a preset. */
+  extras: PresetExtra[] | null;
+  preset: ImportPreset | null;
+  presetMapping: Record<string, string> | null;
+  presetRequired: string[];
+  filename: string | null;
+  fileToken: string | null;
+  lastErrorRows: Array<{ rowIndex: number; reason: string }> | null;
+  /** The file as uploaded, for the error report's own columns. */
+  original: { headers: string[]; rows: Record<string, string>[] };
+};
+
+function readThroughPreset(text: string, preset: ImportPreset | null) {
+  const parsed = parseCSVText(text);
+  if (!preset) return { headers: parsed.headers, rows: parsed.rows, extras: null, presetMapping: null, presetRequired: [] as string[], original: parsed };
+  const p = applyPreset(preset, parsed.headers, parsed.rows);
+  return { headers: p.headers, rows: p.rows, extras: p.extras, presetMapping: p.mapping, presetRequired: p.requiredFields, original: parsed };
+}
+
+/**
+ * The stored upload by its token. `csvText` is still read when a caller sends
+ * it with no token (anything written before the token existed), with no preset.
+ */
+async function readImport(ws: number, userId: number, input: { fileToken?: string; csvText?: string }): Promise<ImportRead> {
+  if (input.fileToken) {
+    const f = await loadImportFile(ws, userId, input.fileToken);
+    return { ...readThroughPreset(f.content, f.preset), preset: f.preset, filename: f.filename, fileToken: f.token, lastErrorRows: f.lastErrorRows };
+  }
+  if (input.csvText != null) return { ...readThroughPreset(input.csvText, null), preset: null, filename: null, fileToken: null, lastErrorRows: null };
+  throw new TRPCError({ code: "BAD_REQUEST", message: "Upload the file first." });
+}
+
+/** What the mapping step shows about a file. */
+function describeFile(r: Pick<ImportRead, "headers" | "rows" | "preset" | "presetMapping">) {
+  return {
+    headers: r.headers,
+    previewRows: r.rows.slice(0, 5),
+    totalRows: r.rows.length,
+    systemFields: SYSTEM_FIELDS,
+    /** Fill counts + samples per column, for the mapping step's context. */
+    columnStats: buildColumnStats(r.headers, r.rows),
+    /** The preset reading the file ("leadrocks"), or null. */
+    preset: r.preset,
+    /** The preset's own mapping, each column to its field; null without one. */
+    presetMapping: r.presetMapping,
+  };
+}
+
+/** Destination's required fields plus the preset's (LeadRocks needs a profile URL). */
+function requiredFieldsOf(destination: ImportDestination, r: Pick<ImportRead, "presetRequired">): string[] {
+  return Array.from(new Set([...requiredFieldKeysFor(destination), ...r.presetRequired]));
+}
+
+/** The full error report: the file's own columns, then the row number and why (F32). */
+export function errorReportCsv(headers: string[], rows: Array<{ rowIndex: number; reason: string; data: Record<string, unknown> | null }>): string {
+  const lines = [[...headers, "Row", "Reason"].map((h) => csvCell(h)).join(",")];
+  for (const r of rows) {
+    lines.push([...headers.map((h) => csvCell(r.data?.[h] ?? "")), csvCell(r.rowIndex), csvCell(r.reason)].join(","));
+  }
+  return lines.join("\n");
+}
+
 export const importsRouter = router({
-  /** Step 1: Parse CSV text, return headers + first 5 preview rows */
+  /**
+   * Step 1: read the file once, keep it on the server under a token (R86),
+   * and return its columns. A LeadRocks export is read through the LeadRocks
+   * preset unless `preset: "none"` (F32).
+   */
   parseCSV: workspaceProcedure
     .input(
       z.object({
         csvText: z.string().max(50 * 1024 * 1024), // 50 MB max
         filename: z.string().max(255),
+        preset: z.enum(["leadrocks", "none"]).optional(),
       }),
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { headers, rows } = parseCSVText(input.csvText);
@@ -432,21 +542,40 @@ export const importsRouter = router({
           message: `CSV contains ${rows.length.toLocaleString()} rows. Maximum is 50,000.`,
         });
       }
-      return {
-        headers,
-        previewRows: rows.slice(0, 5),
-        totalRows: rows.length,
-        systemFields: SYSTEM_FIELDS,
-        /** Fill counts + samples per column, for the mapping step's context. */
-        columnStats: buildColumnStats(headers, rows),
-      };
+      const detectedPreset = detectPreset(headers);
+      const preset: ImportPreset | null = input.preset === "none" ? null : (input.preset ?? detectedPreset);
+      if (preset && preset !== detectedPreset) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This file is not a LeadRocks export: it has no 'Linked Url', 'Company Website' and 'Work Email #1' columns." });
+      }
+      const fileToken = await saveImportFile({
+        workspaceId: ctx.workspace.id, userId: ctx.user.id, filename: input.filename, content: input.csvText, rowCount: rows.length, preset,
+      });
+      const r = readThroughPreset(input.csvText, preset);
+      return { fileToken, detectedPreset, ...describeFile({ ...r, preset }) };
+    }),
+
+  /** Read the stored upload with or without its preset (F32); nothing is uploaded again. */
+  setPreset: workspaceProcedure
+    .input(z.object({ fileToken: z.string().uuid(), preset: z.enum(["leadrocks"]).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const f = await loadImportFile(ctx.workspace.id, ctx.user.id, input.fileToken);
+      const detectedPreset = detectPreset(parseCSVText(f.content).headers);
+      if (input.preset && input.preset !== detectedPreset) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This file is not a LeadRocks export." });
+      }
+      await setImportFilePreset(ctx.workspace.id, ctx.user.id, f.token, input.preset);
+      const r = readThroughPreset(f.content, input.preset);
+      return { fileToken: f.token, detectedPreset, ...describeFile({ ...r, preset: input.preset }) };
     }),
 
   /** Step 2: Validate rows with field mapping, return validation report */
   validateRows: workspaceProcedure
     .input(
       z.object({
-        csvText: z.string(),
+        /** The token parseCSV returned: the stored file is read, not sent again (R86). */
+        fileToken: z.string().uuid().optional(),
+        /** Only for a caller with no token. */
+        csvText: z.string().optional(),
         filename: z.string().max(255),
         /** { "CSV Column Name": "systemFieldKey" | null } */
         fieldMapping: z.record(z.string(), z.string().nullable()),
@@ -465,13 +594,14 @@ export const importsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { headers, rows } = parseCSVText(input.csvText);
+      const read = await readImport(ctx.workspace.id, ctx.user.id, input);
+      const { rows } = read;
       const wsId = ctx.workspace.id;
 
       const mapping = input.fieldMapping as Record<string, string | null>;
       assertNoDuplicateMappings(mapping);
       assertRequiredFieldsMapped(mapping, input.destination);
-      const requiredFields = requiredFieldKeysFor(input.destination);
+      const requiredFields = requiredFieldsOf(input.destination, read);
 
       // Fetch existing contacts for duplicate detection. Name+company is pulled
       // too so the opt-in matcher has something to compare against.
@@ -479,6 +609,8 @@ export const importsRouter = router({
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
+      const existingLinkedin = linkedinKeysOf(existingContacts);
+      const seenLinkedin = new Set<string>();
       const existingNameKeys = new Set<string>();
       if (input.matchOnNameCompany) {
         for (const c of existingContacts) {
@@ -501,7 +633,7 @@ export const importsRouter = router({
       }
       const duplicateSamples: Array<{
         rowIndex: number; name: string; email: string | null;
-        matchedBy: "email" | "name + company" | "earlier row in this file";
+        matchedBy: "email" | "name + company" | "LinkedIn profile" | "earlier row in this file";
         existingName: string | null;
       }> = [];
 
@@ -535,6 +667,8 @@ export const importsRouter = router({
           seenEmails,
           existingNameKeys,
           seenNameKeys,
+          existingLinkedin,
+          seenLinkedin,
           matchOnNameCompany: input.matchOnNameCompany,
           skipDuplicates: input.skipDuplicates,
           requiredFields,
@@ -542,7 +676,7 @@ export const importsRouter = router({
 
         if (!mapped.email) {
           noEmailRows++;
-          if (!verdict.nameKey) unmatchableRows++;
+          if (!verdict.nameKey && !verdict.linkedinKey) unmatchableRows++;
         }
 
         if (verdict.status === "error") {
@@ -554,8 +688,10 @@ export const importsRouter = router({
           if (duplicateSamples.length < 10) {
             const rowName = [mapped.firstName, mapped.lastName].filter(Boolean).join(" ").trim() || mapped.email || `Row ${rowIndex}`;
             const e = verdict.emailKey;
+            const li = verdict.linkedinKey;
             const matchedBy = e && existingEmails.has(e) ? "email" as const
               : e && seenEmails.has(e) ? "earlier row in this file" as const
+              : li && existingLinkedin.has(li) ? "LinkedIn profile" as const
               : verdict.nameKey && existingNameKeys.has(verdict.nameKey) ? "name + company" as const
               : "earlier row in this file" as const;
             const existingName = e && existingByEmail.get(e)
@@ -570,9 +706,14 @@ export const importsRouter = router({
         // against it, exactly as commit does.
         if (verdict.emailKey) seenEmails.add(verdict.emailKey);
         else if (verdict.nameKey && input.matchOnNameCompany) seenNameKeys.add(verdict.nameKey);
+        if (verdict.linkedinKey) seenLinkedin.add(verdict.linkedinKey);
         validRows.push(rowIndex);
         if (!verdict.isDuplicate) newRows++;
       });
+
+      // Kept with the upload, so "Download error report" gives every row with
+      // its own columns, from the server's one parse (F32).
+      if (read.fileToken) await saveImportFileErrors(wsId, ctx.user.id, read.fileToken, errorRows);
 
       return {
         totalRows: rows.length,
@@ -602,6 +743,8 @@ export const importsRouter = router({
         duplicateSamples,
         /** Reasons over ALL error rows (the row list below caps at 200). */
         errorReasonSummary: summarizeErrorReasons(errorRows),
+        fileToken: read.fileToken,
+        preset: read.preset,
       };
     }),
 
@@ -609,7 +752,10 @@ export const importsRouter = router({
   commit: workspaceProcedure
     .input(
       z.object({
-        csvText: z.string(),
+        /** The token parseCSV returned (R86); the stored file is consumed. */
+        fileToken: z.string().uuid().optional(),
+        /** Only for a caller with no token. */
+        csvText: z.string().optional(),
         filename: z.string().max(255),
         fieldMapping: z.record(z.string(), z.string().nullable()),
         /** Skip duplicates (true) or abort on first duplicate (false) */
@@ -643,14 +789,15 @@ export const importsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const wsId = ctx.workspace.id;
       const userId = ctx.user.id;
-      const { headers, rows } = parseCSVText(input.csvText);
+      const read = await readImport(wsId, userId, input);
+      const { rows } = read;
 
       // BEFORE the import record is created: a rejected import must leave no
       // half-written history row claiming it ran.
       const mapping = input.fieldMapping as Record<string, string | null>;
       assertNoDuplicateMappings(mapping);
       assertRequiredFieldsMapped(mapping, input.destination);
-      const requiredFields = requiredFieldKeysFor(input.destination);
+      const requiredFields = requiredFieldsOf(input.destination, read);
       // Every imported row is filed under this owner: they must work here now
       // (audit 2026-10-20, R55), not be another workspace's user or a leaver.
       await assertOwnerInWorkspace(wsId, input.postImportActions?.ownerUserId);
@@ -666,6 +813,9 @@ export const importsRouter = router({
           fieldMapping: input.fieldMapping,
           postImportActions: input.postImportActions ?? null,
           ownerId: userId,
+          // Where it went and what read it, for history and Undo (F32).
+          destination: input.destination,
+          preset: read.preset,
         })
         .$returningId();
       const importId = importRecord.id;
@@ -675,6 +825,10 @@ export const importsRouter = router({
       const existingEmails = new Set(
         existingContacts.map((c: { email: string | null }) => c.email?.toLowerCase() ?? "").filter((e: string) => e.length > 0),
       );
+      const existingLinkedin = linkedinKeysOf(existingContacts);
+      const seenLinkedin = new Set<string>();
+      /** Companies this import creates, recorded for Undo (F32). */
+      const createdAccountIds: number[] = [];
       const existingNameKeys = new Set<string>();
       if (input.matchOnNameCompany) {
         for (const c of existingContacts) {
@@ -720,6 +874,8 @@ export const importsRouter = router({
           seenEmails,
           existingNameKeys,
           seenNameKeys,
+          existingLinkedin,
+          seenLinkedin,
           matchOnNameCompany: input.matchOnNameCompany,
           skipDuplicates: input.skipDuplicates,
           requiredFields,
@@ -746,6 +902,7 @@ export const importsRouter = router({
           seenNameKeys.add(verdict.nameKey);
           existingNameKeys.add(verdict.nameKey);
         }
+        if (verdict.linkedinKey) seenLinkedin.add(verdict.linkedinKey);
         toInsert.push({ rowIndex, row, mapped });
       }
 
@@ -864,7 +1021,10 @@ export const importsRouter = router({
             const domain = c.values.domain as string | null;
             const name = c.values.name as string;
             const id = (domain && existingByDomain.get(domain)) || existingByName.get(name.toLowerCase());
-            if (id) accountIdByKey.set(c.key, id);
+            if (id) {
+              accountIdByKey.set(c.key, id);
+              if (!createdAccountIds.includes(id)) createdAccountIds.push(id);
+            }
           }
         }
       } catch (e) {
@@ -936,7 +1096,24 @@ export const importsRouter = router({
         seniority: p.mapped.seniority?.trim()?.slice(0, 64) || null,
         company: p.mapped.company?.trim()?.slice(0, 200) || null,
         companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
+        ...presetProvenance(p),
       });
+
+      /**
+       * A preset's word on the address it picked (LeadRocks' verdict), kept in
+       * the field ledger, not as the email status: the address arrives
+       * unverified, and Velocity's own check decides it before anything can
+       * promote or send to it (F32; outbound safety, 2026-11-07).
+       */
+      function presetProvenance(p: Pending): { fieldProvenance?: Record<string, unknown> } {
+        const extra = read.extras?.[p.rowIndex - 1];
+        if (!read.preset || !extra || !p.mapped.email?.trim()) return {};
+        return {
+          fieldProvenance: {
+            email: { source: read.preset, verification: extra.emailRawStatus ?? null, slot: extra.emailSource ?? null, at: new Date().toISOString() },
+          },
+        };
+      }
 
       // NO record_created fire anywhere in this importer, deliberately: a
       // 5,000-row CSV must not fire 5,000 rules and POST 5,000 webhooks. The
@@ -1008,8 +1185,11 @@ export const importsRouter = router({
           skippedRows,
           errorRows,
           completedAt: new Date(),
+          createdAccountIds: createdAccountIds as never,
         })
         .where(eq(contactImports.id, importId));
+      // The upload is consumed: a second commit of the same token is refused.
+      if (read.fileToken) await deleteImportFile(wsId, userId, read.fileToken);
 
       /**
        * People-as-master (owner directive 2026-08-21: "when a user imports
@@ -1077,6 +1257,15 @@ export const importsRouter = router({
       };
     }),
 
+  /** Throw away a pending upload without importing it; only its owner, in its workspace (R90). */
+  discard: workspaceProcedure
+    .input(z.object({ fileToken: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const f = await loadImportFile(ctx.workspace.id, ctx.user.id, input.fileToken);
+      await deleteImportFile(ctx.workspace.id, ctx.user.id, f.token);
+      return { ok: true };
+    }),
+
   /** Get import history for workspace */
   getHistory: workspaceProcedure
     .input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }))
@@ -1093,9 +1282,14 @@ export const importsRouter = router({
       return records;
     }),
 
-  /** Get single import detail + error rows */
+  /**
+   * One import and a page of the rows it did not import, with why (audit
+   * 2026-10-20, U27/F32: a history row showed an error count and opened
+   * nothing). The rows came back capped at 500 with no total; now a page at
+   * a time, with the total, and errorReport gives every one.
+   */
   getImport: workspaceProcedure
-    .input(z.object({ importId: z.number() }))
+    .input(z.object({ importId: z.number(), page: z.number().int().min(1).default(1), perPage: z.number().int().min(10).max(200).default(50) }))
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -1111,17 +1305,83 @@ export const importsRouter = router({
         .limit(1);
       if (!record) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const errorRowsList = await db
-        .select()
-        .from(contactImportRows)
-        .where(
-          and(
-            eq(contactImportRows.importId, input.importId),
-            inArray(contactImportRows.status, ["error", "duplicate"]),
-          ),
-        )
-        .limit(500);
+      const notImported = and(
+        eq(contactImportRows.importId, input.importId),
+        inArray(contactImportRows.status, ["error", "duplicate"]),
+      );
+      const [errorRowsList, [{ total }]] = await Promise.all([
+        db.select().from(contactImportRows).where(notImported)
+          .orderBy(contactImportRows.rowIndex)
+          .limit(input.perPage).offset((input.page - 1) * input.perPage),
+        db.select({ total: sql<number>`count(*)` }).from(contactImportRows).where(notImported),
+      ]);
 
-      return { record, errorRows: errorRowsList };
+      return { record, errorRows: errorRowsList, errorTotal: Number(total), page: input.page, perPage: input.perPage };
+    }),
+
+  /**
+   * The full error report, every row (F32): before the import, the last
+   * validation's error rows from the stored upload; after it, every row the
+   * import recorded as an error or a duplicate. Each line is the row as the
+   * file had it, then its row number and the reason, so the file can be
+   * fixed and imported again. Cells are made safe for spreadsheets (G49).
+   */
+  errorReport: workspaceProcedure
+    .input(z.object({ importId: z.number().int().positive().optional(), fileToken: z.string().uuid().optional() }))
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.importId) {
+        const [record] = await db.select({ id: contactImports.id, filename: contactImports.filename }).from(contactImports)
+          .where(and(eq(contactImports.id, input.importId), eq(contactImports.workspaceId, ctx.workspace.id))).limit(1);
+        if (!record) throw new TRPCError({ code: "NOT_FOUND" });
+        const rowsOut = await db.select({ rowIndex: contactImportRows.rowIndex, rowData: contactImportRows.rowData, errorReason: contactImportRows.errorReason, status: contactImportRows.status })
+          .from(contactImportRows)
+          .where(and(eq(contactImportRows.importId, record.id), inArray(contactImportRows.status, ["error", "duplicate"])))
+          .orderBy(contactImportRows.rowIndex);
+        const headers: string[] = [];
+        for (const r of rowsOut) for (const k of Object.keys((r.rowData ?? {}) as Record<string, unknown>)) if (!headers.includes(k)) headers.push(k);
+        const csv = errorReportCsv(headers, rowsOut.map((r) => ({
+          rowIndex: r.rowIndex,
+          reason: r.errorReason ?? (r.status === "duplicate" ? "Duplicate" : "Error"),
+          data: (r.rowData ?? null) as Record<string, unknown> | null,
+        })));
+        return { filename: `import-errors-${record.filename}`, csv, count: rowsOut.length };
+      }
+      if (input.fileToken) {
+        const f = await loadImportFile(ctx.workspace.id, ctx.user.id, input.fileToken);
+        const parsed = parseCSVText(f.content);
+        const errs = f.lastErrorRows ?? [];
+        const csv = errorReportCsv(parsed.headers, errs.map((e) => ({ rowIndex: e.rowIndex, reason: e.reason, data: parsed.rows[e.rowIndex - 1] ?? null })));
+        return { filename: `import-errors-${f.filename}`, csv, count: errs.length };
+      }
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Name the import or the upload." });
+    }),
+
+  /**
+   * "Undo this import" (F32): removes the rows this import created and
+   * nothing else, as recorded per import in contact_import_rows. A person or
+   * contact since promoted, enrolled in a sequence or queued in a campaign is
+   * kept, and said so. For a contacts import, a People row the import's
+   * linking made for a removed contact goes with it, and one that existed
+   * before is only unlinked. Companies the import created go when nothing
+   * else uses them. Every removed row is kept in the audit entry, so it can be
+   * restored. The person who ran the import or a manager may undo it, once.
+   */
+  undo: workspaceProcedure
+    .input(z.object({ importId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ws = ctx.workspace.id;
+      const [record] = await db.select().from(contactImports)
+        .where(and(eq(contactImports.id, input.importId), eq(contactImports.workspaceId, ws))).limit(1);
+      if (!record) throw new TRPCError({ code: "NOT_FOUND" });
+      if (record.ownerId !== ctx.user.id) requireMinRole(ctx.member.role, "manager", "Only the person who ran this import or a manager can undo it.");
+      if (record.undoneAt) throw new TRPCError({ code: "CONFLICT", message: "This import was already undone." });
+      if (record.status !== "completed") throw new TRPCError({ code: "BAD_REQUEST", message: "Only a finished import can be undone." });
+      const { undoImport } = await import("../services/importUndo");
+      const summary = await undoImport(db, ws, record, ctx.user.id);
+      return summary;
     }),
 });

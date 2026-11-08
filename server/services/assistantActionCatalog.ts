@@ -93,7 +93,6 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   attention: { group: "Daily", description: "What needs a human" },
   mindmaps: { group: "Analytics", description: "Planning canvases" },
   discovery: { group: "Prospecting", description: "Find Prospects searches" },
-  prospectImports: { group: "Prospecting", description: "CSV import jobs" },
   dataHealth: { group: "Prospecting", description: "Duplicates, gaps and import audits" },
   emailVerification: { group: "Prospecting", description: "Email verification jobs" },
   helpCenter: { group: "Help", description: "Help articles (read)" },

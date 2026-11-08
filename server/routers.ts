@@ -72,7 +72,6 @@ import { knowledgeBaseRouter } from "./routers/knowledgeBase";
 import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
-import { prospectImportsRouter } from "./routers/prospectImports";
 import { placesSearchRouter } from "./routers/placesSearch";
 import { urlScraperRouter } from "./routers/urlScraper";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
@@ -207,7 +206,8 @@ export const appRouter = router({
   reports: reportsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,
-  prospectImports: prospectImportsRouter,
+  // prospectImports (the separate LeadRocks importer) is retired: a LeadRocks
+  // file is a preset of imports.* now (audit 2026-10-20, F32).
   placesSearch: placesSearchRouter,
   urlScraper: urlScraperRouter,
   linkedinFinder: linkedinFinderRouter,
