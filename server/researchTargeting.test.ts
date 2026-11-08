@@ -160,7 +160,8 @@ describe("a campaign's never-target words", () => {
       "const offTarget = neverTargetHit(screenNeverTarget, { title: p.title, company: p.companyName, industry: p.industry });\n      if (offTarget) {\n        await db\n          .update(prospectQueue)",
     );
     expect(loop).toContain("result.rejected++;\n        neverTargeted++;\n        continue;");
-    expect(loop).toContain(".set({ sequenceStatus: \"skipped\", rejectedAt: new Date(), rejectionReason: neverTargetReason(offTarget) })");
+    // 2026-11-07 (audit F19): the never-target rejection names its kind too.
+    expect(loop).toContain(".set({ sequenceStatus: \"skipped\", rejectedAt: new Date(), rejectionKind: \"never_target\", rejectionReason: neverTargetReason(offTarget) })");
     expect(loop).toContain(".where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));");
     // Scoring: 0 without asking the model.
     const enrich = read("server/routers/are/prospects.ts");

@@ -30,6 +30,7 @@
  * decision, not something to infer.
  */
 import { csvCell } from "@shared/csvCell";
+import { REJECTION_KINDS, REJECTION_KIND_LABEL, isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
@@ -200,6 +201,21 @@ const NO_REASON = "No reason given";
 const DEFAULT_REEVAL_THRESHOLD = 70;
 /** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
 export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
+/**
+ * Only the engine's ICP-score rejections are re-scored (A11), named by their
+ * kind (F19). A row with no kind yet (before migration 0331's backfill ran)
+ * falls back to the text test it used to be.
+ */
+export function isScoreRejection(p: { rejectionKind?: string | null; rejectedByUserId?: number | null; rejectionReason?: string | null }): boolean {
+  if (p.rejectionKind != null) return p.rejectionKind === "screen";
+  return p.rejectedByUserId == null && String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION);
+}
+function scoreRejectionWhere() {
+  return or(
+    eq(prospectQueue.rejectionKind, "screen"),
+    and(isNull(prospectQueue.rejectionKind), isNull(prospectQueue.rejectedByUserId), like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`)),
+  )!;
+}
 /** Rejections one Re-evaluate All run re-scores, each one model call (A11). */
 export const REEVAL_ALL_MAX = 500;
 export const REEVAL_ALL_JOB = "are.reevaluateRejections";
@@ -1389,7 +1405,7 @@ async function reEvaluateOneRejection(
 ): Promise<boolean> {
   const [p] = await db.select().from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
-  if (!p || p.sequenceStatus !== "skipped" || p.rejectedByUserId != null || !String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION)) return false;
+  if (!p || p.sequenceStatus !== "skipped" || !isScoreRejection(p)) return false;
   const [icp] = await db.select().from(icpProfiles)
     .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true))).limit(1);
   const [camp] = await db.select({ icpOverrides: areCampaigns.icpOverrides }).from(areCampaigns)
@@ -1535,8 +1551,9 @@ async function takeOutOfCampaign(
   }
   const reason = opts.reason?.trim() || undefined;
   const res = await db.update(prospectQueue).set(opts.reject
-    ? { sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: ctx.user.id, rejectionReason: reason ?? null }
-    : { sequenceStatus: "skipped" },
+    ? { sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: ctx.user.id, rejectionKind: "person", rejectionReason: reason ?? null }
+    // A person's Skip is a person's decision too (F19).
+    : { sequenceStatus: "skipped", rejectionKind: "person" },
   ).where(and(
     eq(prospectQueue.id, prospectId),
     eq(prospectQueue.workspaceId, ws),
@@ -2789,6 +2806,7 @@ export const prospectsRouter = router({
         sequenceStatus: "pending",
         rejectedAt: null,
         rejectedByUserId: null,
+        rejectionKind: null,
         rejectionReason: input.reason ? `Restored — ${input.reason}` : null,
       }).where(and(
         eq(prospectQueue.id, input.prospectId),
@@ -2858,6 +2876,7 @@ export const prospectsRouter = router({
           approvedByUserId: null,
           rejectedAt: null,
           rejectedByUserId: null,
+          rejectionKind: null,
           rejectionReason: null,
         }).where(and(eq(prospectQueue.id, id), eq(prospectQueue.workspaceId, ctx.workspace.id)));
         await db.insert(areEngineLogs).values({
@@ -3121,12 +3140,14 @@ export const prospectsRouter = router({
     .input(z.object({
       campaignId: z.number(),
       reason: z.string().max(2000).nullish(),
+      /** Who or what rejected them (F19); "other" also takes rows with no kind recorded. */
+      kind: z.enum(REJECTION_KINDS).nullish(),
       page: z.number().int().min(1).default(1),
       perPage: z.number().int().min(10).max(500).default(100),
     }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return { total: 0, byReason: [], items: [], itemsTotal: 0, page: input.page, perPage: input.perPage };
+      if (!db) return { total: 0, byReason: [], byKind: [] as Array<{ kind: RejectionKind; label: string; count: number }>, items: [], itemsTotal: 0, page: input.page, perPage: input.perPage };
       const rejected = and(
         eq(prospectQueue.campaignId, input.campaignId),
         eq(prospectQueue.workspaceId, ctx.workspace.id),
@@ -3145,9 +3166,23 @@ export const prospectsRouter = router({
         .map(([reason, count]) => ({ reason, count }))
         .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
         .slice(0, 10);
-      const where = input.reason == null ? rejected
+      // Who or what rejected them, counted in SQL (F19). No kind reads as "other".
+      const kindGroups = await db.select({ kind: prospectQueue.rejectionKind, n: sql<number>`count(*)` })
+        .from(prospectQueue).where(rejected).groupBy(prospectQueue.rejectionKind);
+      const kindMap = new Map<RejectionKind, number>();
+      for (const g of kindGroups) {
+        const k: RejectionKind = isRejectionKind(g.kind) ? g.kind : "other";
+        kindMap.set(k, (kindMap.get(k) ?? 0) + Number(g.n));
+      }
+      const byKind = Array.from(kindMap.entries())
+        .map(([kind, count]) => ({ kind, label: REJECTION_KIND_LABEL[kind], count }))
+        .sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind));
+      const byReasonText = input.reason == null ? rejected
         : input.reason === NO_REASON ? and(rejected, or(isNull(prospectQueue.rejectionReason), eq(prospectQueue.rejectionReason, "")))
         : and(rejected, eq(prospectQueue.rejectionReason, input.reason));
+      const where = input.kind == null ? byReasonText
+        : input.kind === "other" ? and(byReasonText, or(eq(prospectQueue.rejectionKind, "other"), isNull(prospectQueue.rejectionKind)))
+        : and(byReasonText, eq(prospectQueue.rejectionKind, input.kind));
       const [items, [{ n: itemsTotal }]] = await Promise.all([
         db.select({
           // prospectQueue has firstName/lastName/title — NOT contactName/
@@ -3159,6 +3194,7 @@ export const prospectsRouter = router({
           lastName: prospectQueue.lastName,
           title: prospectQueue.title,
           rejectionReason: prospectQueue.rejectionReason,
+          rejectionKind: prospectQueue.rejectionKind,
           rejectedAt: prospectQueue.rejectedAt,
         })
           .from(prospectQueue).where(where)
@@ -3166,7 +3202,7 @@ export const prospectsRouter = router({
           .limit(input.perPage).offset((input.page - 1) * input.perPage),
         db.select({ n: sql<number>`count(*)` }).from(prospectQueue).where(where),
       ]);
-      return { total, byReason, items, itemsTotal: Number(itemsTotal), page: input.page, perPage: input.perPage };
+      return { total, byReason, byKind, items, itemsTotal: Number(itemsTotal), page: input.page, perPage: input.perPage };
     }),
 
   exportRejections: workspaceProcedure
@@ -3198,6 +3234,7 @@ export const prospectsRouter = router({
         linkedinUrl: prospectQueue.linkedinUrl,
         icpMatchScore: prospectQueue.icpMatchScore,
         rejectionReason: prospectQueue.rejectionReason,
+        rejectionKind: prospectQueue.rejectionKind,
         rejectedAt: prospectQueue.rejectedAt,
         sourceType: prospectQueue.sourceType,
       })
@@ -3212,12 +3249,12 @@ export const prospectsRouter = router({
       const escape = csvCell;
       const headers = [
         "ID","First Name","Last Name","Title","Company","Industry","Geography",
-        "Company Size","Email","LinkedIn URL","ICP Match Score","Rejection Reason","Rejected At","Source",
+        "Company Size","Email","LinkedIn URL","ICP Match Score","Rejected By","Rejection Reason","Rejected At","Source",
       ];
       const rows = rejected.map((r) => [
         r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
         r.geography, r.companySize, r.email, r.linkedinUrl, r.icpMatchScore,
-        r.rejectionReason, r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "", r.sourceType,
+        rejectionKindLabel(r.rejectionKind), r.rejectionReason, r.rejectedAt ? new Date(r.rejectedAt).toISOString() : "", r.sourceType,
       ].map(escape).join(","));
       return { csv: [headers.join(","), ...rows].join("\n"), count: rejected.length };
     }),
@@ -3267,6 +3304,7 @@ export const prospectsRouter = router({
         icpMatchBreakdown: JSON.stringify(match.breakdown),
         sequenceStatus: newStatus,
         rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
+        rejectionKind: newStatus === "pending" ? null : prospect.rejectionKind,
         rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
       }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
       return { newScore: match.score, newStatus, breakdown: match.breakdown };
@@ -3333,8 +3371,7 @@ export const prospectsRouter = router({
           eq(prospectQueue.campaignId, input.campaignId),
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "skipped"),
-          isNull(prospectQueue.rejectedByUserId),
-          like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`),
+          scoreRejectionWhere(),
         ))
         .orderBy(prospectQueue.id)
         .limit(REEVAL_ALL_MAX);

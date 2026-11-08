@@ -576,6 +576,7 @@ export async function saveScrapeJobAndQueue(
         ...((p as { __territoryReject?: string }).__territoryReject
           ? {
               rejectedAt: new Date(),
+              rejectionKind: "territory" as const,
               rejectionReason: String((p as { __territoryReject?: string }).__territoryReject),
             }
           : {}),

@@ -669,7 +669,7 @@ export async function rejectExhaustedEnrichment(
   for (const r of exhausted) {
     const why = String(r.error ?? "").trim().slice(0, 300) || "no reason recorded";
     await db.update(prospectQueue)
-      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
+      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "enrichment_failed", rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
       .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
     n++;
   }
@@ -1174,6 +1174,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "suppression",
             rejectionReason: `On suppression list — not enrolled (${describeSuppression(suppression)})`.slice(0, 500),
           })
           .where(eq(prospectQueue.id, row.id));
@@ -1188,6 +1189,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "dedupe",
             rejectionReason: `Already in a sequence as prospect #${twin} (same email or LinkedIn profile) — not enrolled twice`,
           })
           .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, wsId)));
@@ -1208,6 +1210,7 @@ async function enrollApprovedForCampaignUnlocked(
           .set({
             sequenceStatus: "skipped",
             rejectedAt: new Date(),
+            rejectionKind: "no_steps",
             rejectionReason: "Generated sequence has no usable steps",
           })
           .where(eq(prospectQueue.id, row.id));
@@ -1345,6 +1348,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
           \`rejectedAt\` = NOW(),
+          \`rejectionKind\` = 'screen',
           \`rejectionReason\` = CONCAT('Auto-screened: ICP match ', \`icpMatchScore\`,
             '/100 is below this campaign''s enrichment gate of ', ${gate},
             ' — never eligible for enrichment, so never screenable')
@@ -1391,6 +1395,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
           \`rejectedAt\` = NOW(),
+          \`rejectionKind\` = 'no_email',
           \`rejectionReason\` = 'No verifiable email address found — enrichment exhausted every source'
       WHERE \`campaignId\` = ${campId}
         AND \`workspaceId\` = ${wsId}
@@ -1470,7 +1475,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         if (ds?.fit?.flags?.includes("financial-distress")) {
           await db
             .update(prospectQueue)
-            .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: "Downstream: the organization is in financial distress — do not contact now" })
+            .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "distress", rejectionReason: "Downstream: the organization is in financial distress — do not contact now" })
             .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
           result.rejected++;
           continue;
@@ -1480,7 +1485,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       if (offTarget) {
         await db
           .update(prospectQueue)
-          .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: neverTargetReason(offTarget) })
+          .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "never_target", rejectionReason: neverTargetReason(offTarget) })
           .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
         result.rejected++;
         neverTargeted++;
@@ -1521,7 +1526,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     for (const [reason, ids] of Array.from(rejectIds.entries())) {
       const [res] = await db
         .update(prospectQueue)
-        .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: reason })
+        .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionKind: "screen", rejectionReason: reason })
         .where(and(inArray(prospectQueue.id, ids), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
       result.rejected += affected(res);
     }

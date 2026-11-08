@@ -73,6 +73,7 @@ import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { targetingFromOverrides } from "@shared/campaignTargeting";
+import { isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -2381,9 +2382,22 @@ function ARECampaignDetailPage() {
   // One page of the rejected, for the reason picked (A44): the server
   // filters and pages; this tab used to render every rejection at once.
   const [rejPage, setRejPage] = useState(1);
-  useClearOnChange({ reasonFilter }, () => setRejPage(1));
+  // Who or what rejected them (F19), URL-persisted like the reason.
+  const [kindFilter, setKindFilterState] = useState<RejectionKind | null>(() => {
+    const k = urlParams.get("kind");
+    return isRejectionKind(k) ? k : null;
+  });
+  const setKindFilter = (k: RejectionKind | null) => {
+    setKindFilterState(k);
+    const params = new URLSearchParams(window.location.search);
+    if (k) params.set("kind", k);
+    else params.delete("kind");
+    const newSearch = params.toString();
+    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
+  };
+  useClearOnChange({ reasonFilter, kindFilter }, () => setRejPage(1));
   const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
-    { campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE },
+    { campaignId, reason: reasonFilter, kind: kindFilter, page: rejPage, perPage: REJECTION_PAGE },
     { placeholderData: (prev) => prev },
   );
   const rejectionStats = rejectionQ.data;
@@ -3709,6 +3723,31 @@ function ARECampaignDetailPage() {
               />
             ) : (
               <div className="space-y-2">
+                {/* ── Who or what rejected them (F19): one chip per kind, each a filter ── */}
+                {(rejectionStats?.byKind?.length ?? 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2" role="group" aria-label="Filter by who or what rejected them">
+                    <span className="text-[11px] text-muted-foreground mr-1">Rejected by:</span>
+                    {(rejectionStats?.byKind ?? []).map((k: { kind: RejectionKind; label: string; count: number }) => {
+                      const isActive = kindFilter === k.kind;
+                      return (
+                        <button
+                          key={k.kind}
+                          type="button"
+                          aria-pressed={isActive}
+                          className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${isActive ? "border-destructive/50 bg-destructive/10 text-destructive" : "hover:bg-muted/60 text-muted-foreground"}`}
+                          onClick={() => setKindFilter(isActive ? null : k.kind)}
+                        >
+                          {k.label} <span className="tabular-nums">{k.count}</span>
+                        </button>
+                      );
+                    })}
+                    {kindFilter && (
+                      <button type="button" className="text-[10px] text-destructive hover:underline flex items-center gap-0.5" onClick={() => setKindFilter(null)}>
+                        <X className="size-2.5" /> All kinds
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* ── Rejection reason bar chart ── */}
                 {(rejectionStats?.byReason?.length ?? 0) > 0 && (
                   <div className="rounded-xl border bg-card px-4 py-3 mb-3">
@@ -3925,6 +3964,7 @@ function ARECampaignDetailPage() {
                       )}
                     </div>
                     <div className="shrink-0 text-right space-y-0.5">
+                      <div className="text-[10px] text-muted-foreground">{rejectionKindLabel(item.rejectionKind)}</div>
                       {item.rejectionReason ? (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-destructive/20 text-destructive/80 max-w-[160px] truncate block">
                           {item.rejectionReason}

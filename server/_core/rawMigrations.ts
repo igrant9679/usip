@@ -5142,6 +5142,32 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `vendor_lookup_misses` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `lookupKey` varchar(400) NOT NULL, `reason` varchar(64) NOT NULL, `missedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_vlm_key` (`workspaceId`, `lookupKey`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ],
   },
+  // F19: who or what rejected each campaign prospect, as a kind beside the
+  // free-text reason. Older rejected rows are backfilled from their reason
+  // only where the text names exactly one writer (@shared/rejectionKind,
+  // REJECTION_REASON_PATTERNS, in the same order); every other rejected row
+  // is 'other'. Each UPDATE touches only rows still without a kind, so a
+  // re-run finds nothing twice.
+  {
+    name: "0331_rejection_kind.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` ADD COLUMN `rejectionKind` varchar(24) NULL",
+      "CREATE INDEX `ix_pq_rejkind` ON `prospect_queue` (`campaignId`, `rejectionKind`)",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'dedupe' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Audit & fix: the same person as row %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'unidentifiable' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Audit & fix: no name, email or LinkedIn profile%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'person' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectedByUserId` IS NOT NULL",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'screen' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Auto-screened: ICP match %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'suppression' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'On suppression list%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'dedupe' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Already in a sequence as prospect #%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'no_email' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'No verifiable email address found%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'distress' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Downstream: the organization is in financial distress%'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'never_target' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Never-target word %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'territory' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` = 'Outside target geography'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'enrichment_failed' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` LIKE 'Enrichment failed %'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'no_steps' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL AND `rejectionReason` = 'Generated sequence has no usable steps'",
+      "UPDATE `prospect_queue` SET `rejectionKind` = 'other' WHERE `sequenceStatus` = 'skipped' AND `rejectionKind` IS NULL",
+    ],
+  },
 
 ];
 

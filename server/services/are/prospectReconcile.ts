@@ -24,6 +24,7 @@ import { stopProspectSteps } from "./stepHold";
 import { getDb } from "../../db";
 import { isPlaceholderToken } from "@shared/fieldHygiene";
 import { canonicalText, canonicalTokens } from "@shared/canonicalText";
+import type { RejectionKind } from "@shared/rejectionKind";
 import { queueIdentityKeys } from "./queueIdentity";
 import { linkUnlinkedQueueRows } from "../personLink";
 import { searchLinkedInProfiles } from "../linkedinLookup";
@@ -113,8 +114,8 @@ async function recentReconcileSearches(db: any, workspaceId: number): Promise<Se
  * (A43: rows were flagged with no reason, so the tab said "No reason
  * given"), and stop any steps it still had scheduled.
  */
-async function flagToRejections(db: any, workspaceId: number, userId: number, row: QueueRow, reason: string): Promise<void> {
-  await db.update(prospectQueue).set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: userId, rejectionReason: reason } as never)
+async function flagToRejections(db: any, workspaceId: number, userId: number, row: QueueRow, reason: string, kind: RejectionKind): Promise<void> {
+  await db.update(prospectQueue).set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: userId, rejectionKind: kind, rejectionReason: reason } as never)
     .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, workspaceId)));
   await stopProspectSteps(db, workspaceId, row.id, reason);
 }
@@ -274,7 +275,7 @@ export async function reconcileQueueProspects(opts: {
       const keeper = sorted[0]!;
       for (const loser of sorted.slice(1)) {
         const where = keeper.campaignId === loser.campaignId ? "in this campaign" : `in campaign ${keeper.campaignId}`;
-        await flagToRejections(db, workspaceId, userId, loser, `Audit & fix: the same person as row ${keeper.id} ${where}`);
+        await flagToRejections(db, workspaceId, userId, loser, `Audit & fix: the same person as row ${keeper.id} ${where}`, "dedupe");
         result.duplicatesSkipped++;
         result.changes.push(`row ${loser.id} (campaign ${loser.campaignId}, was ${loser.sequenceStatus}) moved to Rejections: the same person as row ${keeper.id} ${where}, which is kept.`);
         if ((STATUS_RANK[loser.sequenceStatus] ?? 0) >= STATUS_RANK.contacted!) {
@@ -381,7 +382,7 @@ export async function reconcileQueueProspects(opts: {
     if (!named && !li && !String(r.email ?? "").trim()) {
       // Nothing to reconcile FROM: no name, no profile, no address. Flag to
       // the Rejections tab rather than deleting — visible and reversible.
-      await flagToRejections(db, workspaceId, userId, r, "Audit & fix: no name, email or LinkedIn profile to identify this person");
+      await flagToRejections(db, workspaceId, userId, r, "Audit & fix: no name, email or LinkedIn profile to identify this person", "unidentifiable");
       result.flaggedUnreconcilable++;
       result.changes.push(`row ${r.id} (campaign ${r.campaignId}) moved to Rejections: no name, no LinkedIn, no email (source: ${r.sourceUrl ?? "unknown"}).`);
     }

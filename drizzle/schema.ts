@@ -4192,6 +4192,8 @@ export const prospectQueue = mysqlTable(
     rejectedAt: timestamp("rejectedAt"),
     rejectedByUserId: int("rejectedByUserId"),
     rejectionReason: text("rejectionReason"),
+    /** Who or what rejected the row — @shared/rejectionKind (migration 0331, audit F19). Null on a row never rejected. */
+    rejectionKind: varchar("rejectionKind", { length: 24 }),
     // Linked CRM records (created after positive reply)
     linkedContactId: int("linkedContactId"),
     linkedOpportunityId: int("linkedOpportunityId"),
@@ -4208,6 +4210,7 @@ export const prospectQueue = mysqlTable(
     byEmail: index("ix_pq_email").on(t.email),
     byStatus: index("ix_pq_status").on(t.campaignId, t.enrichmentStatus),
     byPerson: index("ix_pq_person").on(t.personProspectId),
+    byRejectionKind: index("ix_pq_rejkind").on(t.campaignId, t.rejectionKind),
   }),
 );
 export type ProspectQueue = typeof prospectQueue.$inferSelect;
