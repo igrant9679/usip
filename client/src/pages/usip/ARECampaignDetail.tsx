@@ -90,6 +90,9 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { CampaignSourcesCard } from "@/components/usip/are/CampaignSourcesCard";
+import { CampaignBasicsCard } from "@/components/usip/are/CampaignBasicsCard";
+import { useRegisterDraft, useSettingsDrafts, useUnsavedChangesGuard } from "@/components/usip/are/settingsDrafts";
+import { basicsChanges, basicsProblem, type BasicsDraft } from "@shared/areCampaignBasics";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { rankOf } from "@shared/roleRank";
@@ -1025,18 +1028,30 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
   });
   const dirty = dirtyFields.length > 0;
 
+  const persist = async () => {
+    const payload: Record<string, any> = { id: campaignId };
+    for (const f of dirtyFields) payload[f.key] = valueOf(f.key);
+    await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
+    toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
+    setDrafts({});
+    await utils.are.campaigns.get.invalidate({ id: campaignId });
+  };
   const save = async () => {
     try {
-      const payload: Record<string, any> = { id: campaignId };
-      for (const f of dirtyFields) payload[f.key] = valueOf(f.key);
-      await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
-      toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
-      setDrafts({});
-      await utils.are.campaigns.get.invalidate({ id: campaignId });
+      await persist();
     } catch (e: any) {
       toast.error(e?.message ?? "Save failed");
     }
   };
+  // The Settings tab's one Save writes these too (U11).
+  useRegisterDraft("prompts", {
+    label: "Email prompts",
+    count: dirtyFields.length,
+    save: async () => {
+      try { await persist(); } catch (e: any) { toast.error(e?.message ?? "Save failed"); throw e; }
+    },
+    discard: () => setDrafts({}),
+  });
 
   return (
     <Card className="bg-card border">
@@ -1251,34 +1266,20 @@ function SequencesTab({ campaignId, campaign, focus, onOpenSettings }: { campaig
     <div className="space-y-3">
       {/* Which is which: this tab vs the Sequences page vs campaigns (owner ask 2026-09-04). */}
       <OutreachExplainer current="campaign-sequences-tab" />
-      {/* Research for this campaign (Research phase 3): which sector and persona the writers use. */}
-      <details className="rounded-lg border bg-card">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
-          <Sparkles className="size-3.5 text-sky-500" /> Research for this campaign
-          <span className="text-muted-foreground font-normal ml-auto">
-            {campaign?.researchSectorId != null || campaign?.personaId != null ? "set" : "match by job title"}
-          </span>
-        </summary>
-        <div className="p-3 border-t">
-          <CampaignResearchCard campaignId={campaignId} campaign={campaign} />
-        </div>
-      </details>
-      {/* Email prompt editor — collapsed by default, saves ~280px of vertical space. */}
-      <details className="rounded-lg border bg-card">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
-          <Sparkles className="size-3.5 text-violet-500" /> Email Prompt Editor
-          <span className="text-muted-foreground font-normal ml-auto">
-            {(() => {
-              const set = [campaign?.sequencePrompt, campaign?.promptSubject, campaign?.promptBody, campaign?.promptSignature]
-                .filter((v) => (v ?? "").trim().length > 0).length;
-              return set === 0 ? "defaults" : `${set}/4 set`;
-            })()}
-          </span>
-        </summary>
-        <div className="p-3 border-t">
-          <SequencePromptCard campaignId={campaignId} campaign={campaign} />
-        </div>
-      </details>
+      {/* Research and the prompt editor are on Settings now, with every other
+          setting and the one Save (U11). Said here, where they used to be. */}
+      <div className="rounded-lg border bg-card px-3 py-2 text-xs flex flex-wrap items-center gap-2">
+        <Sparkles className="size-3.5 text-violet-500" />
+        <span className="text-muted-foreground">
+          Research ({campaign?.researchSectorId != null || campaign?.personaId != null ? "set" : "match by job title"}) and the email prompt editor
+          ({(() => {
+            const set = [campaign?.sequencePrompt, campaign?.promptSubject, campaign?.promptBody, campaign?.promptSignature]
+              .filter((v) => (v ?? "").trim().length > 0).length;
+            return set === 0 ? "defaults" : `${set}/4 set`;
+          })()}) are on the Settings tab.
+        </span>
+        {onOpenSettings && <Button size="sm" variant="outline" className="h-7 text-[11px] ml-auto" onClick={onOpenSettings}>Open Settings</Button>}
+      </div>
 
       {/* Summary + filters + search — single dense strip */}
       <div className="flex flex-wrap items-center gap-2">
@@ -2607,6 +2608,17 @@ function ARECampaignDetailPage() {
     else setSelectedIds(new Set(prospects.map((p) => p.id)));
   };
 
+  // ── One Save for the Settings tab (U11) ──
+  // The basics' draft (name, cap, target, channels, goal, template) is the
+  // page's, so the main save writes it with the rest; cards with their own
+  // draft (targeting, research, prompts) register it with settingsDrafts.
+  const [basicsDraft, setBasicsDraft] = useState<BasicsDraft>({});
+  const settingsDrafts = useSettingsDrafts();
+  const capCtx = trpc.are.campaigns.capContext.useQuery(undefined, { enabled: opened("settings"), staleTime: 30_000 });
+  // The header's "sent today / cap" and send window: the stall panel's own
+  // read (the same query key), so this costs no second request.
+  const capAndWindow = trpc.are.campaigns.stallReasons.useQuery({ campaignId }, { enabled: validId, refetchInterval: 60_000 });
+
   // Copy mode (phase 6): per-person AI copy, or one fixed template per step
   // (the Sequences product's model, now a mode of this one engine).
   const [copyDraft, setCopyDraft] = useState<"per_person" | "fixed" | null>(null);
@@ -2654,6 +2666,10 @@ function ARECampaignDetailPage() {
       setAutonomyDraft(null);
       setFullAck(false);
       setGapDraft(null);
+      // The one Save (U11) writes the basics and the copy too.
+      setBasicsDraft({});
+      setCopyDraft(null);
+      setFixedDraft(null);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2671,6 +2687,56 @@ function ARECampaignDetailPage() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  /**
+   * Everything unsaved on the Settings tab, card by card (U11), so the one
+   * Save bar can say what it will write and the page can ask before anyone
+   * leaves with it.
+   */
+  const basics = campaign ? basicsChanges(campaign, basicsDraft) : { payload: {}, changed: [] as string[] };
+  const automationEdits = [thresholdDraft !== undefined, minConfDraft !== null, s2oEnabled !== null, sourcesDraft !== null, autonomyDraft !== null, gapDraft !== null].filter(Boolean).length;
+  const copyDirty = copyDraft !== null || fixedDraft !== null;
+  const unsaved: Array<{ label: string; count: number }> = [
+    ...(basics.changed.length > 0 ? [{ label: "Basics", count: basics.changed.length }] : []),
+    ...(automationEdits > 0 ? [{ label: "Automation", count: automationEdits }] : []),
+    ...(copyDirty ? [{ label: "Copy", count: 1 }] : []),
+    ...Object.values(settingsDrafts.entries).map((e) => ({ label: e.label, count: e.count })),
+  ];
+  const unsavedCount = unsaved.reduce((n, u) => n + u.count, 0);
+  useUnsavedChangesGuard(unsavedCount > 0);
+  const [savingAll, setSavingAll] = useState(false);
+  const discardAllSettings = () => {
+    setThresholdDraft(undefined); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); setAutonomyDraft(null); setFullAck(false); setGapDraft(null);
+    setBasicsDraft({}); setCopyDraft(null); setFixedDraft(null);
+    for (const e of Object.values(settingsDrafts.entries)) e.discard();
+  };
+  /** The one Save: the page's drafts in one update, then each card's own. */
+  const saveAllSettings = async () => {
+    const problem = basicsProblem(basicsDraft);
+    if (problem) { toast.error(problem); return; }
+    setSavingAll(true);
+    try {
+      const main = {
+        id: campaignId,
+        ...basics.payload,
+        // Only what was edited is written (A46), so this save
+        // cannot put back a value someone else changed meanwhile.
+        ...(thresholdDraft !== undefined ? { autoApproveThreshold: thresholdDraft } : {}),
+        ...(minConfDraft !== null ? { minConfidence: minConfDraft } : {}),
+        ...(s2oEnabled !== null ? { signalToOpportunityEnabled: s2oEnabled } : {}),
+        ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
+        ...(autonomyDraft !== null ? { autonomyMode: autonomyDraft } : {}),
+        ...(gapDraft !== null ? { stepGapDays: gapDraft } : {}),
+        ...(copyDirty ? { copyMode: copyActive, fixedSteps: copyActive === "fixed" ? fixedSteps.map((st, i) => ({ ...st, stepIndex: i, day: fixedStepDay(i, gapActive) })) : undefined } : {}),
+      };
+      if (Object.keys(main).length > 1) await updateCampaign.mutateAsync(main);
+      for (const e of Object.values(settingsDrafts.entries)) await e.save();
+    } catch {
+      // Each save said why; what saved stays saved, what failed stays a draft.
+    } finally {
+      setSavingAll(false);
+    }
+  };
 
   // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
   const retrySetStatus = useRef<((v: any) => void) | null>(null);
@@ -2866,6 +2932,19 @@ function ARECampaignDetailPage() {
           style={{ backgroundColor: statusColor + "22", color: statusColor }}>
           {areStatusLabel(campaign.status)}
         </Badge>
+        {/* Sent today against the cap, and the send window (U11). */}
+        {capAndWindow.data && (
+          <span className="text-[11px] text-muted-foreground tabular-nums" title={`Steps sent today in ${capAndWindow.data.timezone}, against this campaign's daily cap`}>
+            Sent today {capAndWindow.data.gates.cap.sentToday} / {capAndWindow.data.gates.cap.cap}
+          </span>
+        )}
+        {capAndWindow.data && (
+          <span className="text-[11px] text-muted-foreground" title={capAndWindow.data.timezone}>
+            · {capAndWindow.data.gates.paused.workspaceOutbound
+              ? "Outbound paused"
+              : `Window ${capAndWindow.data.sending.windowDescription} (${capAndWindow.data.sending.windowOpen ? "open now" : "closed now"})`}
+          </span>
+        )}
         {campaign.status === "active" ? (
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
             onClick={() => setStatus.mutate({ id: campaignId, status: "paused" })}
@@ -3625,11 +3704,17 @@ function ARECampaignDetailPage() {
            </TabsContent>
 
           {/* ── Settings tab ── */}
-          <TabsContent value="settings" className="mt-4">
+          {/* Kept mounted once opened (U11), so a card's unsaved draft survives a
+              look at another tab; hidden while another tab is showing. */}
+          <TabsContent value="settings" className="mt-4 data-[state=inactive]:hidden" forceMount={opened("settings") ? true : undefined}>
+            <settingsDrafts.Provider>
             <div className="max-w-xl space-y-6">
               <p className="text-sm text-muted-foreground leading-relaxed">
-                Configure automation behaviour for this campaign. Changes take effect immediately on the next agent run.
+                Everything about this campaign, in one place. Edit any card and save them all with the one Save at the bottom; changes take effect on the engine's next run.
               </p>
+
+              {/* Basics (U11): name, daily cap, target, channels, goal, template. */}
+              <CampaignBasicsCard campaign={campaign} draft={basicsDraft} onChange={setBasicsDraft} cap={capCtx.data} />
 
               {/* Autonomy (0169 settings) */}
               <Card className="bg-card border">
@@ -3936,22 +4021,38 @@ function ARECampaignDetailPage() {
               {/* Prospect sources */}
               <CampaignSourcesCard stored={(campaign as any)?.prospectSources} draft={sourcesDraft} onChange={setSourcesDraft} />
 
-              {/* Save button */}
-              {(thresholdDraft !== undefined || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null || autonomyDraft !== null || gapDraft !== null) && (
-                <div className="flex items-center gap-3">
+              {/* Research and the email prompts (U11): from the Sequences tab, so every setting is here. */}
+              <Card className="bg-card border">
+                <CardHeader className="pb-2 pt-4 px-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Sparkles className="size-4 text-sky-500" />
+                    Research for this campaign
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4">
+                  <CampaignResearchCard campaignId={campaignId} campaign={campaign} />
+                </CardContent>
+              </Card>
+              <SequencePromptCard campaignId={campaignId} campaign={campaign} />
+
+              {/* The one Save (U11): every card's changes, counted and named, saved together. */}
+              {unsavedCount > 0 && (
+                <div role="region" aria-label="Unsaved settings" className="sticky bottom-3 z-10 rounded-xl border bg-background/95 backdrop-blur px-3 py-2.5 shadow-md flex flex-wrap items-center gap-3">
+                  <span className="text-xs">
+                    <strong className="tabular-nums">{unsavedCount}</strong> unsaved change{unsavedCount === 1 ? "" : "s"}
+                    <span className="text-muted-foreground"> · {unsaved.map((u) => u.label).join(", ")}</span>
+                  </span>
+                  <div className="flex-1" />
+                  <Button
+                    variant="ghost" size="sm" className="text-xs text-muted-foreground"
+                    disabled={savingAll}
+                    onClick={discardAllSettings}
+                  >
+                    Discard
+                  </Button>
                   <Button
                     onClick={() => {
-                      // Only what was edited is written (A46), so this save
-                      // cannot put back a value someone else changed meanwhile.
-                      const save = () => updateCampaign.mutate({
-                        id: campaignId,
-                        ...(thresholdDraft !== undefined ? { autoApproveThreshold: thresholdDraft } : {}),
-                        ...(minConfDraft !== null ? { minConfidence: minConfDraft } : {}),
-                        ...(s2oEnabled !== null ? { signalToOpportunityEnabled: s2oEnabled } : {}),
-                        ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
-                        ...(autonomyDraft !== null ? { autonomyMode: autonomyDraft } : {}),
-                        ...(gapDraft !== null ? { stepGapDays: gapDraft } : {}),
-                      });
+                      const save = () => void saveAllSettings();
                       // A higher fit gate rejects on the next tick (A14): say how many first.
                       const n = minConfDraft !== null ? fitGatePreview.data?.wouldReject ?? 0 : 0;
                       if (n > 0) {
@@ -3962,22 +4063,18 @@ function ARECampaignDetailPage() {
                         }, save);
                       } else save();
                     }}
-                    disabled={updateCampaign.isPending || needsFullAck}
+                    disabled={savingAll || updateCampaign.isPending || needsFullAck || !!basicsProblem(basicsDraft) || (copyDirty && copyActive === "fixed" && usableFixedSteps(fixedSteps) === 0)}
                     title={needsFullAck ? "Tick the acknowledgement above to switch to fully autonomous" : undefined}
                     className="gap-1.5"
+                    size="sm"
                   >
-                    {updateCampaign.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                    Save Settings
-                  </Button>
-                  <Button
-                    variant="ghost" size="sm" className="text-xs text-muted-foreground"
-                    onClick={() => { setThresholdDraft(undefined); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); setAutonomyDraft(null); setFullAck(false); setGapDraft(null); }}
-                  >
-                    Discard
+                    {savingAll ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                    Save all changes
                   </Button>
                 </div>
               )}
             </div>
+            </settingsDrafts.Provider>
           </TabsContent>
           {/* -- Rejections audit trail tab -- */}
           <TabsContent value="rejections" className="mt-4">

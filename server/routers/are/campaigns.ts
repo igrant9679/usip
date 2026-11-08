@@ -25,6 +25,13 @@ async function assertTimezoneChosen(db: NonNullable<Awaited<ReturnType<typeof ge
   if (!tz || tz === "UTC") throw new TRPCError({ code: "PRECONDITION_FAILED", message: TIMEZONE_UNSET_ON_LAUNCH });
 }
 
+/** The workspace's Revenue Engine daily cap (ARE Settings), as the engine reads it (A19). */
+async function workspaceAreCap(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<number> {
+  const [s] = await db.select({ cap: workspaceSettings.areDefaultDailySendCap }).from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId)).limit(1);
+  return Number(s?.cap ?? ARE_WORKSPACE_DAILY_CAP_DEFAULT);
+}
+
 /** Archived campaigns (F15) only when asked for, else none of them. */
 const archivedIs = (archived: boolean) => (archived ? isNotNull(areCampaigns.archivedAt) : isNull(areCampaigns.archivedAt));
 
@@ -40,7 +47,9 @@ async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnTyp
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_core/workspace";
-import { DISCOVERY_REST_MS, DISCOVERY_SOURCE_FEATURE, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
+import { ARE_WORKSPACE_DAILY_CAP_DEFAULT, DISCOVERY_REST_MS, DISCOVERY_SOURCE_FEATURE, ENGINE_LOG_RETENTION_DAYS, areWorkspaceSendsLeft, runAreEngine } from "../../areEngine";
+import { sendIncreaseRefusal } from "@shared/areCampaignBasics";
+import { isOutboundPaused } from "../../services/outboundPause";
 import { AI_CALLS_PER_SOURCE } from "@shared/spendPreview";
 // Loaded with the router so the rewrite job's kind is registered at boot, and a
 // job a restart cut off is picked up again (audit F14).
@@ -58,7 +67,7 @@ import { recordAudit } from "../../audit";
 import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, ARE_SOURCES, campaignSources, discoveryIsOff, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
-import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
+import { areExecutionQueue, sendingAccounts, spendLedger } from "../../../drizzle/schema";
 import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
@@ -693,6 +702,25 @@ export const campaignsRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: EMPTY_FIXED_COPY });
         }
       }
+      /**
+       * The cap and the channels (audit 2026-10-20, U11): while outbound is
+       * paused, only down and only off; never past the workspace's cap.
+       * Lowering is always allowed, even on a cap already above it.
+       */
+      if (rest.dailySendCap !== undefined || rest.channelsEnabled !== undefined) {
+        const [cur] = await db
+          .select({ dailySendCap: areCampaigns.dailySendCap, channelsEnabled: areCampaigns.channelsEnabled })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
+        const refusal = sendIncreaseRefusal(
+          cur,
+          { dailySendCap: rest.dailySendCap, channelsEnabled: rest.channelsEnabled },
+          { outboundPaused: await isOutboundPaused(ctx.workspace.id), workspaceCap: await workspaceAreCap(db, ctx.workspace.id) },
+        );
+        if (refusal) throw new TRPCError({ code: "PRECONDITION_FAILED", message: refusal });
+      }
       const updates: Partial<typeof areCampaigns.$inferInsert> = {};
       if (rest.name !== undefined) updates.name = rest.name;
       if (rest.description !== undefined) updates.description = rest.description;
@@ -764,6 +792,30 @@ export const campaignsRouter = router({
         .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
     }),
+
+  /**
+   * What a campaign's daily cap sits inside (U11): the workspace's Revenue
+   * Engine cap and what it has sent today across all campaigns, the enabled
+   * mailboxes and their daily limits added up, and the pause. Read-only.
+   */
+  capContext: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const workspaceCap = await workspaceAreCap(db, ctx.workspace.id);
+    const tz = await getWorkspaceTimezone(ctx.workspace.id);
+    const left = await areWorkspaceSendsLeft(db, ctx.workspace.id, startOfLocalDay(tz, new Date()));
+    const [mb] = await db
+      .select({ n: sql<number>`count(*)`, total: sql<number>`sum(${sendingAccounts.dailySendLimit})` })
+      .from(sendingAccounts)
+      .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)));
+    return {
+      workspaceCap,
+      workspaceSentToday: Math.max(0, workspaceCap - left.left),
+      mailboxes: Number(mb?.n ?? 0),
+      mailboxDailyTotal: Number(mb?.total ?? 0),
+      outboundPaused: await isOutboundPaused(ctx.workspace.id),
+    };
+  }),
 
   /**
    * How many prospects a fit gate of `minConfidence` would reject (audit

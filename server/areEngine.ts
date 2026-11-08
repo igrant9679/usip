@@ -909,7 +909,7 @@ export async function enrolledElsewhere(
 }
 
 /** ARE Settings' Daily Send Cap when the workspace has no settings row: the column's default. */
-const ARE_WORKSPACE_DAILY_CAP_DEFAULT = 50;
+export const ARE_WORKSPACE_DAILY_CAP_DEFAULT = 50;
 
 /**
  * Sends the Revenue Engine has left today across all of a workspace's
