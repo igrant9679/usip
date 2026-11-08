@@ -31,6 +31,7 @@ import { normalizeSuppressionEmail } from "../unsubscribe";
 import { suppressionPersonId } from "./suppression";
 import { resumeAreProspectAfterAutoReply } from "./are/stepHold";
 import { escapeHtml } from "@shared/escapeHtml";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 export const REPLY_CLASSES = [
   "willing_to_meet",
@@ -824,11 +825,6 @@ export async function runConversationAutopilotForWorkspace(
   return { classified, actioned };
 }
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 /** Cron entry: run reply autopilot for every workspace with mode != 'off'. */
 export async function runConversationAutopilotAllWorkspaces(): Promise<{ workspaces: number; classified: number }> {
@@ -844,12 +840,13 @@ export async function runConversationAutopilotAllWorkspaces(): Promise<{ workspa
   }
 
   const rows = await db.select().from(workspaceSettings).where(sql`${workspaceSettings.conversationAutopilotMode} <> 'off'`);
-  const dayStart = startOfUtcDay();
   let workspaces = 0, classified = 0;
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const mode = ws.conversationAutopilotMode as "approval" | "auto";
     const cap = ws.conversationAutopilotDailyCap ?? 100;
     try {

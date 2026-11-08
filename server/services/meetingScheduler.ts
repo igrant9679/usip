@@ -47,6 +47,7 @@ import { rankOf } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
 import { liveMeetingStatuses, remindableMeetingStatuses } from "@shared/meetingStatus";
 import { affectedRowsOf } from "../_core/claim";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 // Every offerable time derives from the workspace's configured zone rather than
 // the host's clock — the container runs on UTC, which is a deployment detail, not
@@ -1197,11 +1198,6 @@ export async function expireUnpickedProposals(nowMs = Date.now()): Promise<numbe
   return closed;
 }
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 /**
  * Pick the highest-privilege ACTIVE member of a workspace to own
@@ -1386,12 +1382,13 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
   if (!db) return { workspaces: 0, proposed: 0 };
 
   const rows = await db.select().from(workspaceSettings).where(ne(workspaceSettings.meetingAutopilotMode, "off"));
-  const dayStart = startOfUtcDay();
   let workspaces = 0, proposed = 0;
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const cap = ws.meetingAutopilotDailyCap ?? 10;
     try {
       // Regenerate outdated proposals FIRST (owner ask 2026-09-20): a proposal

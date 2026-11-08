@@ -21,6 +21,7 @@ import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
 import { invokeLLM, contentText } from "../_core/llm";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 function daysSince(d: Date | string | null | undefined): number | null {
   if (!d) return null;
@@ -171,24 +172,19 @@ Return: {
   return { analyzed, tasksCreated };
 }
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
-
 /** Cron entry: run the deal autopilot for every workspace with mode != 'off'. */
 export async function runDealAutopilotAllWorkspaces(): Promise<{ workspaces: number; analyzed: number }> {
   const db = await getDb();
   if (!db) return { workspaces: 0, analyzed: 0 };
 
   const rows = await db.select().from(workspaceSettings).where(sql`${workspaceSettings.dealAutopilotMode} <> 'off'`);
-  const dayStart = startOfUtcDay();
   let workspaces = 0, analyzed = 0;
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const mode = ws.dealAutopilotMode as "approval" | "auto";
     const cap = ws.dealAutopilotDailyCap ?? 50;
     try {

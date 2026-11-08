@@ -33,6 +33,7 @@ import {
 import { invokeLLM } from "../_core/llm";
 import { scoreIcpMatch } from "../areEngine";
 import { buildEffectiveIcp, scoringTargetsOf } from "./are/effectiveIcp";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 export const MIN_FIT = 25;
 export const CLEAR_GAP = 15;
@@ -227,8 +228,6 @@ export async function applyPicks(workspaceId: number, picks: RoutePick[]): Promi
   return { added, skipped };
 }
 
-function startOfUtcDay(): Date { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; }
-
 /**
  * Cron entry: for every workspace with routing on, route people who are in
  * nothing yet (no active campaign, no active sequence, no pending
@@ -241,9 +240,10 @@ export async function runCampaignRoutingAllWorkspaces(): Promise<{ workspaces: n
   const rows = await db.select().from(workspaceSettings).where(ne(workspaceSettings.campaignRoutingMode, "off"));
   const { archivedWorkspaceIds } = await import("../_core/workspaceArchive");
   const archivedWs = await archivedWorkspaceIds();
-  const dayStart = startOfUtcDay();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     try {
       const mode = ws.campaignRoutingMode as "approval" | "auto";
       const cap = ws.campaignRoutingDailyCap ?? 25;

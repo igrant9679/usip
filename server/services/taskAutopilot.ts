@@ -24,6 +24,7 @@ import { activeTaskStatuses } from "@shared/taskStatus";
 import { prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM, contentText } from "../_core/llm";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 export type AutopilotMode = "off" | "approval" | "auto";
 
@@ -179,11 +180,6 @@ Return: {
 }
 
 /** UTC start-of-day, for the per-workspace daily cap. */
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 /**
  * Cron entry: run the autopilot for every workspace whose mode != 'off'.
@@ -202,11 +198,12 @@ export async function runTaskAutopilotAllWorkspaces(): Promise<{ workspaces: num
 
   let workspaces = 0;
   let created = 0;
-  const dayStart = startOfUtcDay();
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of settingsRows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const mode = ws.taskAutopilotMode as "approval" | "auto";
     const cap = ws.taskAutopilotDailyCap ?? 25;
     try {

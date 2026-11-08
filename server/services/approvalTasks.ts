@@ -26,6 +26,7 @@ import { getDb } from "../db";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { textToHtml } from "../mergeVars";
 import { affectedRowsOf } from "../_core/claim";
+import { utcDayStart } from "@shared/timeWindows";
 
 export type ApprovalTaskKind = "chat_follow_up" | "social_invite";
 export interface ApprovalTaskRow {
@@ -203,7 +204,10 @@ export async function sendAllApprovalTasks(workspaceId: number, kind: ApprovalTa
     // per-account activity gate still applies inside each send.
     const db = await getDb();
     if (db) {
-      const since = new Date(); since.setUTCHours(0, 0, 0, 0);
+      // UTC on purpose, the same day socialAutopilot's INVITE_HARD_CAP counts:
+      // LinkedIn's limits are the account's risk, not the workspace's calendar
+      // (audit X1.4 kept this one; shared/timeWindows.ts).
+      const since = utcDayStart();
       const [{ n: sentToday }] = await db
         .select({ n: sql<number>`count(*)` })
         .from(unipileInvites)
