@@ -21,9 +21,17 @@
  *
  * caldavPassword is not on the list: it has been encrypted on write since it
  * was added (routers/calendar.ts).
+ *
+ * users.mfa_totp_secret joined the list on 2026-11-07 (services/totpSecret.ts).
+ * Its column was varchar(64) until migration 0350, and raw migrations run in
+ * the background after the server starts, so a write here could land before
+ * the column is wide enough. Under a strict SQL mode that write is refused;
+ * under a lenient one it would be cut short and the account's second factor
+ * lost. So every write is read back, and one that did not land whole is put
+ * back to the plaintext it replaced, for the next boot to try again.
  */
 import { and, eq, isNotNull, or } from "drizzle-orm";
-import { calendarAccounts, sendingAccounts } from "../../drizzle/schema";
+import { calendarAccounts, sendingAccounts, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { decryptField, encryptField } from "../emailAdapter";
 
@@ -44,6 +52,7 @@ export function encryptedReplacement(value: string | null | undefined): string |
 const TABLES = [
   { name: "sending_accounts", table: sendingAccounts, cols: ["smtpPassword", "imapPassword", "oauthAccessToken", "oauthRefreshToken"] as const },
   { name: "calendar_accounts", table: calendarAccounts, cols: ["oauthAccessToken", "oauthRefreshToken"] as const },
+  { name: "users", table: users, cols: ["mfaTotpSecret"] as const },
 ];
 
 export async function encryptLegacyMailboxSecrets(dbArg?: Db): Promise<{ encrypted: number }> {
@@ -60,14 +69,28 @@ export async function encryptLegacyMailboxSecrets(dbArg?: Db): Promise<{ encrypt
       for (const col of cols) {
         const enc = encryptedReplacement(row[col]);
         if (!enc) continue;
-        const [res] = (await db
-          .update(t)
-          .set({ [col]: enc, updatedAt: row.updatedAt })
-          .where(and(eq(t.id, row.id), eq(t[col], row[col])))) as any;
-        if (Number(res?.affectedRows ?? 1) > 0) encrypted++;
+        try {
+          const [res] = (await db
+            .update(t)
+            .set({ [col]: enc, updatedAt: row.updatedAt })
+            .where(and(eq(t.id, row.id), eq(t[col], row[col])))) as any;
+          if (!(Number(res?.affectedRows ?? 1) > 0)) continue;
+          // Read back: a value cut short by a column still too narrow is put
+          // back as it was (see the header), never left half-written.
+          const [back] = await db.select({ v: t[col] }).from(t).where(eq(t.id, row.id)).limit(1);
+          if (back && back.v !== enc) {
+            await db.update(t).set({ [col]: row[col], updatedAt: row.updatedAt }).where(and(eq(t.id, row.id), eq(t[col], back.v)));
+            console.warn(`[secretBackfill] ${col} on row ${row.id} did not store whole; left as it was for the next boot`);
+            continue;
+          }
+          encrypted++;
+        } catch (e) {
+          // A strict SQL mode refuses the long value outright: nothing changed.
+          console.warn(`[secretBackfill] ${col} on row ${row.id} not encrypted this time:`, (e as Error)?.message ?? e);
+        }
       }
     }
   }
-  if (encrypted > 0) console.log(`[secretBackfill] encrypted ${encrypted} stored mailbox secret(s)`);
+  if (encrypted > 0) console.log(`[secretBackfill] encrypted ${encrypted} stored secret(s)`);
   return { encrypted };
 }
