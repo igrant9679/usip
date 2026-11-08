@@ -61,7 +61,8 @@ export default function AnalyticsV2() {
   const winLoss = trpc.opportunities.winLoss.useQuery(undefined as any, { retry: false });
   const topReps = trpc.opportunities.topReps.useQuery(undefined as any, { retry: false });
   const seqPerf = trpc.sequences.getPerformanceAnalytics.useQuery({} as any, { retry: false });
-  const taskStats = trpc.tasks.stats.useQuery();
+  // The Tasks page's scope (audit 2026-10-20, R72): a rep's own, a manager's everyone's.
+  const taskStats = trpc.tasks.stats.useQuery({ mine: true });
   const meetStats = trpc.meetings.stats.useQuery();
   const convStats = trpc.conversations.stats.useQuery();
   const socialFunnel = trpc.unipile.socialFunnelStats.useQuery(undefined as any, { retry: false });

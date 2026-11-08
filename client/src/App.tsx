@@ -83,6 +83,7 @@ const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
 const Settings = lazyChunk(() => import("@/pages/usip/Settings"));
 const SettingsHub = lazyChunk(() => import("@/pages/usip/SettingsHub"));
 const Social = lazyChunk(() => import("@/pages/usip/Social"));
+// Retired (R72, X6.3, 2026-11-08): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Tasks = lazyChunk(() => import("@/pages/usip/Tasks"));
 const TasksV2 = lazyChunk(() => import("@/pages/usip/TasksV2"));
 const MeetingsV2 = lazyChunk(() => import("@/pages/usip/MeetingsV2"));
@@ -546,7 +547,8 @@ function Router() {
       <Route path="/customers"><AuthGate><Customers /></AuthGate></Route>
       <Route path="/renewals"><AuthGate><Renewals /></AuthGate></Route>
       <Route path="/qbrs"><AuthGate><QBRs /></AuthGate></Route>
-      <Route path="/tasks"><AuthGate><Tasks /></AuthGate></Route>
+      {/* One task page (R72, X6.3; 2026-11-08): /tasks folded into /v2/tasks. See lib/retiredRoutes. */}
+      <Route path="/tasks"><AuthGate><RetiredRedirect from="/tasks" /></AuthGate></Route>
       <Route path="/workflows"><AuthGate><Workflows /></AuthGate></Route>
       <Route path="/dashboards"><AuthGate><Dashboards /></AuthGate></Route>
       <Route path="/reports"><AuthGate><Reports /></AuthGate></Route>

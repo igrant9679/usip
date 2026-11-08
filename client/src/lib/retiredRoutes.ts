@@ -124,6 +124,19 @@
  * putting its one <Route> line back in App.tsx.
  */
 
+/*
+ * Batch CONB (2026-11-08, audit 2026-10-20 R72, U33, U13 and X6.3) retired
+ * the last pairs, folding first again:
+ *
+ *   /tasks     → /v2/tasks   R72: one task page. /v2/tasks took /tasks' Today
+ *                            / Upcoming / Overdue / Done / All tabs (as views,
+ *                            `?view=`), its related-record filter, Reopen and
+ *                            Cancel; it already had the assignee picker and
+ *                            filter (ported 2026-10-29). Tasks.tsx is kept,
+ *                            unrouted, and still exports RelatedTasks, which
+ *                            the record pages embed.
+ */
+
 /**
  * Retired path → its v2 equivalent. Both are real routes in App.tsx. A `:name`
  * segment in a key is filled into the same `:name` in its target, and a target
@@ -140,6 +153,7 @@ export const RETIRED_ROUTES = {
   "/unified-inbox": "/v2/inbox?tab=social&view=chats",
   "/v2/conversations": "/v2/inbox",
   "/quotes": "/proposals",
+  "/tasks": "/v2/tasks",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

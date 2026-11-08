@@ -318,8 +318,9 @@ describe("the wired controls work from their screens", () => {
 // /sequences, /inbox, /unified-inbox, /mailbox and /v2/conversations were
 // retired into the v2 editor and the one reply workspace by batch CONA
 // (merged 2026-11-07; client/src/lib/retiredRoutes.ts), so their pairs left.
+// /tasks was retired into /v2/tasks by batch CONB (2026-11-08, R72), so its
+// pair left too.
 const ROUTE_PAIRS: Array<[string, string, string]> = [
-  ["/tasks", "/v2/tasks", "which task page to keep is the owner's decision (R72)"],
   ["/dashboard", "/v2/home", "two homes, chosen per person with Set as home (G56, owner decision)"],
   ["/workflows", "/v2/workflows", "the rule builder and the Autonomy Center: different pages over one engine"],
 ];

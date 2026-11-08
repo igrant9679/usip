@@ -1,7 +1,7 @@
 /**
- * The rules both task pages read (audit 2026-10-20, R72). /tasks and
- * /v2/tasks are both still live — which one stays is the owner's call — and
- * they had drifted apart:
+ * The task rules (audit 2026-10-20, R72). /tasks and /v2/tasks were both
+ * live and had drifted apart; /tasks is now retired into /v2/tasks (batch
+ * CONB, 2026-11-08), and Home, Calls and Analytics read the same scope:
  *
  *   - Overdue. /tasks called a task overdue only from the start of today on
  *     the viewer's clock; /v2/tasks and the server's stat cards from the
@@ -30,6 +30,30 @@ export function taskDueState(dueAt: Date | string | null | undefined, nowMs: num
   if (due < nowMs) return "overdue";
   if (due <= endOfZonedDay(timeZone, nowMs)) return "today";
   return "upcoming";
+}
+
+/**
+ * Today / Upcoming / Overdue, the tabs /tasks had and /v2/tasks took over
+ * when /tasks was retired into it (audit 2026-10-20, R72 and X6.3; batch
+ * CONB, 2026-11-08). Workable tasks only; an undated one is Upcoming, as on
+ * /tasks. Each bucket keeps the order it was given.
+ */
+export function bucketTasks<T extends { status: string; dueAt?: Date | string | null }>(
+  rows: readonly T[],
+  timeZone: string,
+  nowMs: number,
+): { today: T[]; upcoming: T[]; overdue: T[] } {
+  const today: T[] = [];
+  const upcoming: T[] = [];
+  const overdue: T[] = [];
+  for (const t of rows) {
+    if (!(WORKABLE_TASK_STATUSES as readonly string[]).includes(t.status)) continue;
+    const due = taskDueState(t.dueAt, nowMs, timeZone);
+    if (due === "overdue") overdue.push(t);
+    else if (due === "today") today.push(t);
+    else upcoming.push(t);
+  }
+  return { today, upcoming, overdue };
 }
 
 /** A manager or above sees every task; anyone else sees their own. */

@@ -234,8 +234,10 @@ export default function Home() {
   const companies = (trpc.accounts.list.useQuery({ limit: 5 }).data ?? []) as any[];
   // "Your tasks" listed everyone's (audit 2026-10-20, G57).
   const tasks = (trpc.tasks.list.useQuery({ ownerOnly: true, status: "open" }).data ?? []) as any[];
-  // The one definition of open/dueToday/overdue, in the workspace's timezone.
-  const taskStats = trpc.tasks.stats.useQuery().data as any;
+  // The one definition of open/dueToday/overdue, in the workspace's timezone,
+  // over the Tasks page's scope (audit 2026-10-20, R72): a rep's own tasks, a
+  // manager's everyone's. It counted every task in the workspace for everyone.
+  const taskStats = trpc.tasks.stats.useQuery({ mine: true }).data as any;
   const sequences = (trpc.sequences.list.useQuery().data ?? []) as any[];
   const metrics = trpc.dataHealth.getMetrics.useQuery().data as any;
   const trend = trpc.workspace.trend7d.useQuery().data;
@@ -297,7 +299,7 @@ export default function Home() {
                 and it used new Date().setHours(...) — the BROWSER's day, the
                 same UTC-day bug activities.ts records having fixed server-side
                 using the workspace timezone. Two copies, one fixed. */}
-            <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks")} />
+            <HeroChip label="Tasks due today" value={taskStats?.dueToday ?? 0} series={trend?.activities} color="#F59E0B" onClick={() => setLocation("/v2/tasks?view=today")} />
             <HeroChip label="Unhandled replies" value={convStats?.unhandled ?? 0} series={trend?.replies} color="#8B5CF6" onClick={() => setLocation("/v2/inbox")} />
             <div className="flex-1" />
             <button type="button" onClick={() => setLocation("/v2/inbox?tab=notifications")} className="hidden lg:flex min-w-0 max-w-md items-center gap-2 text-left">

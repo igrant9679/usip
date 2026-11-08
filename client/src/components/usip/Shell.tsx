@@ -259,7 +259,7 @@ const _LEGACY_NAV: NavGroup[] = [
     //   - /quotes        → opens from /proposals (similar customer-facing doc)
     //   - /territories   → opens from /lead-routing (routing config lives there)
     items: [
-      { href: "/tasks", label: "Tasks", icon: ListChecks },
+      { href: "/v2/tasks", label: "Tasks", icon: ListChecks },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
