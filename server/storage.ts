@@ -80,6 +80,22 @@ export async function storagePut(
  * through the same presigned PUT an upload uses, at the exact key (no hash
  * suffix): its content is gone and its link serves an empty file. Throws when
  * the overwrite fails, so a caller can keep its record until it succeeds.
+ *
+ * Re-checked 2026-11-07 (audit final pass, R100), and still no delete:
+ *  - this adapter, `_core/storageProxy.ts` and every test call only
+ *    `v1/storage/presign/put` and `v1/storage/presign/get`; no SDK for the
+ *    Forge proxy is installed (no S3 client either: the presigned URL is the
+ *    only way to the bucket, and it is minted per verb by Forge);
+ *  - the other published generation of this same Manus WebDev template helper
+ *    exports `storagePut` and `storageGet` only (`v1/storage/upload`,
+ *    `v1/storage/downloadUrl`), again with no delete;
+ *  - Manus's documented `DELETE /v1/files/{file_id}` (open.manus.ai) belongs to
+ *    a different API: api.manus.ai with an `API_KEY` header, for files
+ *    uploaded through its Files API by id. It does not address objects this
+ *    proxy wrote by path, and we hold no such key or id.
+ * So the key itself stays behind with an empty object at it. When Forge
+ * documents a delete (or storage moves to a bucket we hold credentials for),
+ * replace the PUT below with it; callers already treat this as "gone or throw".
  */
 export async function storageErase(relKey: string): Promise<void> {
   const { forgeUrl, forgeKey } = getForgeConfig();

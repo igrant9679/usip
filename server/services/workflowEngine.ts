@@ -75,7 +75,8 @@ import {
 } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
 import { refFromRelated, researchUseFor } from "./research/recipient";
-import { RECORD_FIELDS } from "@shared/workflowTriggers";
+import { RECORD_FIELDS, UPDATE_FIELD_ALLOWED } from "@shared/workflowTriggers";
+export { UPDATE_FIELD_ALLOWED };
 
 /**
  * Evaluate a rule's condition spec against a flat payload. Supports `{all:[…]}`
@@ -172,6 +173,12 @@ export function normalizeConditions(raw: unknown): { all?: any[]; any?: any[] } 
   return {};
 }
 
+/** A user id an action names, or null when it names none (blank, 0, junk). Exported for the dry run. */
+export function pickedUserId(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 async function runAction(
   db: any, ws: number, rule: any, action: Action,
   wsSettings: { slackWebhookUrl?: string | null; teamsWebhookUrl?: string | null } | undefined,
@@ -220,7 +227,9 @@ async function runAction(
           dueAt: days == null ? null : new Date(Date.now() + days * 86400000),
           relatedType: ctx.relatedType ?? null,
           relatedId: ctx.relatedId ?? null,
-          ownerUserId: p.ownerUserId ?? ctx.ownerUserId ?? null,
+          // A blank pick in the editor means "the record's owner" (G71); a
+          // blank string used to reach the integer column as "".
+          ownerUserId: pickedUserId(p.ownerUserId) ?? ctx.ownerUserId ?? null,
           source: "workflow",
         } as never);
         return null;
@@ -230,7 +239,9 @@ async function runAction(
       // did nothing while the run still logged as successful.
       case "notify":
       case "notify_user": {
-        const uid = p.userId ?? ctx.ownerUserId;
+        // Blank means the record's owner, as the editor says (G71). It used to
+        // be `?? owner`, and the editor's default "" notified no one.
+        const uid = pickedUserId(p.userId) ?? ctx.ownerUserId;
         if (!uid) return null; // no explicit target — skip quietly (team alerts use slack/teams/webhook)
         await db.insert(notifications).values({
           workspaceId: ws, userId: Number(uid), kind: "workflow_fired",
@@ -292,11 +303,7 @@ async function runAction(
         // Strict per-entity whitelist. Params are user input and this writes
         // to the DB, so an allowlist is the only safe shape here — never
         // interpolate a caller-supplied column name.
-        const ALLOWED: Record<string, Record<string, "string" | "number">> = {
-          opportunity: { stage: "string", value: "number", winProb: "number", ownerUserId: "number", nextStep: "string" },
-          lead:        { status: "string", score: "number", ownerUserId: "number" },
-          contact:     { title: "string", ownerUserId: "number" },
-        };
+        const ALLOWED = UPDATE_FIELD_ALLOWED;
         const entity = ctx.relatedType ?? "";
         const allowed = ALLOWED[entity];
         if (!allowed) return `update_field: not supported for ${entity || "this record type"}`;
@@ -660,6 +667,31 @@ export async function fireRecordCreated(
   }
 }
 
+/**
+ * The record_updated payload: the merged post-update row plus `changed` (the
+ * patched field names), so a rule can condition on what actually MOVED and not
+ * merely on the new value. Exported for the dry run (F46), which builds the
+ * payload a real save would.
+ */
+export function buildRecordUpdatedPayload(
+  entity: string,
+  recordId: number,
+  before: Record<string, any>,
+  patch: Record<string, any>,
+  ownerUserId: number | null,
+): Record<string, any> {
+  const payload: Record<string, any> = {};
+  const beforeKeys = Object.keys(before ?? {});
+  for (let i = 0; i < beforeKeys.length; i++) payload[beforeKeys[i]!] = before[beforeKeys[i]!];
+  const patchKeys = Object.keys(patch ?? {});
+  for (let i = 0; i < patchKeys.length; i++) payload[patchKeys[i]!] = patch[patchKeys[i]!];
+  payload.entity = entity;
+  payload.id = recordId;
+  payload.ownerUserId = ownerUserId;
+  payload.changed = patchKeys;
+  return payload;
+}
+
 export async function fireRecordUpdated(
   workspaceId: number,
   entity: "lead" | "contact" | "opportunity",
@@ -670,17 +702,7 @@ export async function fireRecordUpdated(
 ): Promise<void> {
   if (!recordId) return;
   try {
-    // Merged post-update row plus `changed` (the patched field names), so a rule
-    // can condition on what actually MOVED and not merely on the new value.
-    const payload: Record<string, any> = {};
-    const beforeKeys = Object.keys(before ?? {});
-    for (let i = 0; i < beforeKeys.length; i++) payload[beforeKeys[i]!] = before[beforeKeys[i]!];
-    const patchKeys = Object.keys(patch ?? {});
-    for (let i = 0; i < patchKeys.length; i++) payload[patchKeys[i]!] = patch[patchKeys[i]!];
-    payload.entity = entity;
-    payload.id = recordId;
-    payload.ownerUserId = ownerUserId;
-    payload.changed = patchKeys;
+    const payload = buildRecordUpdatedPayload(entity, recordId, before, patch, ownerUserId);
     await fireWorkflowRules(workspaceId, "record_updated", {
       payload, relatedType: entity, relatedId: recordId, ownerUserId,
     });
@@ -695,6 +717,20 @@ export async function fireRecordUpdated(
  * valuable rule anyone builds, was silently dead on both proposal-accept paths,
  * on the Alerts page's move control and on the manager approval queue.
  */
+export type StageChangedExtra = { value?: number; winProb?: number; isWon?: boolean; isLost?: boolean; name?: string | null };
+
+/** The stage_changed payload. Exported for the dry run (F46). */
+export function buildStageChangedPayload(opportunityId: number, fromStage: string | null, toStage: string, extra: StageChangedExtra): Record<string, any> {
+  const payload: Record<string, any> = {};
+  const keys = Object.keys(extra ?? {});
+  for (let i = 0; i < keys.length; i++) payload[keys[i]!] = (extra as Record<string, any>)[keys[i]!];
+  payload.entity = "opportunity";
+  payload.id = opportunityId;
+  payload.stage = toStage;
+  payload.fromStage = fromStage;
+  return payload;
+}
+
 export async function fireStageChanged(
   workspaceId: number,
   opportunityId: number,
@@ -705,13 +741,7 @@ export async function fireStageChanged(
 ): Promise<void> {
   if (!opportunityId) return;
   try {
-    const payload: Record<string, any> = {};
-    const keys = Object.keys(extra ?? {});
-    for (let i = 0; i < keys.length; i++) payload[keys[i]!] = (extra as Record<string, any>)[keys[i]!];
-    payload.entity = "opportunity";
-    payload.id = opportunityId;
-    payload.stage = toStage;
-    payload.fromStage = fromStage;
+    const payload = buildStageChangedPayload(opportunityId, fromStage, toStage, extra);
     await fireWorkflowRules(workspaceId, "stage_changed", {
       payload, relatedType: "opportunity", relatedId: opportunityId, ownerUserId,
     });
@@ -732,6 +762,33 @@ export async function fireStageChanged(
  * whose window contains its dueAt. That avoids needing an "already fired" column
  * while also not re-alerting on the same task every hour forever.
  */
+/** The task_overdue payload. Exported for the dry run (F46). */
+export function buildTaskOverduePayload(t: { id: number; title: string; type: string | null; priority: string | null; dueAt: Date | string | null }): Record<string, any> {
+  return { entity: "task", taskId: t.id, title: t.title, type: t.type, priority: t.priority, dueAt: t.dueAt };
+}
+
+/**
+ * The deal_stuck payload, for both of its dispatch sites in routers/operations.ts
+ * (the nightly sweep and the manual check) and the dry run (F46). `ruleName`
+ * rides along for the webhook body; it is not a condition field.
+ */
+export function buildDealStuckPayload(
+  deal: { id: number; name: string | null; stage: string | null; daysInStage: number | null; value: unknown; winProb: number | null; ownerId?: number | null },
+  ruleName?: string | null,
+): Record<string, any> {
+  return {
+    entity: "opportunity",
+    id: deal.id,
+    name: deal.name,
+    stage: deal.stage,
+    daysInStage: deal.daysInStage,
+    value: Number(deal.value ?? 0),
+    winProb: deal.winProb,
+    ownerUserId: deal.ownerId ?? null,
+    ...(ruleName ? { ruleName } : {}),
+  };
+}
+
 export async function runTaskOverdueCron(intervalMs: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -793,14 +850,7 @@ export async function runTaskOverdueCron(intervalMs: number): Promise<void> {
     }).catch((e) => console.error(`[WorkflowEngine] task_overdue notify failed for task ${t.id}:`, e));
 
     await fireWorkflowRules(t.workspaceId, "task_overdue", {
-      payload: {
-        entity: "task",
-        taskId: t.id,
-        title: t.title,
-        type: t.type,
-        priority: t.priority,
-        dueAt: t.dueAt,
-      },
+      payload: buildTaskOverduePayload(t),
       // Point actions at the record the task is ABOUT (so create_task /
       // update_field / enroll_sequence act on the deal or person), falling
       // back to the task itself when it isn't linked to anything.

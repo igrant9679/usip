@@ -206,10 +206,162 @@ export const ACTION_ENTITY_SUPPORT: Record<string, readonly string[]> = {
   send_email_draft: ["lead", "contact"],
 };
 
+/**
+ * The fields update_field may write, per record type, and as what: the
+ * engine's allowlist (workflowEngine.runAction), the dry run's (F46) and the
+ * editor's field picker (G71). Never a caller-supplied column name.
+ */
+export const UPDATE_FIELD_ALLOWED: Record<string, Record<string, "string" | "number">> = {
+  opportunity: { stage: "string", value: "number", winProb: "number", ownerUserId: "number", nextStep: "string" },
+  lead: { status: "string", score: "number", ownerUserId: "number" },
+  contact: { title: "string", ownerUserId: "number" },
+};
+
 export function actionSupportsEntity(actionType: string, entity: string | null | undefined): boolean {
   // "any" and the non-record triggers cover at least one entity the action
   // handles, so the builder must not grey it out there.
   if (!entity || entity === "any") return true;
   const list = ACTION_ENTITY_SUPPORT[actionType];
   return !list || list.indexOf(entity) >= 0;
+}
+
+/* ── Declared payload schemas (audit 2026-10-20, F46) ────────────────────
+ *
+ * The key lists above say WHICH keys each trigger's payload carries. This
+ * says what each key IS: its label, its type, and what a value refers to, so
+ * the editor can offer a name picker instead of an id box, the AI rule
+ * generator's prompt can describe every trigger from the same declaration
+ * instead of a hand-written paragraph, and the tests can check every
+ * dispatch site against it. A key in any list above must have an entry here
+ * (server/pubF46WorkflowSchemas.test.ts fails otherwise).
+ */
+
+export type PayloadFieldType = "text" | "number" | "boolean" | "date" | "id" | "list";
+/** What an id or a fixed value refers to, for the editor's picker. */
+export type PayloadFieldRef = "user" | "account" | "stage" | "campaign" | "record";
+
+export type PayloadField = {
+  key: string;
+  label: string;
+  type: PayloadFieldType;
+  ref?: PayloadFieldRef;
+  /** The fixed set of values the key can hold, when there is one. */
+  values?: readonly string[];
+  /** One line for people and for the model. */
+  hint?: string;
+};
+
+export const LEAD_STATUSES = ["new", "working", "qualified", "unqualified", "converted"] as const;
+export const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
+export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+/** Every signal a signal_received dispatch site sends (see TRIGGER_FIELDS' sites). */
+export const SIGNAL_NAMES = ["job_change", "brand_change", "meeting_booked", "email_reply"] as const;
+
+export const PAYLOAD_FIELDS: Record<string, Omit<PayloadField, "key">> = {
+  entity: { label: "Record type", type: "text", hint: "lead, contact, opportunity, task, or the signal's subject" },
+  id: { label: "Record", type: "id", ref: "record" },
+  ownerUserId: { label: "Owner", type: "id", ref: "user" },
+  company: { label: "Company", type: "text" },
+  title: { label: "Title", type: "text", hint: "a person's job title, or a task's title" },
+  source: { label: "Source", type: "text", hint: "e.g. webform, booking_link, landing:<slug>" },
+  status: { label: "Lead status", type: "text", values: LEAD_STATUSES },
+  email: { label: "Email", type: "text" },
+  accountId: { label: "Account", type: "id", ref: "account" },
+  name: { label: "Name", type: "text", hint: "the deal's or the person's name" },
+  stage: { label: "Stage", type: "text", ref: "stage" },
+  fromStage: { label: "Previous stage", type: "text", ref: "stage" },
+  value: { label: "Deal value", type: "number" },
+  winProb: { label: "Win %", type: "number" },
+  isWon: { label: "Is won", type: "boolean" },
+  isLost: { label: "Is lost", type: "boolean" },
+  daysInStage: { label: "Days in stage", type: "number" },
+  score: { label: "Lead score", type: "number", hint: "0–100, written after a lead is created" },
+  grade: { label: "Lead grade", type: "text", values: ["A", "B", "C", "D"] },
+  changed: { label: "Changed fields", type: "list", hint: "names of the fields this update changed" },
+  taskId: { label: "Task", type: "id", ref: "record" },
+  type: { label: "Task type", type: "text", values: TASK_TYPES },
+  priority: { label: "Task priority", type: "text", values: TASK_PRIORITIES },
+  dueAt: { label: "Due", type: "date" },
+  signal: { label: "Signal", type: "text", values: SIGNAL_NAMES },
+  oldCompany: { label: "Old company", type: "text" },
+  newCompany: { label: "New company", type: "text" },
+  oldName: { label: "Old brand name", type: "text" },
+  newName: { label: "New brand name", type: "text" },
+  oldDomain: { label: "Old domain", type: "text" },
+  newDomain: { label: "New domain", type: "text" },
+  campaignId: { label: "Revenue Engine campaign", type: "id", ref: "campaign" },
+  sentiment: { label: "Reply sentiment", type: "text" },
+};
+
+/** One key's declaration, with a plain fallback for a key saved before it was declared. */
+export function payloadField(key: string): PayloadField {
+  const d = PAYLOAD_FIELDS[key];
+  return d ? { key, ...d } : { key, label: key, type: "text" };
+}
+
+/** The declared payload of a trigger (scoped to an entity for the record triggers). */
+export function payloadSchemaFor(triggerType: string, entity: string | null | undefined): PayloadField[] {
+  return conditionFieldsFor(triggerType, entity).map(payloadField);
+}
+
+export type DryRunRecordType = "lead" | "contact" | "opportunity" | "task";
+export const DRY_RUN_RECORD_TYPES: readonly DryRunRecordType[] = ["lead", "contact", "opportunity", "task"];
+
+/**
+ * Which records a rule's dry run (F46) can be pointed at: the records its
+ * trigger's events are about. The editor offers these; the server refuses
+ * anything else.
+ */
+export function dryRunRecordTypesFor(triggerType: string, entity: string | null | undefined): DryRunRecordType[] {
+  switch (triggerType) {
+    case "record_created":
+    case "record_updated": {
+      const e = entity || "lead";
+      if (e === "any") return ["lead", "contact", "opportunity"];
+      return (DRY_RUN_RECORD_TYPES as readonly string[]).indexOf(e) >= 0 ? [e as DryRunRecordType] : [];
+    }
+    case "stage_changed":
+    case "deal_stuck":
+      return ["opportunity"];
+    case "task_overdue":
+      return ["task"];
+    case "signal_received":
+      return ["contact", "lead"];
+    default:
+      return [];
+  }
+}
+
+/** What each trigger is, for people and for the model, beside its payload. */
+const TRIGGER_NOTES: Record<string, string> = {
+  record_created: `a lead, contact or opportunity was created. ALWAYS set triggerConfig.entity to "lead", "contact", "opportunity" or "any". A lead's score and grade are written after creation, so never condition on them here.`,
+  record_updated: `a lead, contact or opportunity was saved; the payload is the record after the change plus "changed". Set triggerConfig.entity as for record_created.`,
+  stage_changed: "an opportunity moved stage.",
+  deal_stuck: "a deal sat in one stage too long; set triggerConfig.days (default 7) and optionally triggerConfig.stage. Fires once per stay in a stage.",
+  task_overdue: "an open task passed its due date.",
+  signal_received: `an intent signal; set triggerConfig.signal to one of ${SIGNAL_NAMES.join(", ")} to react to one kind. Each signal carries only its own keys beside "signal".`,
+};
+
+/**
+ * Every live trigger and its declared payload, one line each, for the AI
+ * rule generator's prompt (routers/aiFeatures.ts). Generated, so the model is
+ * told exactly what the editor offers and the engine sends.
+ */
+export function describeTriggerPayloadsForPrompt(): string {
+  const fieldText = (f: PayloadField) => `${f.key} (${f.type}${f.values ? `: ${f.values.join("|")}` : ""})`;
+  const lines: string[] = [];
+  for (const t of LIVE_TRIGGERS) {
+    let payload: string;
+    if (t.id === "record_created" || t.id === "record_updated") {
+      const per = (RECORD_PAYLOAD_ENTITIES as readonly string[]).map((e) => {
+        const own = conditionFieldsFor(t.id, e).filter((k) => (RECORD_COMMON_FIELDS as readonly string[]).indexOf(k) < 0);
+        return `${e}: ${own.map((k) => fieldText(payloadField(k))).join(", ")}`;
+      });
+      payload = `always ${RECORD_COMMON_FIELDS.join(", ")}; then ${per.join("; ")}`;
+    } else {
+      payload = payloadSchemaFor(t.id, null).map(fieldText).join(", ");
+    }
+    lines.push(`- "${t.id}": ${TRIGGER_NOTES[t.id] ?? t.label} Payload: ${payload}.`);
+  }
+  return lines.join("\n");
 }

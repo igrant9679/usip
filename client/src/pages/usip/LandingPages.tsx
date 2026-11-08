@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import { SaveTracker, confirmLeaveWhile } from "@/lib/saveTracker";
 import { isAdminRole } from "@shared/roleRank";
+import { conversionRate } from "@shared/publicForm";
 
 const ALL_FIELDS = [
   { key: "name", label: "Full name" },
@@ -191,6 +192,10 @@ export default function LandingPages() {
                 <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
                   <span className="inline-flex items-center gap-0.5"><Eye className="size-3" /> {p.viewCount}</span>
                   <span className="inline-flex items-center gap-0.5"><Send className="size-3" /> {p.submitCount}</span>
+                  {/* Per-page conversion (F47), with the counts behind it on hover. */}
+                  <span className="inline-flex items-center gap-0.5" title={conversionRate(p.viewCount, p.submitCount).title}>
+                    {conversionRate(p.viewCount, p.submitCount).label} converted
+                  </span>
                 </div>
               </button>
             ))}
