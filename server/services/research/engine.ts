@@ -252,7 +252,7 @@ export const SECTOR_DRAFT_SCHEMA = O({
   messaging: O({ leadWith: L, avoid: L, vocabulary: L, sampleOpening: S }),
   facts: O({
     marketSize: A({ value: S, label: S, source: S }),
-    moneyFlow: O({ sources: L, intermediaries: A({ name: S, role: S, count: S }), recipients: A({ type: S, approxCount: S, notes: S }) }),
+    moneyFlow: O({ sources: L, intermediaries: A({ name: S, role: S, count: S }), recipients: A({ type: S, approxCount: S, notes: S }), links: A({ from: S, to: S }) }),
     programs: A({ name: S, agency: S, flow: S, purpose: S, typicalAward: S, url: S }),
     buying: L, obligations: L, helpers: L, policyWatch: L,
   }),
@@ -277,6 +277,7 @@ const DRAFT_SYSTEM = [
   "Only use URLs from the brief or the numbered source list. Leave a field empty when the brief does not support it.",
   "Job titles: clean titles as they appear on LinkedIn. Industries: LinkedIn industry names. Never-target words: short single words or short phrases.",
   "Lists of sentences (pains, lead-with, avoid, open questions) are one short sentence per item.",
+  "Money flow links (sector only): who passes money to whom, only where the brief says so; name each end exactly as written in sources, intermediaries or recipients. Leave links empty when the brief does not say.",
   "Personas (sector only): 2 to 4 distinct buyer roles from the brief, each with its job titles, what they care about, pains, objections and the angle that works. Describe roles, never named people.",
   "Never include a person's name, email address or phone number anywhere.",
 ].join("\n");

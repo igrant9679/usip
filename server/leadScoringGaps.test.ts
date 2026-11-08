@@ -387,7 +387,11 @@ describe("the preview uses unsaved weights and says when a lead was never scored
     const edited = await caller(REP).leadScoring.breakdown({ leadId: 1, cfg: { ...weights, firmoTitleWeight: 40 } });
     expect(edited.firmographic.value - saved.firmographic.value).toBe(25);
     const page = read("client/src/pages/usip/LeadScoring.tsx");
-    expect(page).toContain("{ leadId: selected ?? 0, cfg: unsaved ? previewCfg : undefined }");
+    // 2026-11-07 (audit U17): the page no longer sends its unsaved weights to
+    // the server; it scores the lead's inputs in the browser with the same
+    // shared functions, as each weight is typed. The server's cfg path above
+    // stays for API callers; resaLeadScoring.test.ts pins that the two agree.
+    expect(page).toContain("componentsWhatIf(bd.inputs as WhatIfLead, weights)");
     expect(page).toContain("<BreakdownPreview cfg={cfg} unsaved=");
   });
 

@@ -22,7 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from "sonner";
 import { History, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
-import { RESEARCH_PART_LABEL, RESEARCH_STATUS_LABEL, type ResearchStatus } from "@shared/researchShape";
+import { draftPartChanges, mergeDraftParts, RESEARCH_PART_LABEL, RESEARCH_STATUS_LABEL, type DraftPart, type ResearchStatus } from "@shared/researchShape";
 
 /* ── Navigation and roles ───────────────────────────────────────────────── */
 
@@ -369,9 +369,15 @@ export const DRAFT_POLL_MS = 20_000;
  * silently replacing theirs. `stale` says so before the person presses Save:
  * while the draft has changes, `refetch` re-reads the saved record every
  * DRAFT_POLL_MS (audit 2026-10-20, P26: nothing polled, so it never did).
+ *
+ * The draft also keeps the content it started from, so a stale draft can be
+ * merged with the newer save part by part (audit 2026-10-20, U30): `merge`
+ * lists what each side changed and rebuilds the draft on the newer revision,
+ * keeping the person's parts where only they changed and asking about the
+ * parts both changed. Before, the only way out was to discard and retype.
  */
 export function useResearchDraft<T>(saved: T | undefined, revision: number | undefined, refetch?: () => unknown) {
-  const [draft, setDraft] = useState<{ value: T; base: number } | null>(null);
+  const [draft, setDraft] = useState<{ value: T; base: number; baseValue: T } | null>(null);
   const value = draft?.value ?? saved;
   const dirty = !!draft && JSON.stringify(draft.value) !== JSON.stringify(saved);
   const stale = dirty && revision != null && draft!.base !== revision;
@@ -388,6 +394,12 @@ export function useResearchDraft<T>(saved: T | undefined, revision: number | und
     const t = setInterval(() => { reread.current?.(); }, DRAFT_POLL_MS);
     return () => clearInterval(t);
   }, [dirty]);
+  const merge: DraftMerge | null = stale && draft && saved !== undefined && revision !== undefined
+    ? {
+      parts: draftPartChanges(draft.baseValue, draft.value, saved),
+      apply: (keepMine: string[]) => setDraft({ value: mergeDraftParts(draft.baseValue, draft.value, saved, keepMine), base: revision, baseValue: saved }),
+    }
+    : null;
   return {
     value,
     dirty,
@@ -396,27 +408,97 @@ export function useResearchDraft<T>(saved: T | undefined, revision: number | und
     baseRevision: draft?.base ?? revision ?? 1,
     patch: (p: Partial<T>) => {
       if (saved === undefined || revision === undefined) return;
-      setDraft((d) => ({ value: { ...(d?.value ?? saved), ...p }, base: d?.base ?? revision }));
+      setDraft((d) => ({ value: { ...(d?.value ?? saved), ...p }, base: d?.base ?? revision, baseValue: d?.baseValue ?? saved }));
     },
     discard: () => setDraft(null),
+    /** For a stale draft: what each side changed, and the merge (U30). */
+    merge,
   };
 }
 
+/** A stale draft's merge: the parts each side changed, and the rebuild onto the newer save (U30). */
+export type DraftMerge = { parts: DraftPart[]; apply: (keepMine: string[]) => void };
+
 /** Pinned to the bottom of the page while there are unsaved changes. */
-export function SaveBar({ dirty, stale, saving, onSave, onDiscard }: { dirty: boolean; stale: boolean; saving: boolean; onSave: () => void; onDiscard: () => void }) {
+export function SaveBar({ dirty, stale, saving, onSave, onDiscard, merge, current, mine }: {
+  dirty: boolean; stale: boolean; saving: boolean; onSave: () => void; onDiscard: () => void;
+  /** With a stale draft: merge it with the newer save part by part (U30). */
+  merge?: DraftMerge | null;
+  /** The newer saved content and the draft, for the merge dialog to show side by side. */
+  current?: unknown;
+  mine?: unknown;
+}) {
+  const [merging, setMerging] = useState(false);
   if (!dirty) return null;
   return (
     <div className="sticky bottom-0 z-10 shrink-0 border-t bg-background/95 backdrop-blur px-4 md:px-6 py-2.5 flex items-center gap-2 flex-wrap">
       <span className="text-sm flex-1 min-w-[12rem]">
         {stale
-          ? "Someone saved a newer version while you were editing. Saving will be refused; note your changes, discard, and make them again."
+          ? merge
+            ? "Someone saved a newer version while you were editing. Review what each of you changed and keep yours or take theirs, part by part."
+            : "Someone saved a newer version while you were editing. Saving will be refused; note your changes, discard, and make them again."
           : "You have unsaved changes."}
       </span>
+      {stale && merge && <Button size="sm" variant="outline" onClick={() => setMerging(true)} disabled={saving}>Review and merge</Button>}
+      {merging && merge && <MergeDialog merge={merge} current={current} mine={mine} onClose={() => setMerging(false)} />}
       <Button variant="outline" size="sm" onClick={onDiscard} disabled={saving}>Discard</Button>
       <Button size="sm" onClick={onSave} disabled={saving || stale}>
         {saving && <Loader2 className="size-3.5 mr-1 animate-spin" />} Save changes
       </Button>
     </div>
+  );
+}
+
+/**
+ * The merge, part by part (U30): a part only one side changed goes that way
+ * without asking; a part both changed is the person's choice, theirs or the
+ * newer save's, shown side by side. Applying rebuilds the draft on the newer
+ * revision; nothing is saved until Save.
+ */
+function MergeDialog({ merge, current, mine, onClose }: { merge: DraftMerge; current?: unknown; mine?: unknown; onClose: () => void }) {
+  const conflicts = merge.parts.filter((p) => p.conflict);
+  const [keep, setKeep] = useState<Record<string, "mine" | "theirs">>(() => Object.fromEntries(conflicts.map((p) => [p.part, "mine"])));
+  const label = (k: string) => RESEARCH_PART_LABEL[k] ?? k;
+  const part = (v: unknown, k: string) => readableText((v as Record<string, unknown> | undefined)?.[k]) || "(empty)";
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Merge with the newer version</DialogTitle>
+          <DialogDescription>Parts only one of you changed are merged as they are. Choose for each part you both changed. Nothing is saved until you press Save.</DialogDescription>
+        </DialogHeader>
+        <ul className="space-y-3 text-sm">
+          {merge.parts.map((p) => (
+            <li key={p.part} className="rounded-md border p-3 space-y-2">
+              <div className="font-medium">{label(p.part)}</div>
+              {!p.conflict ? (
+                <p className="text-xs text-muted-foreground">{p.mine && p.theirs ? "You both made the same change." : p.mine ? "Only you changed this: yours is kept." : "Only the newer version changed this: it is taken."}</p>
+              ) : (
+                <div role="radiogroup" aria-label={`${label(p.part)}: whose to keep`} className="grid gap-2 sm:grid-cols-2">
+                  {(["mine", "theirs"] as const).map((side) => (
+                    <label key={side} className={`rounded border p-2 text-xs cursor-pointer ${keep[p.part] === side ? "border-primary bg-accent" : ""}`}>
+                      <span className="flex items-center gap-1.5 font-medium mb-1">
+                        <input type="radio" name={`merge-${p.part}`} checked={keep[p.part] === side} onChange={() => setKeep({ ...keep, [p.part]: side })} />
+                        {side === "mine" ? "Keep mine" : "Take theirs"}
+                      </span>
+                      <span className="block whitespace-pre-wrap break-words text-muted-foreground max-h-40 overflow-y-auto">{part(side === "mine" ? mine : current, p.part)}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={() => {
+            merge.apply(conflicts.filter((p) => keep[p.part] !== "theirs").map((p) => p.part));
+            toast.success("Merged with the newer version. Check it, then save.");
+            onClose();
+          }}>Merge</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

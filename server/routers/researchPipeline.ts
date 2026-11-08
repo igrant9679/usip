@@ -8,28 +8,38 @@
  *   4. Draft candidates   — 3 subject+body variants
  *   5. Final selection    — pick best variant, resolve personalization tokens
  *
- * `start` checks the recipient, creates the pipeline row and returns; the
- * stages run after the response, writing each stage's output to the row as
- * they go, so the page's poll shows progress (audit 2026-10-20, P144: the
- * request used to run every stage before returning). The email_draft row is
- * created at stage 5. A stage whose AI call fails fails the run; no stock
- * draft is saved in its place (P67).
+ * `start` checks the recipient, creates the pipeline row, queues the run as a
+ * persisted job (services/jobs/runner.ts, bulk_jobs) and returns. The runner
+ * works one stage per slice and each stage writes its output to the row, so
+ * the page's poll shows progress, and a restart mid-run resumes from the
+ * last finished stage instead of losing the run (audit 2026-10-20, P144: the
+ * stages ran in the process that took the request, and a restart cut them
+ * off). The email_draft row is created at stage 5, in one transaction with
+ * the run's completion, so a resumed stage 5 never saves a second draft. A
+ * stage whose AI call fails fails the run; no stock draft is saved in its
+ * place (P67).
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
+  bulkJobs,
   contacts,
   emailDrafts,
   leads,
   opportunities,
   promptVersions,
   researchPipelines,
+  spendLedger,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { insertIdOf } from "../_core/insertId";
+import { runOutsideRequestContext } from "../_core/requestContext";
 import type { ResearchUse } from "../services/research/context";
+import { type BulkJob, enqueueJob, JOB_SLICE_MS, registerJobKind, tickJobs } from "../services/jobs/runner";
+import { averageCallCostUsd } from "@shared/spendReport";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -128,231 +138,354 @@ async function llmJson<T>(workspaceId: number, stage: string, messages: any[], s
   }
 }
 
+/** The job kind a pipeline run is queued under. */
+export const PIPELINE_JOB = "researchPipeline.run";
+/** AI calls a run makes: stages 1 to 4 each ask the model once; stage 5 picks. */
+export const PIPELINE_AI_CALLS = 4;
+
+type PipelinePayload = { pipelineId: number; goal: string; tone: string };
+type PipelineRow = typeof researchPipelines.$inferSelect;
+
 /**
- * A pipeline still "running" this long after its last write was cut off by a
- * restart: the stages run after the response, in the process that took it.
+ * A pipeline still "running" this long after its last write, with no queued
+ * or running job behind it, was cut off: a run from before the job runner,
+ * or one whose job ended without saying so. A run whose job is still active
+ * is left alone however long it waits, because the runner resumes it.
  */
 export const PIPELINE_ORPHAN_MS = 10 * 60_000;
 
+/** The pipeline ids of this workspace's queued or running pipeline jobs. */
+async function activePipelineIds(db: Db, workspaceId: number): Promise<Set<number>> {
+  const jobs = await db
+    .select({ payload: bulkJobs.payload })
+    .from(bulkJobs)
+    .where(and(eq(bulkJobs.workspaceId, workspaceId), eq(bulkJobs.kind, PIPELINE_JOB), inArray(bulkJobs.status, ["queued", "running"])));
+  return new Set(jobs.map((j) => Number((j.payload as PipelinePayload | null)?.pipelineId)).filter((n) => Number.isFinite(n)));
+}
+
 async function failOrphanedPipelines(db: Db, workspaceId: number): Promise<void> {
-  await db
-    .update(researchPipelines)
-    .set({ status: "failed", errorMessage: "Stopped when the server restarted. Run it again." })
+  const stale = await db
+    .select({ id: researchPipelines.id })
+    .from(researchPipelines)
     .where(and(
       eq(researchPipelines.workspaceId, workspaceId),
       eq(researchPipelines.status, "running"),
       lt(researchPipelines.updatedAt, new Date(Date.now() - PIPELINE_ORPHAN_MS)),
     ));
+  if (stale.length === 0) return;
+  const live = await activePipelineIds(db, workspaceId);
+  const orphans = stale.map((r) => r.id).filter((id) => !live.has(id));
+  if (orphans.length === 0) return;
+  await db
+    .update(researchPipelines)
+    .set({ status: "failed", errorMessage: "Stopped when the server restarted. Run it again." })
+    .where(and(eq(researchPipelines.workspaceId, workspaceId), eq(researchPipelines.status, "running"), inArray(researchPipelines.id, orphans)));
 }
 
-/** Runs started by this process and not yet finished, so tests can wait for them. */
-const inFlight = new Set<Promise<void>>();
-
-export async function __settleResearchPipelines(): Promise<void> {
-  while (inFlight.size) await Promise.all(Array.from(inFlight));
+/** The next stage a run has to do: the first whose output is not saved. 6 = all done. */
+export function nextPipelineStage(row: Pick<PipelineRow, "stage1_prospect" | "stage2_signals" | "stage3_angles" | "stage4_draft" | "stage5_final">): number {
+  const outputs = [row.stage1_prospect, row.stage2_signals, row.stage3_angles, row.stage4_draft, row.stage5_final];
+  const i = outputs.findIndex((o) => o == null);
+  return i === -1 ? 6 : i + 1;
 }
 
 /**
- * The five stages, after the response. Each writes its output as it finishes;
- * a failure marks the run failed, naming the stage.
+ * Run one stage of a pipeline and save its output. Earlier stages' outputs
+ * are read from the row, so a run picked up after a restart carries on where
+ * it was. Throws, naming the stage, when it fails.
  */
-async function runStages(
-  db: Db,
-  input: { workspaceId: number; userId: number; pipelineId: number; recipient: Recipient; contactId?: number; leadId?: number; goal: string; tone: string },
-): Promise<void> {
-  const { pipelineId, recipient } = input;
-  const ws = input.workspaceId;
+async function runStage(db: Db, row: PipelineRow, stage: number, input: { userId: number; goal: string; tone: string }, recipient: Recipient): Promise<void> {
+  const ws = row.workspaceId;
+  const pipelineId = row.id;
+  const save = (set: Partial<PipelineRow>) =>
+    db.update(researchPipelines).set(set).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws), eq(researchPipelines.status, "running")));
+  const stage1 = row.stage1_prospect as any;
+  const stage2 = row.stage2_signals as any;
+  const stage3 = row.stage3_angles as any;
   // The prospect's market research, by their title and industry.
   const marketFor = (surface: "research" | "outreach"): ResearchUse => ({ surface, prospectTitle: recipient.personTitle || null, industry: recipient.companyIndustry || null });
 
-  try {
-    /* ── Stage 1: Prospect research ── */
-    const stage1 = await llmJson<any>(
-      ws,
-      "Prospect research",
-      [
-        { role: "system", content: "You are a B2B sales research assistant. Output JSON only." },
+  switch (stage) {
+    case 1: {
+      /* ── Stage 1: Prospect research ── */
+      const out = await llmJson<any>(
+        ws,
+        "Prospect research",
+        [
+          { role: "system", content: "You are a B2B sales research assistant. Output JSON only." },
+          {
+            role: "user",
+            content: `Research this prospect for an outreach email.\nPerson: ${recipient.personName}, ${recipient.personTitle}\nCompany: ${recipient.companyName} (${recipient.companyIndustry}, ${recipient.companySize} employees, ${recipient.companyRevenue} revenue)\nGoal: ${input.goal}`,
+          },
+        ],
         {
-          role: "user",
-          content: `Research this prospect for an outreach email.\nPerson: ${recipient.personName}, ${recipient.personTitle}\nCompany: ${recipient.companyName} (${recipient.companyIndustry}, ${recipient.companySize} employees, ${recipient.companyRevenue} revenue)\nGoal: ${input.goal}`,
+          type: "object",
+          properties: {
+            personSummary: { type: "string" },
+            companySummary: { type: "string" },
+            likelyPainPoints: { type: "array", items: { type: "string" } },
+            relevantContext: { type: "string" },
+          },
+          required: ["personSummary", "companySummary", "likelyPainPoints", "relevantContext"],
+          additionalProperties: false,
         },
-      ],
-      {
-        type: "object",
-        properties: {
-          personSummary: { type: "string" },
-          companySummary: { type: "string" },
-          likelyPainPoints: { type: "array", items: { type: "string" } },
-          relevantContext: { type: "string" },
-        },
-        required: ["personSummary", "companySummary", "likelyPainPoints", "relevantContext"],
-        additionalProperties: false,
-      },
-      undefined,
-      marketFor("research"),
-    );
-    await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
-
-    /* ── Stage 2: Signal detection ── */
-    const stage2 = await llmJson<any>(
-      ws,
-      "Signal detection",
-      [
-        { role: "system", content: "You are a B2B sales intelligence analyst. Output JSON only." },
+        undefined,
+        marketFor("research"),
+      );
+      await save({ stage1_prospect: out, currentStage: 2 });
+      return;
+    }
+    case 2: {
+      /* ── Stage 2: Signal detection ── */
+      const out = await llmJson<any>(
+        ws,
+        "Signal detection",
+        [
+          { role: "system", content: "You are a B2B sales intelligence analyst. Output JSON only." },
+          {
+            role: "user",
+            content: `Identify buying signals and triggers for outreach.\nCompany: ${recipient.companyName} (${recipient.companyIndustry})\nContext: ${stage1?.relevantContext ?? ""}\nGoal: ${input.goal}`,
+          },
+        ],
         {
-          role: "user",
-          content: `Identify buying signals and triggers for outreach.\nCompany: ${recipient.companyName} (${recipient.companyIndustry})\nContext: ${stage1?.relevantContext ?? ""}\nGoal: ${input.goal}`,
+          type: "object",
+          properties: {
+            signals: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { signal: { type: "string" }, type: { type: "string" }, relevance: { type: "string" } },
+                required: ["signal", "type", "relevance"],
+                additionalProperties: false,
+              },
+            },
+            bestTimingRationale: { type: "string" },
+          },
+          required: ["signals", "bestTimingRationale"],
+          additionalProperties: false,
         },
-      ],
-      {
-        type: "object",
-        properties: {
-          signals: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { signal: { type: "string" }, type: { type: "string" }, relevance: { type: "string" } },
-              required: ["signal", "type", "relevance"],
-              additionalProperties: false,
+        undefined,
+        marketFor("research"),
+      );
+      await save({ stage2_signals: out, currentStage: 3 });
+      return;
+    }
+    case 3: {
+      /* ── Stage 3: Angle generation ── */
+      const out = await llmJson<any>(
+        ws,
+        "Angle generation",
+        [
+          { role: "system", content: "You are a B2B messaging strategist. Output JSON only." },
+          {
+            role: "user",
+            content: `Generate 3 distinct value-prop angles for this outreach.\nRecipient: ${recipient.personName}, ${recipient.personTitle} at ${recipient.companyName}\nPain points: ${JSON.stringify(stage1?.likelyPainPoints)}\nSignals: ${JSON.stringify(stage2?.signals?.slice(0, 3))}\nGoal: ${input.goal}`,
+          },
+        ],
+        {
+          type: "object",
+          properties: {
+            angles: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { angle: { type: "string" }, hook: { type: "string" }, cta: { type: "string" }, rationale: { type: "string" } },
+                required: ["angle", "hook", "cta", "rationale"],
+                additionalProperties: false,
+              },
             },
           },
-          bestTimingRationale: { type: "string" },
+          required: ["angles"],
+          additionalProperties: false,
         },
-        required: ["signals", "bestTimingRationale"],
-        additionalProperties: false,
-      },
-      undefined,
-      marketFor("research"),
-    );
-    await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
-
-    /* ── Stage 3: Angle generation ── */
-    const stage3 = await llmJson<any>(
-      ws,
-      "Angle generation",
-      [
-        { role: "system", content: "You are a B2B messaging strategist. Output JSON only." },
+        undefined,
+        marketFor("research"),
+      );
+      await save({ stage3_angles: out, currentStage: 4 });
+      return;
+    }
+    case 4: {
+      /* ── Stage 4: Draft candidates ── */
+      const angles = stage3?.angles ?? [];
+      const bestAngle = angles[0] ?? { angle: input.goal, hook: "", cta: "Let's connect", rationale: "" };
+      const stage4 = await llmJson<any>(
+        ws,
+        "Draft candidates",
+        [
+          {
+            role: "system",
+            content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only. Body max 120 words, plain text, with personalization tokens {{firstName}}, {{company}}, {{senderName}}.`,
+          },
+          {
+            role: "user",
+            content: `Write 3 email variants for this outreach.\nRecipient: ${recipient.personName} at ${recipient.companyName}\nAngle: ${bestAngle.angle}\nHook: ${bestAngle.hook}\nCTA: ${bestAngle.cta}\nGoal: ${input.goal}`,
+          },
+        ],
         {
-          role: "user",
-          content: `Generate 3 distinct value-prop angles for this outreach.\nRecipient: ${recipient.personName}, ${recipient.personTitle} at ${recipient.companyName}\nPain points: ${JSON.stringify(stage1?.likelyPainPoints)}\nSignals: ${JSON.stringify(stage2?.signals?.slice(0, 3))}\nGoal: ${input.goal}`,
-        },
-      ],
-      {
-        type: "object",
-        properties: {
-          angles: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { angle: { type: "string" }, hook: { type: "string" }, cta: { type: "string" }, rationale: { type: "string" } },
-              required: ["angle", "hook", "cta", "rationale"],
-              additionalProperties: false,
+          type: "object",
+          properties: {
+            variants: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { subject: { type: "string" }, body: { type: "string" }, rationale: { type: "string" } },
+                required: ["subject", "body", "rationale"],
+                additionalProperties: false,
+              },
             },
           },
+          required: ["variants"],
+          additionalProperties: false,
         },
-        required: ["angles"],
-        additionalProperties: false,
-      },
-      undefined,
-      marketFor("research"),
-    );
-    await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
-
-    /* ── Stage 4: Draft candidates ── */
-    const angles = stage3?.angles ?? [];
-    const bestAngle = angles[0] ?? { angle: input.goal, hook: "", cta: "Let's connect", rationale: "" };
-    const stage4 = await llmJson<any>(
-      ws,
-      "Draft candidates",
-      [
-        {
-          role: "system",
-          content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only. Body max 120 words, plain text, with personalization tokens {{firstName}}, {{company}}, {{senderName}}.`,
+        // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
+        { sendersBrand: true },
+        marketFor("outreach"),
+      );
+      await save({ stage4_draft: stage4, currentStage: 5 });
+      return;
+    }
+    case 5: {
+      /* ── Stage 5: Final selection ── */
+      const variants: { subject?: string; body?: string; rationale?: string }[] = (row.stage4_draft as any)?.variants ?? [];
+      const chosen = variants.find((v) => v?.subject?.trim() && v?.body?.trim());
+      // No stock "Quick question" email in place of one the AI did not write (P67).
+      if (!chosen) throw new Error("Draft candidates: the AI wrote no email to choose from");
+      const stage5 = {
+        subject: chosen.subject!,
+        body: chosen.body!,
+        rationale: chosen.rationale ?? "",
+        personalizationTokens: {
+          // An empty first name falls back too (P146: split(" ")[0] is "", never undefined).
+          firstName: recipient.firstName.trim() || recipient.personName.split(" ")[0] || "there",
+          company: recipient.companyName,
+          senderName: "{{senderName}}",
         },
-        {
-          role: "user",
-          content: `Write 3 email variants for this outreach.\nRecipient: ${recipient.personName} at ${recipient.companyName}\nAngle: ${bestAngle.angle}\nHook: ${bestAngle.hook}\nCTA: ${bestAngle.cta}\nGoal: ${input.goal}`,
-        },
-      ],
-      {
-        type: "object",
-        properties: {
-          variants: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { subject: { type: "string" }, body: { type: "string" }, rationale: { type: "string" } },
-              required: ["subject", "body", "rationale"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ["variants"],
-        additionalProperties: false,
-      },
-      // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
-      { sendersBrand: true },
-      marketFor("outreach"),
-    );
-    await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
-
-    /* ── Stage 5: Final selection ── */
-    const variants: { subject?: string; body?: string; rationale?: string }[] = stage4?.variants ?? [];
-    const chosen = variants.find((v) => v?.subject?.trim() && v?.body?.trim());
-    // No stock "Quick question" email in place of one the AI did not write (P67).
-    if (!chosen) throw new Error("Draft candidates: the AI wrote no email to choose from");
-    const stage5 = {
-      subject: chosen.subject!,
-      body: chosen.body!,
-      rationale: chosen.rationale ?? "",
-      personalizationTokens: {
-        // An empty first name falls back too (P146: split(" ")[0] is "", never undefined).
-        firstName: recipient.firstName.trim() || recipient.personName.split(" ")[0] || "there",
-        company: recipient.companyName,
-        senderName: "{{senderName}}",
-      },
-      allVariants: variants,
-    };
-
-    // Create the email draft
-    const draftR = await db.insert(emailDrafts).values({
-      workspaceId: ws,
-      subject: stage5.subject,
-      body: stage5.body,
-      toContactId: input.contactId ?? null,
-      toLeadId: input.leadId ?? null,
-      toEmail: recipient.personEmail,
-      status: "pending_review",
-      aiGenerated: true,
-      aiPrompt: input.goal,
-      createdByUserId: input.userId,
-    });
-    const draftId = Number((draftR as any)[0]?.insertId ?? 0);
-
-    // Save prompt version history
-    await db.insert(promptVersions).values({
-      workspaceId: ws,
-      entityType: "email_draft",
-      entityId: draftId,
-      version: 1,
-      subject: stage5.subject,
-      body: stage5.body,
-      promptUsed: input.goal,
-      toneUsed: input.tone,
-      createdByUserId: input.userId,
-    });
-
-    // Mark pipeline complete
-    await db
-      .update(researchPipelines)
-      .set({ stage5_final: stage5, status: "complete", currentStage: 5, emailDraftId: draftId, completedAt: new Date() })
-      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
-  } catch (err: any) {
-    await db
-      .update(researchPipelines)
-      .set({ status: "failed", errorMessage: String(err?.message ?? err).slice(0, 2000) })
-      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+        allVariants: variants,
+      };
+      // The draft, its version history and the run's completion together: a
+      // stage 5 cut off part-way leaves none of them, so the resumed stage
+      // saves exactly one draft.
+      await db.transaction(async (tx) => {
+        const draftR = await tx.insert(emailDrafts).values({
+          workspaceId: ws,
+          subject: stage5.subject,
+          body: stage5.body,
+          toContactId: row.toContactId ?? null,
+          toLeadId: row.toLeadId ?? null,
+          toEmail: recipient.personEmail,
+          status: "pending_review",
+          aiGenerated: true,
+          aiPrompt: input.goal,
+          createdByUserId: input.userId,
+        });
+        const draftId = insertIdOf(draftR);
+        await tx.insert(promptVersions).values({
+          workspaceId: ws,
+          entityType: "email_draft",
+          entityId: draftId,
+          version: 1,
+          subject: stage5.subject,
+          body: stage5.body,
+          promptUsed: input.goal,
+          toneUsed: input.tone,
+          createdByUserId: input.userId,
+        });
+        await tx
+          .update(researchPipelines)
+          .set({ stage5_final: stage5, status: "complete", currentStage: 5, emailDraftId: draftId, completedAt: new Date() })
+          .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+      });
+      return;
+    }
   }
+}
+
+async function failPipeline(db: Db, workspaceId: number, pipelineId: number, message: string): Promise<void> {
+  await db
+    .update(researchPipelines)
+    .set({ status: "failed", errorMessage: message.slice(0, 2000) })
+    .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, workspaceId), eq(researchPipelines.status, "running")));
+}
+
+/**
+ * The run as a persisted job (P144). Each slice does the next unfinished
+ * stage and saves it; the runner puts the job back in the queue between
+ * slices and, after a restart, claims it again from its stale heartbeat, so
+ * the next stage is the first one not saved. `resumeFrom` mirrors the stages
+ * done, for the job's own progress line.
+ */
+registerJobKind<PipelinePayload>(PIPELINE_JOB, {
+  async step(job: BulkJob, payload: PipelinePayload) {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    const [row] = await db
+      .select()
+      .from(researchPipelines)
+      .where(and(eq(researchPipelines.id, payload.pipelineId), eq(researchPipelines.workspaceId, job.workspaceId)));
+    // Gone, finished or failed elsewhere: nothing left to do.
+    if (!row || row.status !== "running") return { cursor: job.resumeFrom, done: 0, failures: [], finished: true, message: "Nothing left to run" };
+    const stage = nextPipelineStage(row);
+    if (stage > 5) return { cursor: 5, done: 0, failures: [], finished: true, message: "Stage 5 of 5 done" };
+    const recipient = await getRecipientContext(db, job.workspaceId, {
+      contactId: row.toContactId ?? undefined,
+      leadId: row.toLeadId ?? undefined,
+      accountId: row.toAccountId ?? undefined,
+    });
+    try {
+      if (!recipient.found) throw new Error("The person this run is for is no longer in this workspace.");
+      await runStage(db, row, stage, { userId: row.createdByUserId, goal: payload.goal, tone: payload.tone }, recipient);
+    } catch (err) {
+      const message = String((err as Error)?.message ?? err);
+      await failPipeline(db, job.workspaceId, row.id, message);
+      // The job fails too, with the same reason.
+      throw new Error(message);
+    }
+    return { cursor: stage, done: 1, failures: [], finished: stage >= 5, message: `Stage ${stage} of 5 done` };
+  },
+  // A job that ends any other way than done leaves no run "running" behind it.
+  async finish(job, payload, outcome) {
+    if (outcome === "done") return;
+    const db = await getDb();
+    if (!db) return;
+    await failPipeline(db, job.workspaceId, payload.pipelineId, outcome === "canceled" ? "Stopped." : job.message ?? "The run stopped.");
+  },
+});
+
+/**
+ * Start working the queue now rather than at the runner's next 15-second
+ * tick, outside the request's context so the stages are not billed to it.
+ * Off under test: tests drive the runner themselves.
+ */
+const kickEnabled = process.env.NODE_ENV !== "test";
+function startSoon(): void {
+  if (!kickEnabled) return;
+  runOutsideRequestContext(() => {
+    setTimeout(() => { void tickJobs(JOB_SLICE_MS * 5).catch((e) => console.error("[researchPipeline] runner kick failed:", e)); }, 0);
+  });
+}
+
+/** Test seam: run the queued pipeline jobs to the end, as the runner's ticks would. */
+export async function __settleResearchPipelines(): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    const db = await getDb();
+    if (!db) return;
+    const active = await db.select({ id: bulkJobs.id }).from(bulkJobs)
+      .where(and(eq(bulkJobs.kind, PIPELINE_JOB), inArray(bulkJobs.status, ["queued", "running"])));
+    if (active.length === 0) return;
+    if ((await tickJobs(60_000)) === 0) return;
+  }
+}
+
+/** The run's job, as the page shows it: waiting to start, running, or how it ended. */
+async function jobFor(db: Db, workspaceId: number, pipelineId: number) {
+  const jobs = await db
+    .select({ id: bulkJobs.id, status: bulkJobs.status, message: bulkJobs.message, payload: bulkJobs.payload, heartbeatAt: bulkJobs.heartbeatAt })
+    .from(bulkJobs)
+    .where(and(eq(bulkJobs.workspaceId, workspaceId), eq(bulkJobs.kind, PIPELINE_JOB)))
+    .orderBy(desc(bulkJobs.id))
+    .limit(50);
+  const j = jobs.find((x) => Number((x.payload as PipelinePayload | null)?.pipelineId) === pipelineId);
+  return j ? { id: j.id, status: j.status, message: j.message } : null;
 }
 
 /* ─── router ─────────────────────────────────────────────────────────────── */
@@ -373,7 +506,7 @@ export const researchPipelineRouter = router({
         .limit(input?.limit ?? 20);
     }),
 
-  /** Get a single pipeline by id */
+  /** Get a single pipeline by id, with its job (queued, running, or how it ended). */
   get: workspaceProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
@@ -384,12 +517,43 @@ export const researchPipelineRouter = router({
         .select()
         .from(researchPipelines)
         .where(and(eq(researchPipelines.id, input.id), eq(researchPipelines.workspaceId, ctx.workspace.id)));
-      return row ?? null;
+      if (!row) return null;
+      return { ...row, job: await jobFor(db, ctx.workspace.id, row.id) };
     }),
 
   /**
-   * Starts a pipeline for one person and returns at once; the stages run after
-   * the response (P144). A run needs someone to research and write to (P16:
+   * What a run will spend, for the confirmation before it starts (the
+   * "Spending" rule): its AI calls, and what a call has cost this workspace
+   * lately, from the spend ledger. Null cost when nothing is on file to go
+   * by, or the model has no price on file.
+   */
+  estimate: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { calls: PIPELINE_AI_CALLS, perCallUsd: null, estUsd: null, basis: "none" as const };
+    const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const ledger = (features: string[] | null) =>
+      db.select({ vendor: spendLedger.vendor, meter: spendLedger.meter, model: spendLedger.model, quantity: spendLedger.quantity, calls: spendLedger.calls })
+        .from(spendLedger)
+        .where(and(
+          eq(spendLedger.workspaceId, ctx.workspace.id),
+          gte(spendLedger.day, since),
+          ...(features ? [inArray(spendLedger.feature, features)] : []),
+        ));
+    // This pipeline's own calls first (run by the job, or by the request
+    // before P144), else every model call the workspace made.
+    const own = averageCallCostUsd(await ledger([`job ${PIPELINE_JOB}`, "researchPipeline.start"]));
+    const avg = own ?? averageCallCostUsd((await ledger(null)).filter((r) => ["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"].includes(r.meter)));
+    return {
+      calls: PIPELINE_AI_CALLS,
+      perCallUsd: avg?.perCall ?? null,
+      estUsd: avg ? avg.perCall * PIPELINE_AI_CALLS : null,
+      basis: own ? ("pipeline" as const) : avg ? ("workspace" as const) : ("none" as const),
+    };
+  }),
+
+  /**
+   * Starts a pipeline for one person and returns at once; the stages run as a
+   * persisted job (P144). A run needs someone to research and write to (P16:
    * the page sent no recipient, so every stage researched nobody and the draft
    * went to no one).
    */
@@ -441,13 +605,18 @@ export const researchPipelineRouter = router({
         status: "running",
         currentStage: 1,
       });
-      const pipelineId = Number((r as any)[0]?.insertId ?? 0);
+      const pipelineId = insertIdOf(r);
 
-      const run: Promise<void> = runStages(db, { ...input, workspaceId: ctx.workspace.id, userId: ctx.user.id, pipelineId, recipient })
-        .catch((e) => console.error(`[researchPipeline] ${pipelineId} crashed:`, e instanceof Error ? e.message : e))
-        .finally(() => { inFlight.delete(run); });
-      inFlight.add(run);
-      return { pipelineId };
+      // The stages are a persisted job: they survive a restart (P144).
+      const { job } = await enqueueJob({
+        workspaceId: ctx.workspace.id,
+        userId: ctx.user.id,
+        kind: PIPELINE_JOB,
+        payload: { pipelineId, goal: input.goal, tone: input.tone } satisfies PipelinePayload,
+        total: 5,
+      });
+      startSoon();
+      return { pipelineId, jobId: job.id };
     }),
 
   /** Get prompt version history for a draft */
