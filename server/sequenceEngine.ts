@@ -53,6 +53,8 @@ import { isFirstDegree, pickLinkedInAccount, toInviteNote } from "./services/are
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "./mergeVars";
 import { extractLinkedInIdentifier } from "./services/linkedinLookup";
 import { checkLinkedInAction, recordLinkedInAction } from "./services/linkedin/activityGate";
+import { mayFileAutoTask } from "./services/autoTaskCap";
+import { startOfNextWorkspaceDay } from "./services/workspaceTimezone";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -778,6 +780,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
       }
 
       if (step.type === "task") {
+        // At the workspace's daily cap for sequence tasks (audit L15) the step
+        // waits for tomorrow instead of filing another: held, not skipped, so
+        // no step is lost, and the hold is recorded by the cap.
+        if (!(await mayFileAutoTask(db, enrollment.workspaceId, "sequence_step", now))) {
+          await hold(await startOfNextWorkspaceDay(enrollment.workspaceId, now));
+          continue;
+        }
         if (!(await claimNow())) continue;
         processed++;
         await db.insert(tasks).values({
@@ -785,6 +794,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // title is varchar(240) — normalizeStep already clamps the derived
           // title, but clamp again here so a legacy taskTitle can't overflow.
           title: (step.taskTitle ?? "Follow up").slice(0, 240),
+          autoSource: "sequence_step",
           description: step.taskBody ?? null,
           dueAt: new Date(now.getTime() + (step.taskDueOffsetDays ?? 1) * 86_400_000),
           relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",

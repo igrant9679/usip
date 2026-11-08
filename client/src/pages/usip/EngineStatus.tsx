@@ -146,6 +146,32 @@ export default function EngineStatus() {
               </div>
             </Section>
 
+            <Section title="Automatic tasks today">
+              <p className="text-xs text-muted-foreground mb-2">Each source files at most its daily cap (set on the Tasks page); more wait for tomorrow and are counted here.</p>
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-muted-foreground bg-muted/40">
+                    <tr>
+                      <th className="text-left px-3 py-2">Source</th>
+                      <th className="text-right px-3 py-2">Filed</th>
+                      <th className="text-right px-3 py-2">Cap</th>
+                      <th className="text-right px-3 py-2">Held back</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {data.autoTasks.map((t) => (
+                      <tr key={t.source}>
+                        <td className="px-3 py-2">{t.label}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{num(t.filed)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{num(t.cap)}</td>
+                        <td className={`px-3 py-2 text-right tabular-nums ${t.skipped ? "text-destructive font-medium" : ""}`}>{num(t.skipped)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Section>
+
             <Section title={`Browser errors today (${data.clientErrors.total})`}>
               {data.clientErrors.groups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No errors reported from this workspace in the last day.</p>

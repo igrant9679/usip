@@ -408,23 +408,33 @@ export const tasksRouter = router({
   /** Read the workspace's Task Autopilot config. */
   getAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
-    if (!db) return { mode: "off" as const, dailyCap: 25, lastRunAt: null as Date | null };
+    if (!db) return { mode: "off" as const, dailyCap: 25, autoTaskDailyCap: 25, lastRunAt: null as Date | null };
     const [row] = await db.select({
       mode: workspaceSettings.taskAutopilotMode,
       dailyCap: workspaceSettings.taskAutopilotDailyCap,
+      // Each other auto-task source's daily cap (audit L15).
+      autoTaskDailyCap: workspaceSettings.autoTaskDailyCap,
       lastRunAt: workspaceSettings.taskAutopilotLastRunAt,
     }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    return row ?? { mode: "off" as const, dailyCap: 25, lastRunAt: null };
+    return row ?? { mode: "off" as const, dailyCap: 25, autoTaskDailyCap: 25, lastRunAt: null };
   }),
 
   /** Set the workspace's Task Autopilot mode / daily cap (admin only). */
   setAutopilotSettings: adminWsProcedure
-    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(500).optional() }))
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(500).optional(),
+      /** The other auto-task sources' cap a day each (L15); 0 stops them filing. */
+      autoTaskDailyCap: z.number().int().min(0).max(500).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const set: any = { taskAutopilotMode: input.mode };
+      const set: any = {};
+      if (input.mode !== undefined) set.taskAutopilotMode = input.mode;
       if (input.dailyCap !== undefined) set.taskAutopilotDailyCap = input.dailyCap;
+      if (input.autoTaskDailyCap !== undefined) set.autoTaskDailyCap = input.autoTaskDailyCap;
+      if (Object.keys(set).length === 0) return { ok: true };
       await db.insert(workspaceSettings)
         .values({ workspaceId: ctx.workspace.id, ...set } as never)
         .onDuplicateKeyUpdate({ set });

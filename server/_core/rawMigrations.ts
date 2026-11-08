@@ -5281,6 +5281,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A daily cap on the other auto-task sources (audit 2026-10-20, L15). Two
+  // additive columns: the cap, 25 as Task Autopilot's is, and the source on a
+  // task, null on every existing one (only new auto tasks are counted).
+  {
+    name: "0321_auto_task_cap.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `autoTaskDailyCap` int NOT NULL DEFAULT 25",
+      "ALTER TABLE `tasks` ADD COLUMN `autoSource` varchar(32) NULL",
+      "CREATE INDEX `ix_tasks_ws_autosrc` ON `tasks` (`workspaceId`, `autoSource`, `createdAt`)",
+    ],
+  },
+
   // Errors the browser reports (audit 2026-10-20, F49): a new table, nothing
   // existing changes. Rows are scrubbed before they are written and kept 30
   // days (server/clientErrors.ts).

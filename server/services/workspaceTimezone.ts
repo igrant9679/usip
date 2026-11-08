@@ -84,6 +84,14 @@ export async function startOfWorkspaceDay(workspaceId: number, now: Date = new D
   return startOfLocalDay(await getWorkspaceTimezone(workspaceId, now.getTime()), now);
 }
 
+/** The instant the workspace's next day begins (a hold until tomorrow, audit L15). */
+export async function startOfNextWorkspaceDay(workspaceId: number, now: Date = new Date()): Promise<Date> {
+  const zone = await getWorkspaceTimezone(workspaceId, now.getTime());
+  const { y, m, d } = localDateOf(zone, now.getTime());
+  const t = new Date(Date.UTC(y, m - 1, d + 1));
+  return new Date(wallTimeToUtcMs(zone, t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate(), 0));
+}
+
 /** YYYY-MM-DD of an instant on the workspace's calendar. */
 export function workspaceDayKeyOf(tz: string, at: Date | number): string {
   const { y, m, d } = localDateOf(tz || "UTC", typeof at === "number" ? at : at.getTime());

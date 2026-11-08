@@ -22,6 +22,7 @@ import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
 import { invokeLLM, contentText } from "../_core/llm";
 import { startOfWorkspaceDay } from "./workspaceTimezone";
+import { mayFileAutoTask } from "./autoTaskCap";
 
 function daysSince(d: Date | string | null | undefined): number | null {
   if (!d) return null;
@@ -141,7 +142,9 @@ Return: {
       // Auto: an open task. Approval: the same recommendation as a DRAFT task
       // (the review queue), carrying the numbers the deal record no longer
       // gets — approving it is what makes the suggestion actionable.
-      if (nextStep && !busy.has(o.id)) {
+      // Its tasks keep to the workspace's daily cap (audit L15); the analysis
+      // above still updates the deal, only the task is skipped.
+      if (nextStep && !busy.has(o.id) && (await mayFileAutoTask(db, workspaceId, "deal_autopilot"))) {
         const suggestion = mode === "auto"
           ? (risk ? `Deal at risk: ${risk}` : `Advance deal: ${o.name}`)
           : [
@@ -151,6 +154,7 @@ Return: {
             ].filter(Boolean).join(" ");
         await db.insert(tasks).values({
           workspaceId,
+          autoSource: "deal_autopilot",
           title: nextStep,
           description: suggestion,
           type: "follow_up",

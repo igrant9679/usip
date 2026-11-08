@@ -15,6 +15,7 @@ import { areExecutionQueue, bulkJobs, clientErrors, emailDrafts, enrollments, li
 import { engineRunStatuses } from "../_core/cronGuard";
 import { slowQueryStats } from "../_core/slowQuery";
 import type { getDb } from "../db";
+import { autoTaskToday } from "./autoTaskCap";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -122,10 +123,10 @@ export async function engineStatusFor(db: Db, workspaceId: number, opts: { showE
   const engines = engineRunStatuses()
     .map((e) => ({ ...e, lastError: opts.showErrors ? e.lastError : e.lastError ? "(shown to super admins)" : null }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const [queues, errors] = await Promise.all([workspaceQueues(db, workspaceId, now), recentClientErrors(db, workspaceId, now)]);
+  const [queues, errors, autoTasks] = await Promise.all([workspaceQueues(db, workspaceId, now), recentClientErrors(db, workspaceId, now), autoTaskToday(db, workspaceId, now)]);
   // Engines and slow queries are the whole install's, not this workspace's:
   // an admin sees the counts, a super admin also the error text and the
   // statements (literals already blanked).
   const slow = slowQueryStats();
-  return { at: now, engines, queues, clientErrors: errors, slowQueries: opts.showErrors ? slow : { ...slow, samples: [] } };
+  return { at: now, engines, queues, autoTasks, clientErrors: errors, slowQueries: opts.showErrors ? slow : { ...slow, samples: [] } };
 }

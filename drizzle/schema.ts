@@ -576,6 +576,8 @@ export const tasks = mysqlTable(
     source: mysqlEnum("source", ["manual", "sequence", "ai", "import", "workflow"]).default("manual").notNull(),
     aiReasoning: text("aiReasoning"), // why the AI proposed this action (autopilot)
     aiConfidence: int("aiConfidence"), // 0-100 model confidence for AI-sourced tasks
+    /** Which automatic source filed it, for its daily cap (audit L15, migration 0321; services/autoTaskCap.ts). */
+    autoSource: varchar("autoSource", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -2107,6 +2109,8 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // auto     = AI creates live open tasks with no human step (100% autonomous)
   taskAutopilotMode: mysqlEnum("taskAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   taskAutopilotDailyCap: int("taskAutopilotDailyCap").default(25).notNull(),
+  /** Each other auto-task source's cap a workspace day (audit L15, migration 0321): website visits, Deal Autopilot, proposal follow-ups, sequence task steps. */
+  autoTaskDailyCap: int("autoTaskDailyCap").default(25).notNull(),
   taskAutopilotLastRunAt: timestamp("taskAutopilotLastRunAt"),
   // ── Meeting Autopilot (Migration 0100) — the /v2/meetings autonomy engine ──
   // off = never; approval = AI proposes meetings for review; auto = AI proposes
