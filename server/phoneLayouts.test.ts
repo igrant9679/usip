@@ -165,6 +165,16 @@ describe("the main list pages use them on a phone (U8)", () => {
     expect(read("client/src/pages/usip/ARECampaignDetail.tsx")).toContain('<HeaderActions keep={0} label="More campaign actions" pinnedAt="start" pinned={campaign.status === "active" ? (');
   });
 
+  it("the task page folds its header and wraps its rows; the home header wraps", () => {
+    const tasks = read("client/src/pages/usip/TasksV2.tsx");
+    expect(tasks).toContain('<HeaderActions keep={0} label="More task actions"');
+    expect(tasks).toContain('pinned={<Button size="sm" className="h-7 gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New task</Button>}>');
+    expect(tasks).toContain('<div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">');
+    const home = read("client/src/pages/usip/Home.tsx");
+    expect(home).toContain('className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 md:px-6 min-h-12 py-1.5 border-b border-border bg-card/40"');
+    expect(home).not.toContain('flex items-center gap-2 px-4 md:px-6 h-12 border-b');
+  });
+
   it("Proposals, Emails and campaigns were already card and row lists; they now fit a phone", () => {
     const proposals = read("client/src/pages/usip/Proposals.tsx");
     expect(proposals).toContain('className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 px-4 sm:px-6 py-4 border-b border-border shrink-0"');

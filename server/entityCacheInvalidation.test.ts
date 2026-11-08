@@ -65,15 +65,6 @@ const FAMILIES: Record<string, { routers: string[]; helpers: string[] }> = {
 };
 const familyOf = (proc: string) => Object.entries(FAMILIES).find(([, f]) => f.routers.includes(proc.split(".")[0]))?.[0];
 
-/**
- * Files the CONB batch owns until it merges (one task page, one home, one
- * deal board, the settings hub, the shell). DEFERRED, not excused: each moves
- * onto the helpers after that merge.
- */
-const DEFERRED_FILES = new Set([
-  "pages/usip/Tasks.tsx", "pages/usip/TasksV2.tsx", "pages/usip/Dashboard.tsx", "pages/usip/Home.tsx",
-  "pages/usip/Pipeline.tsx", "pages/usip/DealsV2.tsx", "pages/usip/Settings.tsx", "pages/usip/SettingsHub.tsx",
-]);
 
 /** Hand-written invalidations of a family's reads that are right where they are. */
 const HAND_REVIEWED = new Set([
@@ -258,7 +249,7 @@ describe("one refresh per entity family (X1.7)", () => {
     const re = new RegExp(`(?<![\\w.])\\w*[uU]tils\\.(${routers.join("|")})\\b[\\w.]*\\.invalidate\\(`, "g");
     const offenders: string[] = [];
     for (const f of FILES) {
-      if (LIB.has(f.rel) || DEFERRED_FILES.has(f.rel) || HAND_REVIEWED.has(f.rel)) continue;
+      if (LIB.has(f.rel) || HAND_REVIEWED.has(f.rel)) continue;
       for (const m of Array.from(f.code.matchAll(re))) offenders.push(`${f.rel}:${f.code.slice(0, m.index!).split("\n").length}  ${m[0]}`);
     }
     expect(offenders, `\nCall the family's helper from @/lib/entityCache instead:\n${offenders.join("\n")}\n`).toEqual([]);
@@ -267,7 +258,7 @@ describe("one refresh per entity family (X1.7)", () => {
   it("every writer of a covered family refreshes through its helper, or says why not", () => {
     const missing: string[] = [];
     for (const w of writers()) {
-      if (DEFERRED_FILES.has(w.rel) || NO_REFRESH[w.key]) continue;
+      if (NO_REFRESH[w.key]) continue;
       const code = file(w.rel).code;
       const bodies = localBodies(code);
       if (!reaches(w.options, FAMILIES[w.family].helpers, bodies) && !refreshesAtCallSite(w, code, bodies)) missing.push(`${w.rel}:${w.line}  ${w.proc}  (${w.family})`);
@@ -281,7 +272,7 @@ describe("one refresh per entity family (X1.7)", () => {
     const keys = new Set(all.map((w) => w.key));
     expect(Object.keys(NO_REFRESH).filter((k) => !keys.has(k))).toEqual([]);
     for (const [k, why] of Object.entries(NO_REFRESH)) expect(why.length, k).toBeGreaterThan(20);
-    for (const rel of Array.from(DEFERRED_FILES).concat(Array.from(HAND_REVIEWED))) expect(FILES.some((f) => f.rel === rel), rel).toBe(true);
+    for (const rel of Array.from(HAND_REVIEWED)) expect(FILES.some((f) => f.rel === rel), rel).toBe(true);
   });
 
   it("names what is not covered yet, and each of those still has writers", () => {

@@ -319,22 +319,16 @@ const REVIEWED: Record<string, { calls: number; reason: string }> = {
   "pages/usip/PipelineAlerts.tsx::pipelineAlerts.sendDigest": { calls: 1, reason: "an internal digest to the workspace owner; no prospect is emailed" },
   "pages/usip/WorkflowsV2.tsx::are.campaigns.setAllAutonomy": { calls: 2, reason: "both set engine autonomy DOWN to batch approval, the safe direction; Full autonomy goes through a confirm" },
 
-  // DEFERRED, not reviewed: these files belong to the CONB batch (one task
-  // page, one deal board, the settings hub) until it merges; each gets its
-  // confirm then. Listed so the work is visible, not excused.
-  "pages/usip/Settings.tsx::integrations.remove": { calls: 1, reason: "DEFERRED (CONB owns Settings.tsx until it merges): Remove provider needs a confirm" },
-  "pages/usip/Settings.tsx::dangerZone.transferOwnership": { calls: 1, reason: "DEFERRED (CONB owns Settings.tsx until it merges): transfer ownership needs a confirm" },
-  "pages/usip/DealsV2.tsx::deals.analyzeAll": { calls: 1, reason: "DEFERRED (CONB owns the deal board until it merges): Analyse all needs a confirm with its AI cost" },
-  "pages/usip/Tasks.tsx::tasks.setStatus": { calls: 2, reason: "DEFERRED (CONB retires Tasks v1 into TasksV2): cancelling a task needs a confirm if the page survives" },
-  "pages/usip/TasksV2.tsx::tasks.generateDrafts": { calls: 2, reason: "DEFERRED (CONB owns TasksV2 until it merges): Generate drafts needs a confirm with its AI cost" },
+  // Cancel task closes it and keeps it in the history, where Reopen brings
+  // it back (CONB, R72): undoable. TasksV2 is the task page; Tasks.tsx keeps
+  // RelatedTasks for record pages (its own page is unrouted since CONB).
+  "pages/usip/TasksV2.tsx::tasks.setStatus": { calls: 1, reason: "Cancel task keeps it in the history and Reopen brings it back: undoable" },
+  "pages/usip/Tasks.tsx::tasks.setStatus": { calls: 2, reason: "Cancel keeps the task in the history and Reopen brings it back: undoable (RelatedTasks, and the page unrouted since CONB)" },
+  // Unrouted since CONB (/v2/deals → /pipeline through RetiredRedirect): its
+  // survivor, Pipeline, asks before Analyze with AI, with the count and cost.
+  "pages/usip/DealsV2.tsx::deals.analyzeAll": { calls: 1, reason: "DealsV2 is unrouted since CONB; Pipeline, which replaced it, confirms Analyze with AI with a typed count and cost" },
 };
 
-/** Bulk confirms whose typed count waits for CONB (see DEFERRED above). */
-const COUNT_DEFERRED = new Set([
-  "pages/usip/TasksV2.tsx::tasks.sendAllChatFollowUps",
-  "pages/usip/TasksV2.tsx::tasks.sendAllSocialInvites",
-  "pages/usip/TasksV2.tsx::tasks.approveAllDrafts",
-]);
 
 /**
  * The bulk bar's actions that run on one click (no confirm, no params): each
@@ -432,7 +426,6 @@ describe("a confirmation states the count of a bulk change and the cost of a spe
   it("a bulk change's confirmation passes a typed count", () => {
     const missing = direct
       .filter((c) => c.bulk && (c.confirmed.via === "confirmAction" || c.confirmed.via === "ConfirmButton"))
-      .filter((c) => !COUNT_DEFERRED.has(c.key))
       .filter((c) => !/\bcount(:|=\{)/.test(spanText(c)))
       .map((c) => `${c.rel}:${c.line} ${c.proc}`);
     expect(missing, `\n${missing.join("\n")}\n`).toEqual([]);

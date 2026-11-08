@@ -284,7 +284,8 @@ function TodayView({ viewBar }: { viewBar: React.ReactNode }) {
   return (
       <div className="flex flex-col h-full min-h-0">
         {/* header */}
-        <div className="relative shrink-0 flex items-center gap-2 px-4 md:px-6 h-12 border-b border-border bg-card/40">
+        {/* Wraps on a phone instead of running off a fixed 48 px row (audit U8). */}
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 md:px-6 min-h-12 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <h1 className="text-[17px] font-semibold tracking-tight">{editing ? "Editing home layout" : <>Welcome, {firstName} <span className="ml-0.5">👋</span></>}</h1>
           {!editing && viewBar}

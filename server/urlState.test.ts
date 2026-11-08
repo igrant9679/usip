@@ -139,8 +139,18 @@ describe("each page keeps its view in the address (U6)", () => {
     for (const t of strip) expect(tabs, t).toContain(`"${t}"`);
   });
 
+  it("the deal board: owner, close date, view, pipeline and the open deal; its ?owner= and ?close= links keep their names", () => {
+    const src = read("client/src/pages/usip/Pipeline.tsx");
+    const keys = keysOf(src);
+    for (const k of ["owner", "close", "view", "pipeline", "deal"]) expect(keys, k).toContain(k);
+    // Clear filters clears the two filters, not the view, pipeline or open deal.
+    expect(src).toContain('onClick={() => { setOwnerParam(null); setCloseParam(""); }}>Clear filters</button>');
+    // The open deal is the parameter: opening writes it, closing removes it.
+    expect(src).toContain("const setDrawer = (d: { id: number; name: string; subtitle: string } | null) => { setDrawerMeta(d); setDealParam(d ? d.id : null); };");
+  });
+
   it("no page parses the query string for its view by hand any more", () => {
-    for (const f of ["Companies", "Proposals", "ARECampaignDetail"]) {
+    for (const f of ["Companies", "Proposals", "ARECampaignDetail", "Pipeline"]) {
       expect(read(`client/src/pages/usip/${f}.tsx`), f).not.toContain("new URLSearchParams(");
     }
     // People reads it once, only to tell a deep link from a plain visit.
