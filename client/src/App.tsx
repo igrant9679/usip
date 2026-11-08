@@ -89,6 +89,7 @@ const FormsV2 = lazyChunk(() => import("@/pages/usip/FormsV2"));
 const PublicForm = lazyChunk(() => import("@/pages/PublicForm"));
 const BookingPage = lazyChunk(() => import("@/pages/BookingPage"));
 const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
+const BookingManagePage = lazyChunk(() => import("@/pages/BookingManagePage"));
 const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
 const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
 const ConfirmEmail = lazyChunk(() => import("@/pages/ConfirmEmail"));
@@ -619,6 +620,8 @@ function Router() {
       <Route path="/b/:slug"><BookingPage /></Route>
       {/* A proposal email's time links (2026-10-06): public, books only on Confirm. */}
       <Route path="/m/:token"><MeetingPickPage /></Route>
+      {/* A booking's own page (F47): reschedule, cancel, or save the .ics. Public, token-gated. */}
+      <Route path="/m/b/:token"><BookingManagePage /></Route>
       <Route path="/l/:slug"><LandingPage /></Route>
       {/* PUBLIC by necessity — the visitor cannot sign in, that is why they
           are here. No AuthGate. */}

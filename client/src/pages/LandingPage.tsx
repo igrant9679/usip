@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { HONEYPOT_FIELD } from "@shared/publicForm";
 import { HoneypotField } from "@/components/usip/HoneypotField";
+import { useCaptureGuard } from "@/components/usip/CaptureGuard";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { safeRedirectUrl } from "@shared/safeRedirect";
@@ -25,10 +26,12 @@ export default function LandingPage() {
   const [, params] = useRoute("/l/:slug");
   const slug = params?.slug ?? "";
 
-  const page = trpc.landingPages.getBySlug.useQuery({ slug }, { enabled: !!slug, retry: false });
+  const page = trpc.landingPages.getBySlug.useQuery({ slug }, { enabled: !!slug, retry: false, refetchOnWindowFocus: false });
   const submit = trpc.landingPages.submit.useMutation();
   const [values, setValues] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);
+  // Bot checks (F47): the first submit token served, and Turnstile when set up.
+  const guard = useCaptureGuard(page.data);
   // A counter, not a message: a failed count shows the visitor nothing.
   const recordView = trpc.landingPages.recordView.useMutation({ meta: { silentError: true } });
 
@@ -66,7 +69,7 @@ export default function LandingPage() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    submit.mutate({ slug, data: values }, {
+    submit.mutate({ slug, data: values, submitToken: guard.submitToken, turnstileToken: guard.turnstileToken }, {
       onSuccess: (r: any) => {
         // Only an http(s) URL or an in-app path is followed — never a
         // javascript: URL (shared/safeRedirect.ts, audit 2026-10-20).
@@ -74,6 +77,8 @@ export default function LandingPage() {
         if (to) { window.location.href = to; return; }
         setDone(true);
       },
+      // The message renders below the button; a Turnstile answer is single-use.
+      onError: () => guard.reset(),
     });
   };
 
@@ -154,8 +159,9 @@ export default function LandingPage() {
                   </div>
                 ))}
                 <HoneypotField value={values[HONEYPOT_FIELD] ?? ""} onChange={(v) => setValues((s) => ({ ...s, [HONEYPOT_FIELD]: v }))} />
+                {guard.widget}
                 {submit.error && <p className="text-xs text-rose-600">{submit.error.message}</p>}
-                <Button type="submit" className="w-full text-white" style={{ backgroundColor: accent }} disabled={submit.isPending}>
+                <Button type="submit" className="w-full text-white" style={{ backgroundColor: accent }} disabled={submit.isPending || guard.waiting}>
                   {submit.isPending ? <><Loader2 className="size-4 animate-spin mr-1.5" /> Submitting…</> : page.data.ctaButtonLabel}
                 </Button>
               </form>

@@ -21,17 +21,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
 import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
+import { conversionRate } from "@shared/publicForm";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
 import {
-  FileText, Plus, Copy, ExternalLink, Trash2, Inbox, Zap, Route as RouteIcon, UserPlus, Send,
+  FileText, Plus, Copy, ExternalLink, Trash2, Inbox, Zap, Route as RouteIcon, UserPlus, Send, Pencil,
 } from "lucide-react";
 
 type Form = {
   id: number; publicId: string; title: string; description?: string | null;
   fields?: any; status: string; autoCreateLead?: boolean; autoRoute?: boolean;
-  autoEnrollSequenceId?: number | null; submitCount?: number | null; updatedAt?: string | Date | null;
+  autoEnrollSequenceId?: number | null; submitCount?: number | null; viewCount?: number | null; updatedAt?: string | Date | null;
+  redirectUrl?: string | null;
 };
 
 const FIELD_PALETTE = [
@@ -73,6 +75,13 @@ export default function FormsV2() {
   const del = trpc.forms.delete.useMutation({ onSuccess: () => { invalidate(); toast.success("Form deleted"); }, onError: (e) => toast.error(e.message) });
   const create = trpc.forms.create.useMutation({
     onSuccess: () => { invalidate(); toast.success("Form created"); setCreateOpen(false); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Editing after creation (G71): forms.update existed with nothing calling it,
+  // so a typo in a live form's title meant deleting it and its capture link.
+  const [editing, setEditing] = useState<Form | null>(null);
+  const update = trpc.forms.update.useMutation({
+    onSuccess: () => { invalidate(); toast.success("Form saved"); setEditing(null); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -131,7 +140,11 @@ export default function FormsV2() {
                         {f.title}
                         <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px]", f.status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-secondary text-muted-foreground")}>{f.status}</span>
                       </div>
-                      <div className="text-[11px] text-muted-foreground mt-0.5">{f.submitCount ?? 0} submissions</div>
+                      {/* Views, submissions and the rate between them (F47). */}
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        {f.viewCount ?? 0} views · {f.submitCount ?? 0} submissions ·{" "}
+                        <span title={conversionRate(f.viewCount, f.submitCount).title}>{conversionRate(f.viewCount, f.submitCount).label} converted</span>
+                      </div>
                     </div>
                     <Switch aria-label={`${f.title} active`} checked={f.status === "active"} onCheckedChange={(v) => toggle.mutate({ id: f.id, status: v ? "active" : "inactive" })} />
                   </div>
@@ -145,6 +158,7 @@ export default function FormsV2() {
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={() => copyEmbed(f)}><Copy className="size-3" /> Embed</Button>
                     <a href={publicUrl(f.publicId)} target="_blank" rel="noreferrer"><Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]"><ExternalLink className="size-3" /> Preview</Button></a>
                     <Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]" onClick={() => setSubsFor(f)}><Inbox className="size-3" /> Submissions</Button>
+                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]" onClick={() => setEditing(f)}><Pencil className="size-3" /> Edit</Button>
                     <div className="flex-1" />
                     <Button size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-rose-600" title="Delete" onClick={() => { confirmAction({ title: `Delete "${f.title}"?`, description: "This form and its capture link will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { del.mutate({ id: f.id }); }); }}><Trash2 className="size-3.5" /></Button>
                   </div>
@@ -156,40 +170,79 @@ export default function FormsV2() {
       </div>
 
       <CreateFormDialog open={createOpen} onOpenChange={setCreateOpen} sequences={sequences} onCreate={(v) => create.mutate(v as any)} pending={create.isPending} />
+      {editing && (
+        <CreateFormDialog key={editing.id} open onOpenChange={(o) => { if (!o) setEditing(null); }} sequences={sequences} pending={update.isPending}
+          editing={editing} onCreate={(v) => update.mutate({ id: editing.id, patch: v })} />
+      )}
       <SubmissionsDialog form={subsFor} onClose={() => setSubsFor(null)} />
     </Shell>
   );
 }
 
-function CreateFormDialog({ open, onOpenChange, sequences, onCreate, pending }: {
+type FormFieldDef = { key: string; label: string; required?: boolean };
+
+/**
+ * The fields a form will save: the palette's picks in palette order, each
+ * with its required flag, then any field the form already had that the palette
+ * does not know (made through the API), kept as it was. Exported for the tests.
+ */
+export function formFieldsFrom(selected: Record<string, boolean>, required: Record<string, boolean>, existing: FormFieldDef[] = []): FormFieldDef[] {
+  const picked = FIELD_PALETTE.filter((f) => selected[f.key]).map((f) => ({ key: f.key, label: f.label, required: !!required[f.key] }));
+  const custom = existing.filter((f) => !FIELD_PALETTE.some((p) => p.key === f.key));
+  return [...picked, ...custom];
+}
+
+/**
+ * New form, or (with `editing`) an existing one (G71: a form could not be
+ * changed after it was made). Editing keeps the public link: only the fields
+ * below change, through forms.update.
+ */
+function CreateFormDialog({ open, onOpenChange, sequences, onCreate, pending, editing }: {
   open: boolean; onOpenChange: (v: boolean) => void; sequences: { id: number; name: string }[];
-  onCreate: (v: any) => void; pending: boolean;
+  onCreate: (v: any) => void; pending: boolean; editing?: Form | null;
 }) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [selected, setSelected] = useState<Record<string, boolean>>({ firstName: true, lastName: true, email: true, company: true });
-  const [autoCreateLead, setAutoCreateLead] = useState(true);
-  const [autoRoute, setAutoRoute] = useState(true);
-  const [enrollSeq, setEnrollSeq] = useState<string>("none");
+  const existing: FormFieldDef[] = Array.isArray(editing?.fields) ? (editing!.fields as FormFieldDef[]) : [];
+  const [title, setTitle] = useState(editing?.title ?? "");
+  const [description, setDescription] = useState(editing?.description ?? "");
+  const [selected, setSelected] = useState<Record<string, boolean>>(
+    editing ? Object.fromEntries(existing.map((f) => [f.key, true])) : { firstName: true, lastName: true, email: true, company: true },
+  );
+  const [required, setRequired] = useState<Record<string, boolean>>(
+    editing ? Object.fromEntries(existing.map((f) => [f.key, !!f.required])) : { email: true },
+  );
+  const [autoCreateLead, setAutoCreateLead] = useState(editing?.autoCreateLead ?? true);
+  const [autoRoute, setAutoRoute] = useState(editing?.autoRoute ?? true);
+  const [enrollSeq, setEnrollSeq] = useState<string>(editing?.autoEnrollSequenceId ? String(editing.autoEnrollSequenceId) : "none");
+  const [redirectUrl, setRedirectUrl] = useState(editing?.redirectUrl ?? "");
 
   const submit = () => {
     if (!title.trim()) return;
-    const fields = FIELD_PALETTE.filter((f) => selected[f.key]).map((f) => ({ key: f.key, label: f.label, required: f.key === "email" }));
+    const fields = formFieldsFrom(selected, required, existing);
     if (fields.length === 0) { toast.error("Pick at least one field"); return; }
+    if (editing) {
+      onCreate({
+        title: title.trim(), description: description.trim() || null, fields,
+        autoCreateLead, autoRoute,
+        autoEnrollSequenceId: enrollSeq !== "none" ? Number(enrollSeq) : null,
+        redirectUrl: redirectUrl.trim() || null,
+      });
+      return;
+    }
     onCreate({
       title: title.trim(), description: description.trim() || undefined, fields,
       autoCreateLead, autoRoute,
       autoEnrollSequenceId: enrollSeq !== "none" ? Number(enrollSeq) : null,
+      ...(redirectUrl.trim() ? { redirectUrl: redirectUrl.trim() } : {}),
     });
-    setTitle(""); setDescription(""); setSelected({ firstName: true, lastName: true, email: true, company: true }); setEnrollSeq("none");
+    setTitle(""); setDescription(""); setSelected({ firstName: true, lastName: true, email: true, company: true }); setRequired({ email: true }); setEnrollSeq("none"); setRedirectUrl("");
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New form</DialogTitle>
-          <DialogDescription>Capture leads and hand them straight to the autonomous pipeline.</DialogDescription>
+          <DialogTitle>{editing ? `Edit "${editing.title}"` : "New form"}</DialogTitle>
+          <DialogDescription>{editing ? "Changes apply to the live form. Its link and embed code stay the same." : "Capture leads and hand them straight to the autonomous pipeline."}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 max-h-[60vh] overflow-auto">
           <div className="space-y-1.5">
@@ -204,13 +257,31 @@ function CreateFormDialog({ open, onOpenChange, sequences, onCreate, pending }: 
             <Label>Fields</Label>
             <div className="flex flex-wrap gap-1.5">
               {FIELD_PALETTE.map((f) => (
-                <button key={f.key} type="button" onClick={() => setSelected((s) => ({ ...s, [f.key]: !s[f.key] }))}
+                <button key={f.key} type="button" aria-pressed={!!selected[f.key]} onClick={() => setSelected((s) => ({ ...s, [f.key]: !s[f.key] }))}
                   className={cn("rounded-full border px-2.5 py-1 text-[11px] transition-colors", selected[f.key] ? "text-white border-transparent" : "hover:bg-muted")}
                   style={selected[f.key] ? { backgroundColor: "var(--primary, #14B89A)" } : undefined}>
-                  {f.label}{f.key === "email" ? " *" : ""}
+                  {f.label}{required[f.key] && selected[f.key] ? " *" : ""}
                 </button>
               ))}
             </div>
+            {/* Which picked fields must be filled. The server enforces it (G41). */}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+              {FIELD_PALETTE.filter((f) => selected[f.key]).map((f) => (
+                <label key={f.key} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer">
+                  <input type="checkbox" checked={!!required[f.key]} onChange={(e) => setRequired((r) => ({ ...r, [f.key]: e.target.checked }))} />
+                  {f.label} required
+                </label>
+              ))}
+            </div>
+            {existing.filter((f) => !FIELD_PALETTE.some((p) => p.key === f.key)).length > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                Also kept: {existing.filter((f) => !FIELD_PALETTE.some((p) => p.key === f.key)).map((f) => f.label || f.key).join(", ")}.
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="f-redirect">After submitting, go to (optional)</Label>
+            <Input id="f-redirect" value={redirectUrl} onChange={(e) => setRedirectUrl(e.target.value)} placeholder="https://… or leave blank for a thank-you message" />
           </div>
           <div className="rounded-lg border p-2.5 space-y-2.5">
             <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1"><Zap className="size-3" style={{ color: "#7c3aed" }} /> Autonomous handling</div>
@@ -230,7 +301,7 @@ function CreateFormDialog({ open, onOpenChange, sequences, onCreate, pending }: 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={pending || !title.trim()} onClick={submit}>{pending ? "Creating…" : "Create form"}</Button>
+          <Button disabled={pending || !title.trim()} onClick={submit}>{editing ? (pending ? "Saving…" : "Save changes") : (pending ? "Creating…" : "Create form")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

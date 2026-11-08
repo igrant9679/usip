@@ -479,7 +479,7 @@ export default function WorkflowsV2() {
               action={
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={applyAllSuggestions.isPending || applySuggestion.isPending}
                   title={`Add all ${sugList.length} suggested workflow${sugList.length === 1 ? "" : "s"}?`}
-                  description="Each suggestion becomes an enabled workflow rule. Rules fire on real CRM events from now on; you can disable any of them in the list below."
+                  description="Each suggestion becomes a workflow rule, switched off. Nothing fires until you turn a rule on in the list below."
                   confirmLabel="Add all" onConfirm={() => applyAllSuggestions.mutate()}>
                   <Check className="size-3.5" /> Add all ({sugList.length})
                 </ConfirmButton>
