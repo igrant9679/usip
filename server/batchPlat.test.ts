@@ -33,8 +33,12 @@ describe("copy says what is built (X6.4)", () => {
   const text = surfaces.map((f) => [f, read(f)] as const);
   const offenders = (re: RegExp) => text.filter(([, s]) => re.test(s)).map(([f]) => f);
 
-  it("no surface promises e-signature (another batch is building it; until then it is not claimed)", () => {
-    expect(offenders(/\be-?sign(?:ature)?s?\b(?!ed)/i)).toEqual([]);
+  // 2026-11-07, merged with CRMD (F48): e-signature is built now, so the copy
+  // may name it. What this protects stays: the claim must be true, so the
+  // accept has to record the signature the copy promises.
+  it("e-signature is named only because the accept records one (CRMD F48)", () => {
+    expect(read("server/routers/proposals.ts")).toContain("acceptedSignerName: signerName, acceptedSignerEmail: signerEmail, acceptedIp: signerIp");
+    expect(read("server/_core/rawMigrations.ts")).toContain("ALTER TABLE `proposals` ADD COLUMN `acceptedIp` varchar(64) NULL");
   });
 
   it("no surface promises renewal reminders (the renewal engine only recomputes a stage)", () => {
@@ -135,8 +139,11 @@ describe("every page that reads data says when the read failed (X1.6)", () => {
     expect(deliv).toContain('accountsQ.error && !accountsQ.data ? (\n                <QueryError what="sending accounts"');
     expect(deliv.indexOf("accountsQ.error && !accountsQ.data")).toBeLessThan(deliv.indexOf("No sending accounts connected"));
     const forecast = read("client/src/pages/usip/Forecast.tsx");
-    expect(forecast).toContain('byRepError && !byRep ? <QueryError what="the forecast"');
-    expect(forecast.indexOf("byRepError && !byRep")).toBeLessThan(forecast.indexOf("No pipeline data yet"));
+    // 2026-11-07, merged with CRMD (F29): the page was rewritten on forecastCall;
+    // its error branch moved with it and still comes before the empty state.
+    const forecastErr = forecast.indexOf('error && !data ? <QueryError what="the forecast"');
+    expect(forecastErr).toBeGreaterThan(-1);
+    expect(forecast.slice(forecastErr)).toContain("Nothing in this period yet");
     expect(read("client/src/pages/usip/Inbox.tsx")).toContain('<QueryError what="notifications" message={error?.message} onRetry=');
     const lead = read("client/src/pages/usip/LeadDetail.tsx");
     expect(lead).toContain('if (error && !lead && !isNotFoundError(error)) return <Shell title="Lead"><QueryError what="this lead"');

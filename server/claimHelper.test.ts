@@ -209,6 +209,8 @@ const REVIEWED: Record<string, string> = {
   "server/services/discovery/index.ts::discoveryRuns": "a run's lifecycle, written by the process that created it or claimed its fan-out (fanOutStartedAt)",
   "server/routers/emailVerification.ts::emailVerificationJobs": "writes the outcome of the job this process just ran",
   "server/routers/operations.ts::quotes": "setStatus: the person sets the status they chose; last write wins by design",
+  // Added at the merge with CRMD (F34), 2026-11-07.
+  "server/routers/proposals.ts::quotes": "stamps the current pricing version accepted, run only after the proposal's own accept claim was won",
   "server/routers/sequences.ts::sequences": "setStatus: the person sets the status they chose; last write wins by design",
   "server/routers/tours.ts::userTourProgress": "resuming a tour; the same write twice changes nothing",
   "server/services/approvalTasks.ts::tasks": "puts a claimed task back after a failed send: the release half of a claim",

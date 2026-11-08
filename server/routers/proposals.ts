@@ -1114,7 +1114,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
           eq(proposals.id, p.id),
           or(isNull(proposals.portalLastViewedAt), lt(proposals.portalLastViewedAt, new Date(now.getTime() - PORTAL_VIEW_GAP_MS))),
         ));
-      if (Number((visit as any)?.[0]?.affectedRows ?? 0) === 1) return { counted: true };
+      // Rows changed, read the one way (X1.5, merged with PLAT 2026-11-07).
+      if (affectedRowsOf(visit) === 1) return { counted: true };
       // The same visit: only the last-viewed time moves.
       await db.update(proposals).set({ portalLastViewedAt: now } as never).where(eq(proposals.id, p.id));
       return { counted: false };

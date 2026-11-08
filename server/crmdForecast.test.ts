@@ -265,7 +265,9 @@ describe("F29/R41: the workspace currency, and the Forecast page", () => {
       return /\.ts$/.test(n) && !/\.test\.ts$/.test(n) ? [rel] : [];
     });
     expect(files("server").filter((f) => read(f).includes("setDisplayCurrency("))).toEqual([]);
-    expect(read("client/src/App.tsx")).toContain("<WorkspaceCurrencySync><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceCurrencySync>");
+    // 2026-11-07, merged with PLAT (G37): each page's own error boundary sits
+    // inside the access gate; the currency sync still wraps the gate.
+    expect(read("client/src/App.tsx")).toContain("<WorkspaceCurrencySync><WorkspaceAccessGate><PageBoundary>{children}</PageBoundary></WorkspaceAccessGate></WorkspaceCurrencySync>");
     expect(read("client/src/components/usip/WorkspaceCurrencySync.tsx")).toContain("return <Fragment key={currency}>{children}</Fragment>;");
   });
 

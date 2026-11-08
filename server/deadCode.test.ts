@@ -169,7 +169,9 @@ const NO_CLIENT_CALLER: Record<string, string> = {
   "linkedinLimits.history": WIRE("the LinkedIn limits page's Recent activity has no per-day chart"),
   "cs.listTickets": NO_SCREEN("support tickets (only the demo seed creates them)"),
   "workflows.checkDealAging": THIS_WEEK("c3b8aef2", "a manual run of the nightly checkDealAging"),
-  "quotes.get": "the only read of a quote with its line items (list leaves them out); the assistant can reach it",
+  // quotes.get left the list at the merge with CRMD (2026-11-07): the proposal Pricing tab reads it.
+  // opportunities.forecastByRep joined it then: the Forecast page moved to forecastCall (F29).
+  "opportunities.forecastByRep": "the per-rep rollup; the Forecast page moved to opportunities.forecastCall (CRMD F29), and this stays as the read the assistant can reach, its rep scoping pinned (R41)",
   "leadRouting.applyToLead": "the only way to re-route an existing lead; the assistant can reach it",
   "team.setQuota": "lets an admin set their own quota, which team.updateMember refuses (allowSelf)",
   "team.setTitle": "lets an admin set their own title, which team.updateMember refuses (allowSelf)",
