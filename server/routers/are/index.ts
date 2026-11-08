@@ -6,6 +6,7 @@ import { executionRouter } from "./execution";
 import { scraperRouter } from "./scraper";
 import { engineRouter } from "./engine";
 import { metricsRouter } from "./metrics";
+import { approvalsRouter } from "./approvals";
 
 export const areRouter = router({
   icp: icpRouter,
@@ -15,4 +16,5 @@ export const areRouter = router({
   scraper: scraperRouter,
   engine: engineRouter,
   metrics: metricsRouter,
+  approvals: approvalsRouter,
 });

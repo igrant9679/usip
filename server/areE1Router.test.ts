@@ -175,6 +175,9 @@ describe("the prospects router in place (A75)", () => {
 describe("a campaign's first launch on the UTC default (A31)", () => {
   beforeEach(() => {
     rows("are_campaigns").push({ id: 8, workspaceId: WS, name: "New", status: "draft", startedAt: null, ownerUserId: ADMIN });
+    // 2026-11-07 (audit F15): activation also runs the pre-flight, which refuses an
+    // email campaign with nothing to send from; these cases are about the time zone.
+    rows("sending_accounts").push({ id: 1, workspaceId: WS, enabled: true, name: "A", fromEmail: "a@example.com", provider: "generic_smtp" });
   });
   const utc = () => { rows("workspace_settings")[0].timezone = "UTC"; };
 

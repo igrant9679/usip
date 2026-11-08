@@ -126,6 +126,7 @@ import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/resear
 import { perSectorSliceGroups, pickFallback, researchTargeting, sliceGroupKey, vendorGroupFor, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
+import { noticeCampaignFinished } from "./services/are/campaignFinished";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
 import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
@@ -908,7 +909,7 @@ export async function enrolledElsewhere(
 }
 
 /** ARE Settings' Daily Send Cap when the workspace has no settings row: the column's default. */
-const ARE_WORKSPACE_DAILY_CAP_DEFAULT = 50;
+export const ARE_WORKSPACE_DAILY_CAP_DEFAULT = 50;
 
 /**
  * Sends the Revenue Engine has left today across all of a workspace's
@@ -2596,6 +2597,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     console.error(`[AreEngine] campaign ${campId} discovery phase failed:`, e);
     await emitLog(wsId, campId, "discovery", "error", String((e as Error)?.message ?? e));
   }
+
+  /* ── Finished? The owner hears once: target reached, every sequence ended (audit F15) ── */
+  await noticeCampaignFinished(campaign);
 }
 
 /* ─── Discovery — scrape one source to top up a drained campaign ────────── */

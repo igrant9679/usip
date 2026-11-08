@@ -411,7 +411,8 @@ describe("the campaign tabs count in SQL and page (A44, A45)", () => {
     const ui = read("client/src/pages/usip/ARECampaignDetail.tsx");
     expect(ui).toContain("const pendingEnrich = queueCounts?.pendingEnrich ?? 0;");
     expect(ui).toContain("{ campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE }");
-    expect(ui).toContain("trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter })");
+    // 2026-11-07 (audit U24): still the same filters; it now waits for a valid campaign id.
+    expect(ui).toContain("trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter }, { enabled: validId })");
     expect(ui).toContain("Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE)");
     expect(ui).not.toMatch(/prospects\?\.filter\(\(p\) => p\.enrichmentStatus === "pending"\)/);
     // 2026-11-07 (audit F19): the Rejections query also carries the kind

@@ -1,7 +1,7 @@
 /**
  * Starting and ending a Revenue Engine campaign (audit 2026-10-20, batch E2).
  *
- *   A18 delete is a manager's, audited, one transaction scoped to the
+ *   A18 delete is an admin's (a manager's until F15, 2026-11-07), audited, one transaction scoped to the
  *       workspace: unsent steps stop, the people still in it are taken out and
  *       freed to join another campaign, sent history stays
  *   A52 Activate asks first, on the campaign page and the list alike, saying it
@@ -14,7 +14,8 @@ import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => {
   if (!process.env.ENCRYPTION_KEY && !process.env.JWT_SECRET) process.env.ENCRYPTION_KEY = "b".repeat(64);
-  return { db: null as any, role: "manager" };
+  // 2026-11-07 (audit F15): delete is an admin's now (archive is a manager's), so the delete cases run as one.
+  return { db: null as any, role: "admin" };
 });
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
 
@@ -62,7 +63,7 @@ describe("deleting a campaign (A18)", () => {
     rows("are_campaigns").push({ id: 7, workspaceId: WS, name: "Counties", status: "active" });
     await expect(caller().are.campaigns.delete({ id: 7 })).rejects.toThrow();
     expect(rows("are_campaigns")).toHaveLength(1);
-    h.role = "manager";
+    h.role = "admin";
   });
 
   it("stops unsent steps, takes its people out, keeps sent history, and touches nothing else", async () => {
@@ -102,9 +103,10 @@ describe("deleting a campaign (A18)", () => {
     expect(rows("are_campaigns")).toHaveLength(3);
   });
 
-  it("the list offers Delete to managers only and says what it does", () => {
+  it("the list offers Delete to admins only and says what it does", () => {
     const list = read("client/src/pages/usip/ARECampaigns.tsx");
-    expect(list).toContain("const canDelete = rankOf(currentWs?.role ?? \"rep\") >= ROLE_RANK.manager;");
+    // 2026-11-07 (audit F15): admins only; Archive is offered to everyone else.
+    expect(list).toContain("const canDelete = rankOf(currentWs?.role ?? \"rep\") >= ROLE_RANK.admin;");
     expect(list).toContain("{canDelete && (");
     expect(list).not.toContain("The campaign and its prospect queue will be permanently deleted.");
     expect(list).toContain("so they can be added to another campaign");
