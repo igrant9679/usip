@@ -6322,6 +6322,12 @@ export const savedReports = mysqlTable(
     scheduleFreq: mysqlEnum("scheduleFreq", ["none", "daily", "weekly", "monthly"]).default("none").notNull(),
     scheduleRecipients: text("scheduleRecipients"), // comma-separated emails
     scheduleLastSentAt: timestamp("scheduleLastSentAt"),
+    /* The last send attempt and how it went (migration 0410, audit 2026-10-20 F45). */
+    scheduleLastAttemptAt: timestamp("scheduleLastAttemptAt"),
+    /** "sent" | "failed" */
+    scheduleLastResult: varchar("scheduleLastResult", { length: 16 }),
+    scheduleLastError: varchar("scheduleLastError", { length: 500 }),
+    scheduleLastSentTo: int("scheduleLastSentTo"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

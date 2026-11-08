@@ -5069,6 +5069,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A scheduled report's last send, and how it went (audit 2026-10-20, F45):
+  // only scheduleLastSentAt was kept, and only on success, so a schedule that
+  // kept failing showed nothing. Additive, nullable, nothing backfilled; when a
+  // report is due is unchanged (it still reads scheduleLastSentAt).
+  {
+    name: "0410_saved_report_send_outcome.sql",
+    statements: [
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastAttemptAt` timestamp NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastResult` varchar(16) NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastError` varchar(500) NULL",
+      "ALTER TABLE `saved_reports` ADD COLUMN `scheduleLastSentTo` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
