@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 export type ProfileImageStatus =
   | "unknown"
@@ -217,7 +218,7 @@ export function ProfileImageUploader({
 
   const upload = trpc.prospects.uploadProfileImage.useMutation({
     onSuccess: () => {
-      utils.prospects.get.invalidate({ id: prospectId });
+      invalidatePeopleReads(utils);
       toast.success("Profile photo updated");
       setBusy(false);
     },
@@ -228,7 +229,7 @@ export function ProfileImageUploader({
   });
   const remove = trpc.prospects.updateProfileImage.useMutation({
     onSuccess: () => {
-      utils.prospects.get.invalidate({ id: prospectId });
+      invalidatePeopleReads(utils);
       toast.success("Profile photo removed");
     },
     onError: (e) => toast.error(e.message || "Could not remove"),

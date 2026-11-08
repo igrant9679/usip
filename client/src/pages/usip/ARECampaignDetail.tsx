@@ -165,6 +165,7 @@ import { toast } from "sonner";
 import { pressable } from "@/lib/pressable";
 import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -412,40 +413,17 @@ function IcpRing({ score }: { score: number }) {
  * Using React Query cache invalidation (already in use via @trpc/react-
  * query) instead of a separate Zustand/Redux store — the cache IS the
  * global store, and adding a second one would create the disconnected-
- * data problem we're trying to fix. */
-function useCampaignSync(campaignId: number) {
+ * data problem we're trying to fix.
+ *
+ * 2026-11-08 (audit X1.7): the set is now the campaign family's helper,
+ * which invalidates every `are` read and the attention panel, so the hub,
+ * the approvals queue and the campaign list refresh too, not only this
+ * page's tabs. `campaignId` stays in the signature for the callers. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function useCampaignSync(_campaignId: number) {
   const utils = trpc.useUtils();
   return {
-    invalidateAll: () => {
-      // Per-prospect data
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-      utils.are.prospects.listSequences.invalidate({ campaignId });
-      // Rows read by id: the dossier of someone off this page, the funnel's list.
-      utils.are.prospects.byIds.invalidate({ campaignId });
-      // Inline sequence-progress timelines (per-step representative rows)
-      utils.are.execution.getStepStates.invalidate({ campaignId });
-      // Step-performance tab (was never being invalidated — root cause of
-      // the "A/B tab out of sync" report)
-      utils.are.prospects.getAbVariants.invalidate({ campaignId });
-      utils.are.prospects.getDispatches.invalidate({ campaignId });
-      utils.are.metrics.stepFunnel.invalidate({ campaignId });
-      // Logs tab
-      utils.are.engine.getLogs.invalidate({ campaignId });
-      utils.are.engine.lastTick.invalidate({ campaignId });
-      // Campaign-level (header counters)
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      // Rejection stats (used by Rejections tab)
-      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      // "Approve all (N)", the stall panel's gates and the dossier: each
-      // changes with an approve, a reject, an enrich or a generate, and none
-      // was refreshed after one (audit 2026-10-20, A74).
-      utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.are.prospects.getIntelligence.invalidate();
-      utils.are.execution.getSignalLog.invalidate({ campaignId });
-      utils.are.execution.getSignalCounts.invalidate({ campaignId });
-      utils.attention.summary.invalidate();
-    },
+    invalidateAll: () => invalidateCampaignReads(utils),
   };
 }
 
@@ -712,7 +690,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
   // and only while their @name is still in the note.
   const [mentioned, setMentioned] = useState<Map<number, string>>(new Map());
 
-  const invalidate = () => utils.are.prospects.listNotes.invalidate({ prospectId });
+  const invalidate = () => invalidateCampaignReads(utils);
 
   const addNote = trpc.are.prospects.addNote.useMutation({
     onSuccess: () => { setDraft(""); setMentioned(new Map()); invalidate(); },
@@ -1033,7 +1011,7 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
     await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
     toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
     setDrafts({});
-    await utils.are.campaigns.get.invalidate({ id: campaignId });
+    await invalidateCampaignReads(utils);
   };
   const save = async () => {
     try {
@@ -1654,7 +1632,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   const follow = useFollowRun(runId, (run) => {
     const s = runSummary(run);
     if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });
-    utils.are.engine.getLogs.invalidate({ campaignId });
+    invalidateCampaignReads(utils);
     utils.discovery.getLogsForCampaign.invalidate({ campaignId });
   });
   const followed = follow.query.data as { id: number; status: string } | undefined;
@@ -2479,7 +2457,7 @@ function ARECampaignDetailPage() {
         : `Re-evaluated ${done} prospects — none met the threshold (${reEvalJob.threshold}).`,
     );
     if (j.status === "done" && done > 0 && j.requalified === 0) setShowIcpSuggestion(true);
-    utils.are.prospects.getReevalHistory.invalidate({ campaignId });
+    invalidateCampaignReads(utils);
     invalidateCampaign();
   }, [reEvalJobState]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hiding the button is UX; the boundary is the gate on the query itself.
@@ -2637,7 +2615,7 @@ function ARECampaignDetailPage() {
   const saveCopy = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Copy settings saved");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
+      invalidateCampaignReads(utils);
       setCopyDraft(null);
       setFixedDraft(null);
     },
@@ -2652,12 +2630,7 @@ function ARECampaignDetailPage() {
   const updateCampaign = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Campaign settings saved");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      // The cap, the target and the sources are what the stall panel and the
-      // source health read (A74).
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
-      utils.are.campaigns.list.invalidate();
+      invalidateCampaignReads(utils);
       setThresholdDraft(undefined);
       setMinConfDraft(null);
       setS2oEnabled(null);
@@ -2677,11 +2650,7 @@ function ARECampaignDetailPage() {
       setRespacePlan(plan);
       if (plan.applied) {
         toast.success(`Moved ${plan.rowsMoved} pending step${plan.rowsMoved === 1 ? "" : "s"} across ${plan.prospectsTouched} prospect${plan.prospectsTouched === 1 ? "" : "s"} onto the ${plan.gapDays}-day cadence`);
-        utils.are.campaigns.get.invalidate({ id: campaignId });
-        utils.are.execution.getQueue.invalidate();
-        // Moved steps are what the Sequences tab's timelines draw (A74).
-        utils.are.execution.getStepStates.invalidate({ campaignId });
-        utils.are.campaigns.stallReasons.invalidate({ campaignId });
+        invalidateCampaignReads(utils);
       }
     },
     onError: (e) => toast.error(e.message),
@@ -2742,11 +2711,7 @@ function ARECampaignDetailPage() {
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: (_r, vars) => {
       toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate();
-      // "Campaign not active" is the stall panel's first answer (A74).
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
-      utils.attention.summary.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
@@ -2762,24 +2727,21 @@ function ARECampaignDetailPage() {
   const archiveCampaign = trpc.are.campaigns.archive.useMutation({
     onSuccess: (r) => {
       toast.success(r.paused ? "Campaign paused and archived. Nothing more is sent from it." : "Campaign archived.");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
-      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const unarchiveCampaign = trpc.are.campaigns.unarchive.useMutation({
     onSuccess: () => {
       toast.success("Campaign unarchived. Activate it when you are ready.");
-      utils.are.campaigns.get.invalidate({ id: campaignId });
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const cloneCampaign = trpc.are.campaigns.clone.useMutation({
     onSuccess: (r) => {
       toast.success(`"${r.name}" created as a draft. Nothing runs until you activate it.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       setLocation(`/are/campaigns/${r.id}`);
     },
     onError: (e) => toast.error(e.message),
@@ -2787,7 +2749,7 @@ function ARECampaignDetailPage() {
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: (r) => {
       toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       setLocation("/are/campaigns");
     },
     onError: (e) => toast.error(e.message),
@@ -2846,8 +2808,7 @@ function ARECampaignDetailPage() {
       toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
       invalidateCampaign();
       // The job it ran is the first row of "Recent scrape jobs" (A74).
-      utils.are.scraper.listJobs.invalidate({ campaignId });
-      utils.are.campaigns.sourceHealth.invalidate({ campaignId });
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

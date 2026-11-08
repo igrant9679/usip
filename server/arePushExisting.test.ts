@@ -132,7 +132,10 @@ describe("the surface is actually reachable", () => {
 
   it("the dialog calls the procedure and refreshes the list", () => {
     expect(dialog).toContain("trpc.are.prospects.pushExisting.useMutation");
-    expect(page).toContain("utils.are.prospects.list.invalidate()");
+    // 2026-11-08 (audit X1.7): the campaign family's helper, which invalidates
+    // every `are` read (pinned in entityCacheInvalidation.test.ts).
+    expect(page).toContain("invalidateCampaignReads(utils)");
+    expect(dialog).toContain("invalidateCampaignReads(utils);");
   });
 
   it("refused prospects are shown with their reason, not swallowed", () => {

@@ -54,6 +54,7 @@ import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { formatPhone } from "@shared/phoneFormat";
 import { agentNumbers } from "@shared/voiceCapacity";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { invalidateListReads, invalidatePeopleReads, invalidateTaskReads } from "@/lib/entityCache";
 
 const CSV_COLS: Array<{ key: string; label: string }> = [
   { key: "firstName", label: "First name" }, { key: "lastName", label: "Last name" },
@@ -95,8 +96,8 @@ export function useBulkJob() {
     if (!j || jobId == null || j.id !== jobId || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`${j.message ?? "Done"}${j.failed ? ` · ${j.failed} could not be done` : ""}.`);
     else toast.error(`${j.status === "canceled" ? "Stopped" : "Failed"}${j.message ? `: ${j.message}` : ""}.`);
-    utils.prospects.invalidate();
-    utils.recordLists.list.invalidate();
+    invalidatePeopleReads(utils);
+    invalidateListReads(utils);
     utils.dataHealth.getMetrics.invalidate();
     setJobId(null);
   }, [job.data, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -343,6 +344,7 @@ function QueueAiCallMenu({ selectedIds, tooMany }: { selectedIds: number[]; tooM
 /* ───────────────────────── Create tasks (functional) ──────────────────── */
 
 function CreateTasksMenu({ selectedIds, matching }: { selectedIds: number[]; matching?: MatchingSelection }) {
+  const utils = trpc.useUtils();
   const n = matching ? matching.total : selectedIds.length;
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("Follow up");
@@ -350,7 +352,7 @@ function CreateTasksMenu({ selectedIds, matching }: { selectedIds: number[]; mat
   const [priority, setPriority] = useState("normal");
   const [dueInDays, setDueInDays] = useState(2);
   const bulk = trpc.tasks.bulkCreateForProspects.useMutation({
-    onSuccess: (r: any) => { toast.success(`Created ${r?.created ?? n} task${(r?.created ?? n) === 1 ? "" : "s"}`); setOpen(false); },
+    onSuccess: (r: any) => { toast.success(`Created ${r?.created ?? n} task${(r?.created ?? n) === 1 ? "" : "s"}`); invalidateTaskReads(utils); setOpen(false); },
     onError: (e: any) => toast.error(e?.message ?? "Could not create tasks"),
   });
   // All matching: one job on the server by the filter (F30).
@@ -457,7 +459,7 @@ export function AddToListMenu({ selectedIds, trigger, matching }: { selectedIds:
   const addMembers = trpc.recordLists.addMembers.useMutation({
     onSuccess: (r: any) => {
       toast.success(r.added > 0 ? `Added ${r.added} to list` : "Already in list");
-      utils.recordLists.list.invalidate();
+      invalidateListReads(utils);
       setOpen(false);
       setPicked(null);
     },
@@ -480,7 +482,7 @@ export function AddToListMenu({ selectedIds, trigger, matching }: { selectedIds:
     try {
       const r = await createList.mutateAsync({ name, entityType: "people" });
       if (matching) {
-        utils.recordLists.list.invalidate();
+        invalidateListReads(utils);
         addMatching(r.id, name);
       } else {
         await addMembers.mutateAsync({ listId: r.id, recordType: "prospect", recordIds: selectedIds });
@@ -642,8 +644,7 @@ function EnrichMenu({ selectedIds, matching, lookupIds }: { selectedIds: number[
     if (!j || verifyJobId == null || j.id !== verifyJobId || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`Verified ${j.done} of ${j.total}${j.failed ? ` · ${j.failed} could not be verified` : ""}.`);
     else toast.error(`Verification ${j.status}${j.message ? `: ${j.message}` : ""}. ${j.done} of ${j.total} were verified.`);
-    utils.prospects.list.invalidate();
-    utils.prospects.get.invalidate();
+    invalidatePeopleReads(utils);
     utils.dataHealth.getMetrics.invalidate();
     setVerifyJobId(null);
   }, [verifyJob.data, verifyJobId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -704,7 +705,7 @@ function MoreMenu({ selectedIds, onClear, matching }: { selectedIds: number[]; o
   const bulkDelete = trpc.prospects.bulkDelete.useMutation({
     onSuccess: (r: any) => {
       toast.success(`Deleted ${r?.deleted ?? n} ${n === 1 ? "person" : "people"}`);
-      utils.prospects.invalidate();
+      invalidatePeopleReads(utils);
       onClear();
     },
     onError: (e: any) => toast.error(e?.message ?? "Delete failed"),

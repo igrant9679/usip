@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 type Targeting = { targetTitles?: string[]; targetIndustries?: string[]; targetGeographies?: string[]; keywords?: string[] };
 
@@ -30,9 +31,7 @@ export function CampaignProposals() {
   const q = trpc.are.campaigns.listProposals.useQuery({ limit: 10 }, { retry: false });
   const routing = trpc.are.campaigns.getRoutingSettings.useQuery(undefined, { retry: false });
   const refresh = () => {
-    utils.are.campaigns.listProposals.invalidate();
-    utils.are.campaigns.list.invalidate();
-    utils.attention.summary.invalidate();
+    invalidateCampaignReads(utils);
   };
   const decide = trpc.are.campaigns.decideProposal.useMutation({
     onSuccess: (r, vars) => {

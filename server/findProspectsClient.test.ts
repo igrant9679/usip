@@ -50,14 +50,18 @@ describe("Find prospects refreshes what each action changed (P142)", () => {
     // is refreshed when the followed run ENDS (useFollowRun's handler, just
     // above the mutation); the mutation refreshes the run, its trace and the
     // history at once. Both halves are read, so the guarantee is unchanged.
+    // 2026-11-08 (audit X1.7): People are refreshed through the people
+    // family's helper, which invalidates every prospects read and the screens
+    // that list people (pinned in entityCacheInvalidation.test.ts).
+    const people = "invalidatePeopleReads(utils)";
     const search = block(fp, "const follow = useFollowRun(activeRunId", "const runSearch = () => {");
-    for (const r of ["utils.prospects.list.invalidate()", "utils.discovery.listRuns.invalidate()", "utils.discovery.getRun.invalidate(", "utils.discovery.getLogs.invalidate("]) expect(search).toContain(r);
+    for (const r of [people, "utils.discovery.listRuns.invalidate()", "utils.discovery.getRun.invalidate(", "utils.discovery.getLogs.invalidate("]) expect(search).toContain(r);
     const finished = block(fp, "const follow = useFollowRun(activeRunId", "const search = trpc.discovery.search.useMutation({");
-    expect(finished).toContain("utils.prospects.list.invalidate()");
+    expect(finished).toContain(people);
     const reprocess = block(fp, "const reprocess = trpc.discovery.reprocess.useMutation({", "onError:");
-    for (const r of ["utils.discovery.getRun.invalidate(", "utils.discovery.listRuns.invalidate()", "utils.prospects.list.invalidate()"]) expect(reprocess).toContain(r);
+    for (const r of ["utils.discovery.getRun.invalidate(", "utils.discovery.listRuns.invalidate()", people]) expect(reprocess).toContain(r);
     const imp = block(fp, "const importPeople = trpc.unipile.importSearchHitsToPeople.useMutation({", "onError:");
-    expect(imp).toContain("utils.prospects.list.invalidate()");
+    expect(imp).toContain(people);
     expect(imp).toContain("utils.discovery.listRuns.invalidate()");
   });
 

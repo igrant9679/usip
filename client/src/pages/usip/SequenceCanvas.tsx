@@ -281,7 +281,7 @@ function CanvasInner({
   // 2026-10-20, O8/O9). updateMeta merges settings into what is stored.
   const updateSequence = trpc.sequences.updateMeta.useMutation({
     onSuccess: () => {
-      utils.sequences.get.invalidate({ id: sequenceId });
+      invalidateSequenceReads(utils);
       toast.success("Sequence settings saved");
     },
     onError: (e) => toast.error(e.message),
@@ -623,6 +623,7 @@ function CanvasInner({
 import { ReactFlowProvider } from "@xyflow/react";
 import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 export default function SequenceCanvas() {
   const params = useParams<{ id: string }>();
@@ -631,7 +632,7 @@ export default function SequenceCanvas() {
   const seqQ = trpc.sequences.get.useQuery({ id: sequenceId });
   const utils = trpc.useUtils();
   const setStatus = trpc.sequences.setStatus.useMutation({
-    onSuccess: () => utils.sequences.get.invalidate(),
+    onSuccess: () => invalidateSequenceReads(utils),
     onError: (e) => toast.error(e.message),
   });
 

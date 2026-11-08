@@ -23,6 +23,7 @@ import { useState, useEffect, useRef } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
+import { invalidateTaskReads } from "@/lib/entityCache";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
@@ -148,8 +149,9 @@ function SnoozePopover({ accountId, thread, onSnoozed }: {
 }) {
   const [open, setOpen] = useState(false);
   const [customDate, setCustomDate] = useState("");
+  const utils = trpc.useUtils();
   const createTask = trpc.tasks.create.useMutation({
-    onSuccess: () => { toast.success("Snoozed — a follow-up task has been created"); setOpen(false); onSnoozed(); },
+    onSuccess: () => { toast.success("Snoozed — a follow-up task has been created"); invalidateTaskReads(utils); setOpen(false); onSnoozed(); },
     onError: (e) => toast.error("Snooze failed: " + e.message),
   });
 

@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { describeSequenceAutoSend, sequenceAutoSend, type SequenceAutoSendMode } from "@shared/sequenceAutoSend";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 export function SequenceSendingSettings({ sequenceId, settings, accent }: { sequenceId: number; settings: unknown; accent?: string }) {
   const utils = trpc.useUtils();
@@ -37,7 +38,7 @@ export function SequenceSendingSettings({ sequenceId, settings, accent }: { sequ
   }, [JSON.stringify(settings ?? null)]);
 
   const save = trpc.sequences.updateMeta.useMutation({
-    onSuccess: () => { utils.sequences.get.invalidate({ id: sequenceId }); utils.sequences.listEnrollments.invalidate(); toast.success("Sending settings saved"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Sending settings saved"); },
     onError: (e) => toast.error(e.message),
   });
   const modeId = useId();

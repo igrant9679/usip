@@ -47,6 +47,7 @@ import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { invalidateCampaignReads, invalidateSequenceReads } from "@/lib/entityCache";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -134,7 +135,7 @@ export default function SequencesV2() {
   const sequences = (data ?? []) as Sequence[];
   const createMut = trpc.sequences.create.useMutation({
     onSuccess: (res: any) => {
-      utils.sequences.list.invalidate();
+      invalidateSequenceReads(utils);
       setChoiceOpen(false); setTplOpen(false); setCreateOpen(false); setNewName(""); setNewDesc("");
       if (res?.id) setLocation(`/v2/sequences/${res.id}`);
     },
@@ -146,22 +147,22 @@ export default function SequencesV2() {
   const workspaceTemplates = (templatesQ.data ?? []) as Sequence[];
   const isAdmin = isAdminRole(current?.role);
   const forkMut = trpc.sequences.fork.useMutation({
-    onSuccess: (res: any) => { utils.sequences.list.invalidate(); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
+    onSuccess: (res: any) => { invalidateSequenceReads(utils); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
     onError: (e) => toast.error(e.message),
   });
   // Phase 6: sequences fold into the engine as fixed-copy campaigns — same
   // steps, same merge tags, but the engine's dispatcher, suppression list and
   // approval queue instead of a second engine that checked none of them.
   const convertMut = trpc.are.campaigns.createFixedFromSequence.useMutation({
-    onSuccess: (r) => { toast.success(`Created fixed-copy campaign "${r.name}" (draft) — review its steps, then activate`); setLocation(`/are/campaigns/${r.id}`); },
+    onSuccess: (r) => { toast.success(`Created fixed-copy campaign "${r.name}" (draft) — review its steps, then activate`); invalidateCampaignReads(utils); setLocation(`/are/campaigns/${r.id}`); },
     onError: (e) => toast.error(e.message),
   });
   const publishMut = trpc.sequences.publishAsTemplate.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Published to the team template library"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Published to the team template library"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can publish templates")),
   });
   const unpublishMut = trpc.sequences.unpublishTemplate.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Removed from templates"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Removed from templates"); },
     onError: (e) => toast.error(e.message),
   });
   // Assign-to-rep (managers+): team member list + the assign mutation.
@@ -171,7 +172,7 @@ export default function SequencesV2() {
   const members = ((teamQ.data ?? []) as any[]).map((m) => ({ userId: m.userId as number, name: (m.name as string) ?? `User ${m.userId}` }));
   const memberName = (uid?: number | null) => (uid ? members.find((m) => m.userId === uid)?.name ?? `User ${uid}` : null);
   const assignMut = trpc.sequences.assign.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); toast.success("Assignment updated"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Assignment updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only managers can assign")),
   });
 

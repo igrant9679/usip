@@ -39,6 +39,7 @@ import {
   MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink, UserRound,
 } from "lucide-react";
 import { CLOSED_MEETING_STATUSES, liveMeetingStatuses } from "@shared/meetingStatus";
+import { invalidateMeetingReads } from "@/lib/entityCache";
 
 /** How many past meetings the page lists. */
 const PAST_SHOWN = 15;
@@ -125,12 +126,11 @@ export default function MeetingsV2() {
   const [newOpen, setNewOpen] = useState(false);
 
   const invalidateAll = () => {
-    utils.meetings.list.invalidate();
-    utils.meetings.stats.invalidate();
+    invalidateMeetingReads(utils);
   };
 
   const setMode = trpc.meetings.setAutopilotSettings.useMutation({
-    onSuccess: () => { utils.meetings.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
+    onSuccess: () => { invalidateMeetingReads(utils); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const generate = trpc.meetings.generateProposals.useMutation({
@@ -281,7 +281,7 @@ export default function MeetingsV2() {
   // Who owns every NEW proposal ("rep" = the default routing).
   const setProposalOwner = trpc.meetings.setProposalOwner.useMutation({
     onSuccess: (_r, v) => {
-      utils.meetings.getAutopilotSettings.invalidate();
+      invalidateMeetingReads(utils);
       const who = owners.find((o) => o.userId === v.userId)?.name;
       toast.success(who ? `New proposals will belong to ${who} and send from ${who}'s calendar` : "New proposals go to each prospect's rep again");
     },

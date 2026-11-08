@@ -16,6 +16,7 @@ import { AiFitDetails } from "@/components/usip/AiFitDetails";
 import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge, RotateCcw, BarChart3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { invalidateLeadReads } from "@/lib/entityCache";
 
 type Cfg = {
   firmoOrgTypeWeight: number;
@@ -307,7 +308,7 @@ function BreakdownPreview({ cfg, unsaved }: { cfg: Cfg; unsaved: boolean }) {
   const max = componentMaxes(weights);
   const utils = trpc.useUtils();
   const recompute = trpc.leadScoring.recompute.useMutation({
-    onSuccess: () => { utils.leadScoring.breakdown.invalidate(); utils.leads.invalidate(); toast.success("Recomputed"); },
+    onSuccess: () => { utils.leadScoring.breakdown.invalidate(); invalidateLeadReads(utils); toast.success("Recomputed"); },
     onError: (e) => toast.error(e.message),
   });
 

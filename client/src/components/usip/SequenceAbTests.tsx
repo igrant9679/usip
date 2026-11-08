@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 type StepLike = { type: string; subject?: string; enabled?: boolean };
 type Variant = {
@@ -62,7 +63,7 @@ export function SequenceAbTests({ sequenceId, steps, locked, accent }: {
   const utils = trpc.useUtils();
   const query = trpc.sequenceAb.list.useQuery({ sequenceId, stepIndex }, { enabled: emailSteps.length > 0 });
   const variants = (query.data ?? []) as Variant[];
-  const refresh = () => utils.sequenceAb.list.invalidate({ sequenceId });
+  const refresh = () => invalidateSequenceReads(utils);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [minEdit, setMinEdit] = useState<{ id: number; value: string } | null>(null);

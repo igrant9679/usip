@@ -12,6 +12,7 @@
 import { toast } from "sonner";
 import { CheckCircle2, FlaskConical, ListOrdered, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { Button } from "@/components/ui/button";
 import { confirmAction } from "@/components/usip/Common";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
@@ -55,17 +56,20 @@ export function DossierActionBar({ prospect, campaignId, onReject, onOpenInSeque
   // What is left today, read while a paid action is on offer, so the confirm can say it.
   const budgets = useSourceBudgets(can.enrich || can.generate);
 
+  // Every screen showing the prospect refreshes (X1.7); onChanged is the page's own extra.
+  const utils = trpc.useUtils();
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => { toast.success(`${name} approved for sequencing — now under Approved`); onChanged(); },
+    onSuccess: () => { toast.success(`${name} approved for sequencing — now under Approved`); invalidateCampaignReads(utils); onChanged(); },
     onError: (e) => toast.error(e.message),
   });
   const enrich = trpc.are.prospects.enrich.useMutation({
-    onSuccess: () => { toast.success("Enrichment started"); setTimeout(onChanged, 3000); },
+    onSuccess: () => { toast.success("Enrichment started"); setTimeout(() => { invalidateCampaignReads(utils); onChanged(); }, 3000); },
     onError: (e) => toast.error(e.message),
   });
   const generate = trpc.are.prospects.generateSequence.useMutation({
     onSuccess: (r) => {
       toast.success(r.reused ? `Sequence already existed (${r.steps} steps) — reused` : `Sequence created — ${r.steps} step${r.steps === 1 ? "" : "s"}, quality ${r.qualityScore}/40`, { duration: 6000 });
+      invalidateCampaignReads(utils);
       onChanged();
     },
     onError: (e) => toast.error(`Sequence generation failed: ${e.message}`, { duration: 10000 }),

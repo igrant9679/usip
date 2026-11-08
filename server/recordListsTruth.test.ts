@@ -44,7 +44,11 @@ vi.mock("@/lib/trpc", () => {
       return { mutate: (vars: any) => { h.calls.push({ path, vars }); }, isPending: false };
     },
   });
-  const utils = new Proxy({}, { get: (_t, r: string) => new Proxy({}, { get: (_u, p: string) => ({ invalidate: () => { h.invalidated.push(`${r}.${p}`); } }) }) });
+  // 2026-11-08 (audit X1.7): writers refresh through lib/entityCache's family
+  // helpers, which invalidate whole routers (`utils.recordLists.invalidate()`,
+  // recorded as "recordLists.*") and some reads three deep.
+  const leaf = (path: string): any => new Proxy({ invalidate: () => { h.invalidated.push(path); } }, { get: (t: any, k: string) => (k in t ? t[k] : leaf(`${path}.${k}`)) });
+  const utils = new Proxy({}, { get: (_t, r: string) => new Proxy({ invalidate: () => { h.invalidated.push(`${r}.*`); } } as any, { get: (u: any, p: string) => (p in u ? u[p] : leaf(`${r}.${p}`)) }) });
   return {
     trpc: new Proxy({ useUtils: () => utils } as Record<string, unknown>, {
       get: (t, r: string) => (r in t ? t[r] : new Proxy({}, { get: (_u, p: string) => proc(`${r}.${p}`) })),
@@ -269,7 +273,8 @@ describe("a list's page", () => {
     expect(h.toasts.map((t) => t.msg)).toEqual(["Added 3 to the list · 1 was already on it"]);
     add.onSuccess({ added: 0, alreadyOn: 0, skipped: 2 });
     expect(h.toasts[1].msg).toBe("Added 0 to the list · 2 could not be added (deleted, archived or not this list's kind)");
-    expect(h.invalidated).toContain("recordLists.members");
+    // The list family's helper refreshes every list read, members included.
+    expect(h.invalidated).toContain("recordLists.*");
   });
 
   it("Remove says so and can be undone (P139)", async () => {

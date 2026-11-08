@@ -28,6 +28,7 @@ import { pressable } from "@/lib/pressable";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { csvCell } from "@shared/csvCell";
 import { scoredAgo } from "@/lib/leadScoreText";
+import { invalidateLeadReads } from "@/lib/entityCache";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 /** leads.sendAdHocEmailBulk's cap (server/routers/crm.ts LEAD_BULK_SEND_MAX). */
@@ -60,6 +61,7 @@ function tierBadge(grade: string | null | undefined): { label: string; cls: stri
 
 /* ─── Send Email Modal ──────────────────────────────────────────────────── */
 function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; leadIds: number[]; onComplete: () => void }) {
+  const utils = trpc.useUtils();
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -79,6 +81,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
       if (r.sent === 0) { toast.error(failed[0]?.error ?? "Nothing was sent"); return; }
       if (failed.length) toast.warning(`Sent to ${r.sent} of ${r.results.length}. ${failed.length} not sent: ${failed[0]?.error ?? "failed"}`);
       setSent(true);
+      invalidateLeadReads(utils);
       onComplete();
     },
     onError: (e: any) => toast.error(e.message),
@@ -187,27 +190,27 @@ export default function Leads() {
     const j = deleteJobQ.data;
     if (!j || deleteJob == null || j.id !== deleteJob || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Delete ${j.status}${j.message ? `: ${j.message}` : ""}.`);
-    utils.leads.invalidate();
+    invalidateLeadReads(utils);
     setDeleteJob(null);
   }, [deleteJobQ.data, deleteJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
-    onSuccess: () => utils.leads.invalidate(),
+    onSuccess: () => invalidateLeadReads(utils),
     onError: (e: any) => toast.error(e.message),
   });
   const rescore = trpc.leadScoring.recompute.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); toast.success("Re-scored"); },
+    onSuccess: () => { invalidateLeadReads(utils); toast.success("Re-scored"); },
     onError: (e: any) => toast.error("Re-score failed", { description: e.message }),
   });
   // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
   const [convertingId, setConvertingId] = useState<number | null>(null);
   const deleteMut = trpc.leads.delete.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); toast.success("Lead deleted"); },
+    onSuccess: () => { invalidateLeadReads(utils); toast.success("Lead deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
   const bulkDeleteMut = trpc.leads.bulkDelete.useMutation({
     onSuccess: (res) => {
-      utils.leads.invalidate();
+      invalidateLeadReads(utils);
       setSelectedIds(new Set());
       toast.success(`${res.deleted} lead${res.deleted === 1 ? "" : "s"} deleted`);
     },
@@ -446,7 +449,7 @@ function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [pending, setPending] = useState<null | { firstName: string; lastName: string; email?: string; company?: string; title?: string; source: string }>(null);
   const [checking, setChecking] = useState(false);
   const create = trpc.leads.create.useMutation({
-    onSuccess: () => { utils.leads.invalidate(); onOpenChange(false); setDupes(null); setPending(null); toast.success("Lead created"); },
+    onSuccess: () => { invalidateLeadReads(utils); onOpenChange(false); setDupes(null); setPending(null); toast.success("Lead created"); },
     onError: (e) => toast.error("Failed to create lead", { description: e.message }),
   });
   const submitLead = async (v: NonNullable<typeof pending>) => {

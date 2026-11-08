@@ -17,24 +17,34 @@ import { trpc } from "@/lib/trpc";
 
 type Utils = ReturnType<typeof trpc.useUtils>;
 
-/** Customers, their KPIs, the renewals board, QBRs and amendments. */
-export function invalidateCustomerReads(utils: Utils): void {
-  utils.cs.invalidate();
+/**
+ * Customers, their KPIs, the renewals board, QBRs and amendments. Returns the
+ * refetch's promise (audit X1.7, lib/entityCache.ts) so a caller can await it.
+ */
+export function invalidateCustomerReads(utils: Utils): Promise<void> {
+  return utils.cs.invalidate();
 }
 
 /** After any deal is created, moved, edited, priced or deleted. */
-export function invalidateDealReads(utils: Utils): void {
-  // board, list, summary, forecast, forecastByRep, dashboardStats,
-  // revenueChart, stageFunnel, topReps, winLoss, get, getWithRelated,
-  // getTimeline, stageHistory, listLineItems.
-  utils.opportunities.invalidate();
-  // Attainment counts won deals.
-  utils.quota.progress.invalidate();
-  // A win makes a customer; a deleted deal can take one's value with it.
-  invalidateCustomerReads(utils);
-  // A proposal shows its linked deal.
-  utils.proposals.list.invalidate();
-  utils.proposals.get.invalidate();
-  // Saved dashboards' deal widgets.
-  utils.dashboards.invalidate();
+export function invalidateDealReads(utils: Utils): Promise<void> {
+  return Promise.all([
+    // board, list, summary, forecast, forecastByRep, dashboardStats,
+    // revenueChart, stageFunnel, topReps, winLoss, get, getWithRelated,
+    // getTimeline, stageHistory, listLineItems.
+    utils.opportunities.invalidate(),
+    // Attainment counts won deals.
+    utils.quota.progress.invalidate(),
+    // A win makes a customer; a deleted deal can take one's value with it.
+    invalidateCustomerReads(utils),
+    // A proposal shows its linked deal.
+    utils.proposals.list.invalidate(),
+    utils.proposals.get.invalidate(),
+    // Saved dashboards' deal widgets.
+    utils.dashboards.invalidate(),
+    // Co-owners, deal intelligence and stage history (audit X1.7).
+    utils.oppIntelligence.invalidate(),
+    // Stuck-deal alerts and the attention panel count open deals.
+    utils.pipelineAlerts.invalidate(),
+    utils.attention.summary.invalidate(),
+  ]).then(() => undefined);
 }

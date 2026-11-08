@@ -102,8 +102,12 @@ describe("R31: a deal or customer change refreshes every page that shows it", ()
 
   it("a drawer delete refreshes the record's whole family; quota refreshes all quota reads", () => {
     const drawer = stripComments(block(read("client/src/components/usip/RecordDrawer.tsx"), "const deleteRecord = () => {", "\n  };"));
-    expect(drawer).toContain(`if (relatedType === "contact") utils.contacts.invalidate();`);
-    expect(drawer).toContain("utils.companies.invalidate();");
+    // 2026-11-08 (audit X1.7): each family through its helper in
+    // lib/entityCache.ts, which names the same routers and more (pinned in
+    // entityCacheInvalidation.test.ts).
+    expect(drawer).toContain(`if (relatedType === "contact") invalidatePeopleReads(utils);`);
+    expect(drawer).toContain("invalidateCompanyReads(utils);");
+    expect(drawer).toContain(`if (relatedType === "lead") invalidateLeadReads(utils);`);
     const quota = stripComments(read("client/src/pages/usip/Quota.tsx"));
     expect(block(quota, "const setQuota = trpc.quota.set.useMutation({", "\n  });")).toContain("utils.quota.invalidate();");
     expect(block(quota, "const removeQuota = trpc.quota.remove.useMutation({", "\n  });")).toContain("utils.quota.invalidate();");

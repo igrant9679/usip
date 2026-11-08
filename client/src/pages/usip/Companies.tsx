@@ -35,6 +35,7 @@ import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
+import { invalidateCompanyReads } from "@/lib/entityCache";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -128,8 +129,7 @@ function DuplicateReview() {
         await merge.mutateAsync({ primaryAccountId: primaryId, duplicateAccountId: d.id });
       }
       toast.success(`Merged ${dups.length} duplicate${dups.length === 1 ? "" : "s"} into the surviving account`);
-      utils.companies.duplicates.invalidate();
-      utils.companies.search.invalidate();
+      invalidateCompanyReads(utils);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -278,7 +278,7 @@ export default function Companies() {
     const j = matchingJobQ.data;
     if (!j || matchingJob == null || j.id !== matchingJob || j.status === "queued" || j.status === "running") return;
     if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Enrich ${j.status}${j.message ? `: ${j.message}` : ""}.`);
-    utils.companies.search.invalidate();
+    invalidateCompanyReads(utils);
     setMatchingJob(null);
   }, [matchingJobQ.data, matchingJob]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = (data?.data ?? []) as any[];
@@ -301,11 +301,11 @@ export default function Companies() {
     onError: (e) => toast.error(e.message),
   });
   const merge = trpc.companies.merge.useMutation({
-    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); setMergePair(null); utils.companies.search.invalidate(); },
+    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); setMergePair(null); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const backfill = trpc.companies.backfill.useMutation({
-    onSuccess: (r) => { toast.success(`Synced companies — ${r.created} created, ${r.linked} linked from prospects`); utils.companies.search.invalidate(); },
+    onSuccess: (r) => { toast.success(`Synced companies — ${r.created} created, ${r.linked} linked from prospects`); invalidateCompanyReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -337,7 +337,7 @@ export default function Companies() {
         // grinding through the rest.
         if (r.sweep.failed > 0) {
           toast.error(`Brand lookup is not answering — ${r.sweep.failed} search${r.sweep.failed === 1 ? "" : "es"} failed. Check the Brandfetch key in Settings → Data sources.`, { id: t });
-          utils.companies.search.invalidate();
+          invalidateCompanyReads(utils);
           return;
         }
         // Nothing searched means every remaining account is negative-cached or
@@ -349,7 +349,7 @@ export default function Companies() {
         prev = r.remainingWithoutDomain;
       }
       toast.success(`Brands resolved — ${filled + applied} companies got a domain, ${renamed} names repaired (${searched} searches over ${passes} passes)`, { id: t });
-      utils.companies.search.invalidate();
+      invalidateCompanyReads(utils);
     } catch (e) {
       toast.error((e as Error).message || "Brand resolution failed", { id: t });
     } finally {

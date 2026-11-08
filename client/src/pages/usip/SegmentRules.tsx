@@ -14,6 +14,7 @@ import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap, SlidersHorizonta
 import { useState } from "react";
 import { toast } from "sonner";
 import { isAdminRole } from "@shared/roleRank";
+import { invalidateListReads } from "@/lib/entityCache";
 
 type RunSummary = {
   matched?: number; enrolled?: number; refused?: string;
@@ -48,7 +49,7 @@ export default function SegmentRules() {
   // 2026-10-20, P130).
   const add = trpc.segmentRules.save.useMutation({
     onSuccess: () => {
-      utils.segmentRules.list.invalidate();
+      invalidateListReads(utils);
       toast.success("Auto-enroll rule added");
       setNewSegmentId("");
       setNewSequenceId("");
@@ -58,20 +59,20 @@ export default function SegmentRules() {
 
   const toggle = trpc.segmentRules.save.useMutation({
     onSuccess: (_r, vars) => {
-      utils.segmentRules.list.invalidate();
+      invalidateListReads(utils);
       toast.success(vars.enabled ? "Rule turned on" : "Rule paused");
     },
     onError: (e) => toast.error(e.message),
   });
 
   const del = trpc.segmentRules.delete.useMutation({
-    onSuccess: () => { utils.segmentRules.list.invalidate(); toast.success("Rule removed"); },
+    onSuccess: () => { invalidateListReads(utils); toast.success("Rule removed"); },
     onError: (e) => toast.error(e.message),
   });
 
   // Each rule's row shows its last run, so Run now refreshes them (P129).
   const runNow = trpc.segmentRules.runEnrollment.useMutation({
-    onSuccess: (data) => { utils.segmentRules.list.invalidate(); toast.success(runSummary(data)); },
+    onSuccess: (data) => { invalidateListReads(utils); toast.success(runSummary(data)); },
     onError: (e) => toast.error(e.message),
   });
 

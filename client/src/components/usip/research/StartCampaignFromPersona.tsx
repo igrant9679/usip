@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,6 +47,7 @@ export function StartCampaignFromPersona({ persona, sectorName }: { persona: any
       toast.success("Draft campaign created. Review it, then start it.");
       setOpen(false);
       await utils.personas.list.invalidate();
+      invalidateCampaignReads(utils);
       navigate(r?.id ? `/are/campaigns/${r.id}` : "/are/campaigns");
     },
   });

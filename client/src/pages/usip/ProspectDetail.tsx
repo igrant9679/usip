@@ -55,6 +55,7 @@ import {
   Globe,
   Calendar,
 } from "lucide-react";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 function tierStyle(tier: string | null) {
   if (tier === "high") return { c: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", Icon: CheckCircle2 };
@@ -95,15 +96,15 @@ export default function ProspectDetail() {
   );
   // A changed address comes back unverified (R51); say so where Verify is.
   const update = trpc.prospects.update.useMutation({
-    onSuccess: (r) => { toast.success(r.emailUnverified ? "Saved — the new email is unverified until you verify it" : "Saved"); utils.prospects.get.invalidate({ id }); setEditing(null); },
+    onSuccess: (r) => { toast.success(r.emailUnverified ? "Saved — the new email is unverified until you verify it" : "Saved"); invalidatePeopleReads(utils); setEditing(null); },
     onError: (e) => toast.error(e.message),
   });
   const archive = trpc.prospects.archive.useMutation({
-    onSuccess: () => { toast.success("Archived — hidden from People until restored"); utils.prospects.get.invalidate({ id }); utils.prospects.list.invalidate(); },
+    onSuccess: () => { toast.success("Archived — hidden from People until restored"); invalidatePeopleReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const unarchive = trpc.prospects.unarchive.useMutation({
-    onSuccess: () => { toast.success("Restored to People, back in review"); utils.prospects.get.invalidate({ id }); utils.prospects.list.invalidate(); },
+    onSuccess: () => { toast.success("Restored to People, back in review"); invalidatePeopleReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   // Verify on the person page (R47, R51): the contact page that had it is
@@ -112,14 +113,13 @@ export default function ProspectDetail() {
   // What a Verify spends, said before it runs (audit 2026-10-20, F8).
   const budgets = useSourceBudgets();
   const verify = trpc.prospects.verifyEmail.useMutation({
-    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}`); utils.prospects.get.invalidate({ id }); },
+    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}`); invalidatePeopleReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.prospects.review.useMutation({
     onSuccess: (r) => {
       toast.success(r.updated ? "Approved" : "Already decided elsewhere");
-      utils.prospects.get.invalidate({ id });
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

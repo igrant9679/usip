@@ -49,6 +49,7 @@ import { APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApp
 import { EMPLOYEE_BANDS, employeeRangeOf, personaToTargeting, wizardDefaults, type EmployeeBand } from "./areCampaignsModel";
 import { AreSubNav } from "@/components/usip/are/AreSubNav";
 import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 const CAMPAIGN_PAGE = 50;
 
@@ -308,7 +309,7 @@ export default function ARECampaigns() {
           ? "Campaign launched. The engine runs it now and then every 3 minutes; email goes out only inside your send window."
           : "Campaign saved as draft. Activate it whenever you're ready.",
       );
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       setShowCreate(false);
       navigate(`/are/campaigns/${data.id}`);
     },
@@ -322,8 +323,7 @@ export default function ARECampaigns() {
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: (_r, vars) => {
       toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
-      utils.are.campaigns.get.invalidate({ id: vars.id });
+      invalidateCampaignReads(utils);
     },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
@@ -341,21 +341,21 @@ export default function ARECampaigns() {
   const archive = trpc.are.campaigns.archive.useMutation({
     onSuccess: (r) => {
       toast.success(r.paused ? "Campaign paused and archived. Nothing more is sent from it; Unarchive brings it back." : "Campaign archived. Unarchive brings it back.");
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate(); utils.are.campaigns.get.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const unarchive = trpc.are.campaigns.unarchive.useMutation({
     onSuccess: () => {
       toast.success("Campaign unarchived. It is back in the list, as it was; activate it when you are ready.");
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate(); utils.are.campaigns.get.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
   const clone = trpc.are.campaigns.clone.useMutation({
     onSuccess: (r) => {
       toast.success(`"${r.name}" created as a draft. Nothing runs until you activate it.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
       navigate(`/are/campaigns/${r.id}`);
     },
     onError: (e) => toast.error(e.message),
@@ -364,7 +364,7 @@ export default function ARECampaigns() {
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: (r) => {
       toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
-      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

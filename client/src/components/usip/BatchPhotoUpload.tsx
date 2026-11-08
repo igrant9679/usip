@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImagePlus, Check, X, Loader2, ChevronsUpDown, UploadCloud } from "lucide-react";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 
 interface ProspectLite {
   id: number;
@@ -143,7 +144,7 @@ export function BatchPhotoUpload({ open, onClose }: { open: boolean; onClose: ()
 
   const bulk = trpc.prospects.bulkUploadProfileImages.useMutation({
     onSuccess: (res) => {
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
       toast.success(`Assigned ${res.uploaded} photo${res.uploaded === 1 ? "" : "s"}` + (res.failed.length ? ` · ${res.failed.length} failed` : ""));
       setItems([]);
       onClose();

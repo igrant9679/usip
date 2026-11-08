@@ -75,7 +75,10 @@ describe("wiring", () => {
   });
 
   it("both invalidation funnels cover the new query", () => {
-    expect(page).toContain("utils.are.execution.getStepStates.invalidate({ campaignId })");
-    expect(bar).toContain("utils.are.execution.getStepStates.invalidate()");
+    // 2026-11-08 (audit X1.7): both funnels are the campaign family's helper,
+    // whose `utils.are.invalidate()` covers getStepStates and every other
+    // `are` read (pinned in entityCacheInvalidation.test.ts).
+    expect(page).toContain("invalidateAll: () => invalidateCampaignReads(utils)");
+    expect(bar).toContain("invalidateCampaignReads(utils);");
   });
 });

@@ -50,6 +50,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
 import { aiCallText } from "@shared/spendPreview";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 // ICP lists are stored as weighted objects ({title, weight, …}); read them
@@ -224,8 +225,7 @@ function OverrideDialog({
   const override = trpc.are.icp.override.useMutation({
     onSuccess: (r) => {
       toast.success(r.pinned.length > 0 ? `ICP saved as version ${r.version}. Your edits are kept when it is regenerated.` : "The AI sets every field again from the next regeneration.");
-      utils.are.icp.getCurrent.invalidate();
-      utils.are.icp.getHistory.invalidate();
+      invalidateCampaignReads(utils);
       onClose();
     },
     onError: (e) => toast.error(e.message),
@@ -568,8 +568,7 @@ export default function AREIcpAgent() {
   const regenerate = trpc.are.icp.regenerate.useMutation({
     onSuccess: () => {
       toast.success("ICP regeneration started — this may take a moment");
-      setTimeout(() => utils.are.icp.getCurrent.invalidate(), 5000);
-      setTimeout(() => utils.are.icp.getHistory.invalidate(), 5000);
+      setTimeout(() => invalidateCampaignReads(utils), 5000);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -587,8 +586,7 @@ export default function AREIcpAgent() {
     onSuccess: (_, vars) => {
       toast.success("ICP version restored successfully");
       setRestoringId(null);
-      utils.are.icp.getCurrent.invalidate();
-      utils.are.icp.getHistory.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => { toast.error(e.message); setRestoringId(null); },
   });

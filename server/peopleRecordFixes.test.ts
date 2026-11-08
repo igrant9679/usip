@@ -341,7 +341,9 @@ describe("R95 · Enrich fully refreshes the person it ran for", () => {
     expect(panel).toContain("key={selected.id}");
     const enrich = src.slice(src.indexOf("const enrichFull = trpc.prospects.enrichFull.useMutation"), src.indexOf("const d = (full ?? p)"));
     expect(enrich).toContain("onSuccess: (r, vars) => {");
-    expect(enrich).toContain("utils.prospects.get.invalidate({ id: vars.prospectId });");
+    // 2026-11-08 (audit X1.7): the person is refreshed with every People read
+    // through the family helper; the enrichment panel still by the run's id.
+    expect(enrich).toContain("invalidatePeopleReads(utils);");
     expect(enrich).toContain("getProspectEnrichment.invalidate({ prospectId: vars.prospectId });");
     expect(enrich).not.toContain("p.id");
   });

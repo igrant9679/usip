@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/usip/Common";
+import { invalidateCampaignReads } from "@/lib/entityCache";
 
 export function RoutingSuggestions() {
   const utils = trpc.useUtils();
@@ -18,9 +19,7 @@ export function RoutingSuggestions() {
   const acceptAll = trpc.are.campaigns.acceptAllRoutingSuggestions.useMutation({
     onSuccess: (r) => {
       toast.success(`${r.accepted} accepted — ${r.added} added to campaigns${r.skipped ? `, ${r.skipped} skipped (already in outreach)` : ""}`);
-      utils.are.campaigns.listRoutingSuggestions.invalidate();
-      utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -28,9 +27,7 @@ export function RoutingSuggestions() {
     onSuccess: (r, vars) => {
       if (vars.decision === "accept") toast.success(r.added > 0 ? "Added to the campaign — the engine will enrich and write their emails" : "Nothing added (already in outreach)");
       else toast.info("Dismissed");
-      utils.are.campaigns.listRoutingSuggestions.invalidate();
-      utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+      invalidateCampaignReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

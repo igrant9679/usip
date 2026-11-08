@@ -58,6 +58,7 @@ import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
 import { Switch } from "@/components/ui/switch";
 import { canvasLeftovers } from "@/lib/canvasSupport";
 import { isHtmlBody } from "@shared/emailBody";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -151,7 +152,7 @@ export default function SequenceEditor() {
    * saved, so a sequence could appear to say something it does not send.
    */
   const updateSteps = trpc.sequences.updateSteps.useMutation({
-    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); utils.sequenceTimeline.preview.invalidate({ sequenceId: id }); },
+    onSuccess: () => { invalidateSequenceReads(utils); },
     onError: (e) => {
       toast.error(e.message);
       void seqQ.refetch().then((r) => { if (r.data) setSteps(Array.isArray((r.data as any).steps) ? (r.data as any).steps : []); });
@@ -161,22 +162,21 @@ export default function SequenceEditor() {
   // legacy list to find the real button.
   const setStatus = trpc.sequences.setStatus.useMutation({
     onSuccess: (_d, v) => {
-      utils.sequences.get.invalidate({ id });
-      utils.sequences.list.invalidate();
+      invalidateSequenceReads(utils);
       toast.success(v.status === "active" ? "Sequence activated" : v.status === "archived" ? "Sequence archived" : v.status === "draft" ? "Sequence restored as a draft" : "Sequence paused");
     },
     onError: (e) => toast.error(e.message),
   });
   const { user } = useAuth();
-  const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { invalidateSequenceReads(utils); }, onError: (e) => toast.error(e.message) });
   // Reply detection, from the legacy edit dialog and the canvas panel (U14).
   const saveReplyDetection = trpc.sequences.updateMeta.useMutation({
-    onSuccess: (_d, v) => { utils.sequences.get.invalidate({ id }); toast.success(v.settings?.replyDetection === false ? "Replies no longer pause anyone" : "A reply pauses the person again"); },
+    onSuccess: (_d, v) => { invalidateSequenceReads(utils); toast.success(v.settings?.replyDetection === false ? "Replies no longer pause anyone" : "A reply pauses the person again"); },
     onError: (e) => toast.error(e.message),
   });
   // Delete, from the legacy list (U14), with its words about what stays (O22).
   const removeSeq = trpc.sequences.delete.useMutation({
-    onSuccess: () => { utils.sequences.list.invalidate(); toast.success("Sequence deleted"); setLocation("/v2/sequences"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Sequence deleted"); setLocation("/v2/sequences"); },
     onError: (e) => toast.error(e.message),
   });
   const [enrollOpen, setEnrollOpen] = useState(false);

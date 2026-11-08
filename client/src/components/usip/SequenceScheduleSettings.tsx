@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { TimezonePicker } from "@/components/usip/TimezonePicker";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { invalidateSequenceReads } from "@/lib/entityCache";
 
 type Settings = { timezone?: string | null; sendWindowStart?: string | null; sendWindowEnd?: string | null; skipWeekends?: boolean | null };
 
@@ -30,7 +31,7 @@ export function SequenceScheduleSettings({ sequenceId, settings, accent, disable
   const { timezone: wsZone } = useWorkspaceTimezone();
   const utils = trpc.useUtils();
   const save = trpc.sequences.updateMeta.useMutation({
-    onSuccess: () => { utils.sequences.get.invalidate({ id: sequenceId }); utils.sequenceTimeline.preview.invalidate({ sequenceId }); toast.success("Send window saved"); },
+    onSuccess: () => { invalidateSequenceReads(utils); toast.success("Send window saved"); },
     onError: (e) => toast.error(e.message),
   });
   const valid = /^\d{2}:\d{2}$/.test(start) && /^\d{2}:\d{2}$/.test(end) && start < end;

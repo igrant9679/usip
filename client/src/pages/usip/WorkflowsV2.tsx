@@ -33,6 +33,7 @@ import {
   ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog, Database, Loader2,
 } from "lucide-react";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { invalidateCampaignReads, invalidateListReads, invalidateMeetingReads, invalidatePeopleReads, invalidateTaskReads } from "@/lib/entityCache";
 
 function fmtWhen(d?: string | Date | null): string {
   if (!d) return "never";
@@ -99,15 +100,15 @@ export default function WorkflowsV2() {
   // snapped back with no explanation while the other five said plainly that
   // only admins may change them. Same failure, two different experiences, on
   // the one screen new users are told to start from.
-  const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => utils.tasks.getAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Task Autopilot")) });
-  const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => utils.meetings.getAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Meeting Autopilot")) });
+  const setTaskAp = trpc.tasks.setAutopilotSettings.useMutation({ onSuccess: () => invalidateTaskReads(utils), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Task Autopilot")) });
+  const setMeetAp = trpc.meetings.setAutopilotSettings.useMutation({ onSuccess: () => invalidateMeetingReads(utils), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Meeting Autopilot")) });
   const setConvAp = trpc.conversations.setAutopilotSettings.useMutation({ onSuccess: () => utils.conversations.getAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Conversation Autopilot")) });
   const setDealAp = trpc.deals.setAutopilotSettings.useMutation({ onSuccess: () => utils.deals.getAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Deal Autopilot")) });
   const setSocialAp = trpc.unipile.setSocialAutopilotSettings.useMutation({ onSuccess: () => utils.unipile.getSocialAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Social Autopilot")) });
   const setJobChangeAp = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({ onSuccess: () => utils.linkedinEnrichment.getJobChangeSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Job Change Autopilot")) });
   const runSweep = trpc.prospects.runSweep.useMutation({
     onSuccess: (r: any) => {
-      utils.prospects.sweepStatus.invalidate();
+      invalidatePeopleReads(utils);
       // The toast is immediate feedback; the durable copy of the same numbers
       // is the "Last sweep" line on the card (persisted by the engine, 0147),
       // which the invalidate above refreshes. ONE summariser feeds both, or
@@ -116,18 +117,18 @@ export default function WorkflowsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const setBackfillAp = trpc.prospects.setBackfillSettings.useMutation({ onSuccess: () => utils.prospects.backfillStatus.invalidate(), onError: (e) => toast.error(e.message) });
+  const setBackfillAp = trpc.prospects.setBackfillSettings.useMutation({ onSuccess: () => invalidatePeopleReads(utils), onError: (e) => toast.error(e.message) });
   // Two engines were missing from this screen entirely, so "All: Off" left them
   // running. Optimisation defaults to `approval` (i.e. ON) and in `auto` edits
   // your sequences; chat follow-up in `auto` SENDS EMAIL. A global off switch
   // that misses either is worse than no global switch, because it is believed.
   const routingAp = trpc.are.campaigns.getRoutingSettings.useQuery(undefined as any, { retry: false });
-  const setRoutingAp = trpc.are.campaigns.setRoutingSettings.useMutation({ onSuccess: () => utils.are.campaigns.getRoutingSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Campaign Routing")) });
+  const setRoutingAp = trpc.are.campaigns.setRoutingSettings.useMutation({ onSuccess: () => invalidateCampaignReads(utils), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Campaign Routing")) });
   const optAp = trpc.optimization.getSettings.useQuery(undefined as any, { retry: false });
   const setOptAp = trpc.optimization.setSettings.useMutation({ onSuccess: () => utils.optimization.getSettings.invalidate(), onError: (e) => toast.error(e.message) });
   const chatFollowAp = trpc.chatAgents.getFollowUpSettings.useQuery(undefined as any, { retry: false });
   const setChatFollowAp = trpc.chatAgents.setFollowUpSettings.useMutation({ onSuccess: () => utils.chatAgents.getFollowUpSettings.invalidate(), onError: (e) => toast.error(e.message) });
-  const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => utils.prospects.sweepStatus.invalidate(), onError: (e) => toast.error(e.message) });
+  const setSweepAp = trpc.prospects.setSweepSettings.useMutation({ onSuccess: () => invalidatePeopleReads(utils), onError: (e) => toast.error(e.message) });
   const setChatAp = trpc.chatAgents.setAutopilotSettings.useMutation({ onSuccess: () => utils.chatAgents.getAutopilotSettings.invalidate(), onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change the Chat Agent")) });
 
   // Email AI auto-send — a boolean autonomy control, surfaced here too.
@@ -248,7 +249,7 @@ export default function WorkflowsV2() {
   const setAllEngineAutonomy = trpc.are.campaigns.setAllAutonomy.useMutation({
     onSuccess: (r) => {
       utils.settings.getAreSettings.invalidate();
-      utils.are.campaigns.list.invalidate();
+      invalidateCampaignReads(utils);
       toast.success(`Engine autonomy applied to ${r.campaignsUpdated} campaign${r.campaignsUpdated === 1 ? "" : "s"}`);
     },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change engine autonomy")),
@@ -257,7 +258,7 @@ export default function WorkflowsV2() {
     onSuccess: () => { utils.settings.getAreSettings.invalidate(); toast.success("Engine autonomy saved"); },
     onError: (e: any) => toast.error(forbiddenMessage(e, "Only admins can change engine autonomy")),
   });
-  const setCampaignStatus = trpc.are.campaigns.setStatus.useMutation({ onSuccess: () => { utils.are.campaigns.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  const setCampaignStatus = trpc.are.campaigns.setStatus.useMutation({ onSuccess: () => { invalidateCampaignReads(utils); }, onError: (e) => toast.error(e.message) });
 
   // ── Workflow rules + AI suggestions ──
   const rules = trpc.workflows.list.useQuery(undefined as any, { retry: false });
@@ -273,8 +274,8 @@ export default function WorkflowsV2() {
 
   // ── Segment auto-enroll rules ──
   const segRules = trpc.segmentRules.list.useQuery(undefined as any, { retry: false });
-  const saveSegRule = trpc.segmentRules.save.useMutation({ onSuccess: () => utils.segmentRules.list.invalidate(), onError: (e) => toast.error(e.message) });
-  const runSegRules = trpc.segmentRules.runEnrollment.useMutation({ onSuccess: (r) => { utils.segmentRules.list.invalidate(); toast.success(runSummary(r)); }, onError: (e) => toast.error(e.message) });
+  const saveSegRule = trpc.segmentRules.save.useMutation({ onSuccess: () => invalidateListReads(utils), onError: (e) => toast.error(e.message) });
+  const runSegRules = trpc.segmentRules.runEnrollment.useMutation({ onSuccess: (r) => { invalidateListReads(utils); toast.success(runSummary(r)); }, onError: (e) => toast.error(e.message) });
   // Turning a rule on shows how many it would enrol and asks first (audit 2026-10-20, P57).
   const confirmTurnOn = useConfirmAutoEnrol();
 

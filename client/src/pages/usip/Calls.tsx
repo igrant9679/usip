@@ -23,6 +23,7 @@ import {
   Phone, Check, Link as LinkIcon, CalendarClock, AlertTriangle, PhoneOff,
   AudioLines, PhoneIncoming, PhoneOutgoing, ChevronDown, Settings2,
 } from "lucide-react";
+import { invalidateTaskReads } from "@/lib/entityCache";
 
 type Task = {
   id: number;
@@ -213,7 +214,7 @@ export default function Calls() {
   const { data: doneData } = trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent" });
   const { data: counts } = trpc.tasks.stats.useQuery({ type: "call" });
   const setStatus = trpc.tasks.setStatus.useMutation({
-    onSuccess: () => { utils.tasks.list.invalidate(); utils.tasks.stats.invalidate(); },
+    onSuccess: () => { invalidateTaskReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 

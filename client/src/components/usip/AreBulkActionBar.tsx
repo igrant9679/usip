@@ -31,6 +31,7 @@ import { ROLE_RANK, rankOf } from "@shared/roleRank";
 import { bulkActionNeedsManager } from "@shared/areProspectViews";
 import type { ConfirmFacts } from "@shared/confirmFacts";
 import { ConfirmFactList } from "@/components/usip/Common";
+import { invalidateCampaignReads, invalidateListReads } from "@/lib/entityCache";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
@@ -167,24 +168,8 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: pending?.params === "list" });
 
   const refreshAll = () => {
-    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-    utils.are.prospects.listSequences.invalidate();
-    utils.are.prospects.getRejectionStats.invalidate();
-    utils.are.execution.getQueue.invalidate();
-    utils.are.execution.getStepStates.invalidate();
-    utils.are.execution.getSignalLog.invalidate();
-    utils.are.engine.getLogs.invalidate();
-    utils.are.campaigns.get.invalidate({ id: campaignId });
-    utils.recordLists.list.invalidate();
-    // What a mass approve, reject or enrich also moves, and nothing refreshed
-    // (audit 2026-10-20, A74): "Approve all (N)", the stall panel, the step
-    // table, the signal badge, rows read by id, and the attention badge.
-    utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
-    utils.are.campaigns.stallReasons.invalidate({ campaignId });
-    utils.are.prospects.byIds.invalidate({ campaignId });
-    utils.are.prospects.getAbVariants.invalidate({ campaignId });
-    utils.are.execution.getSignalCounts.invalidate({ campaignId });
-    utils.attention.summary.invalidate();
+    invalidateCampaignReads(utils);
+    invalidateListReads(utils);
   };
   // A background run (LLM-backed actions above a small batch) finishes rows
   // one by one after the call returns; keep the tab fresh for a few minutes.

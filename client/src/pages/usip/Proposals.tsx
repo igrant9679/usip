@@ -57,6 +57,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmButton } from "@/components/usip/Common";
+import { invalidateProposalReads } from "@/lib/entityCache";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -147,9 +148,11 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
     }));
   }, [linkedAccount]);
 
+  const utils = trpc.useUtils();
   const createMutation = trpc.proposals.create.useMutation({
     onSuccess: (data) => {
       toast.success("Proposal created");
+      invalidateProposalReads(utils);
       onCreated(data.id);
       handleClose();
     },
@@ -512,7 +515,7 @@ export default function Proposals() {
   const utils = trpc.useUtils();
   const removeProposal = trpc.proposals.delete.useMutation({
     onSuccess: () => {
-      utils.proposals.list.invalidate();
+      invalidateProposalReads(utils);
       toast.success("Proposal deleted");
     },
     onError: (e) => toast.error("Failed to delete proposal", { description: e.message }),

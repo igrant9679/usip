@@ -11,6 +11,7 @@
  */
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { invalidateMeetingReads } from "@/lib/entityCache";
 import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,7 @@ export function AttentionPanel() {
   const approveMeeting = trpc.meetings.approveAndSend.useMutation({
     onSuccess: () => {
       toast.success("Meeting approved — invite sent");
-      utils.attention.summary.invalidate();
+      invalidateMeetingReads(utils);
     },
     onError: (e) => toast.error(e.message),
   });

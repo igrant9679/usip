@@ -31,6 +31,7 @@ import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { invalidatePeopleReads } from "@/lib/entityCache";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -1262,8 +1263,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
       );
       if (r.queuedLinkedInJob) toast("LinkedIn profile lookup queued — profile fields land shortly");
       // The person the run was for, from its own input (R95).
-      utils.prospects.get.invalidate({ id: vars.prospectId });
-      utils.prospects.list.invalidate();
+      invalidatePeopleReads(utils);
       utils.linkedinEnrichment.getProspectEnrichment.invalidate({ prospectId: vars.prospectId });
     },
     onError: (e2) => toast.error(e2.message),
