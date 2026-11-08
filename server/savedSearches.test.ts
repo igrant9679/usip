@@ -178,10 +178,12 @@ describe("the People page reads its searches from the server", () => {
     // Data Health's "Fix now" cards land on ?missingEmail=1 / ?emailStatus=…
     // and the /contacts/:id redirect on ?q=<name>. Restoring last-applied over
     // the top shows a different population than the card that sent them here.
+    // 2026-11-08 (audit U6): any view filter in the address counts as a deep
+    // link now (a refreshed or shared view), the original three included.
     const seed = slice(people, "const [viewRestored, setViewRestored] = useState(", "// ── view state ──");
-    expect(seed).toContain('urlParams?.get("missingEmail")');
-    expect(seed).toContain('urlParams?.get("emailStatus")');
-    expect(seed).toContain('urlParams?.get("q")');
+    expect(seed).toContain('hasAnyParam(urlParams?.toString() ?? "", VIEW_FILTER_KEYS)');
+    const keys = slice(people, "const PEOPLE_URL_KEYS = [", "] as const;");
+    for (const k of ['"missingEmail"', '"emailStatus"', '"q"']) expect(keys).toContain(k);
   });
 
   it("clearing filters stops the picker claiming a search it is not showing", () => {

@@ -166,6 +166,7 @@ import { pressable } from "@/lib/pressable";
 import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
 import { invalidateCampaignReads } from "@/lib/entityCache";
+import { urlParam, useUrlState, type UrlParam } from "@/lib/urlState";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -1096,6 +1097,16 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
 const FILTERS = ["all", "enrolled", "paused", "approved", "pending", "canceled", "completed", "replied"] as const;
 type FilterKey = typeof FILTERS[number];
 
+/** The campaign page's tabs, as ?tab= takes them (audit U6). */
+const CAMPAIGN_TABS = ["prospects", "scraper", "sequences", "ab", "signals", "settings", "rejections", "logs"] as const;
+type CampaignTab = typeof CAMPAIGN_TABS[number];
+const isCampaignTab = (t: string): t is CampaignTab => (CAMPAIGN_TABS as readonly string[]).includes(t);
+/** ?enrich= is one enrichment state, or absent for any. */
+const ENRICH_PARAM: UrlParam<EnrichmentState | null> = {
+  parse: (r) => ((ENRICHMENT_STATES as readonly string[]).includes(r ?? "") ? (r as EnrichmentState) : null),
+  format: (v) => v,
+};
+
 function StatusBadgeMini({ status }: { status: string }) {
   const s = STATUS_STYLE[status] ?? STATUS_STYLE.pending;
   return <Badge className={`text-[10px] ${s.cls}`}>{s.label}</Badge>;
@@ -1105,10 +1116,11 @@ function StatusBadgeMini({ status }: { status: string }) {
 type SequenceFocus = { prospectId: number; search: string; nonce: number };
 
 function SequencesTab({ campaignId, campaign, focus, onOpenSettings }: { campaignId: number; campaign: any; focus?: SequenceFocus | null; onOpenSettings?: () => void }) {
-  const [filter, setFilter] = useState<FilterKey>("enrolled");
-  const [search, setSearch] = useState("");
+  // The Sequences tab's filter, search and page in the address too (U6).
+  const [filter, setFilter] = useUrlState<FilterKey>("seq", urlParam.oneOf(FILTERS, "enrolled"));
+  const [search, setSearch] = useUrlState("seqq", urlParam.string());
   const searchQ = useDebouncedValue(search.trim());
-  const [seqPage, setSeqPage] = useState(1);
+  const [seqPage, setSeqPage] = useUrlState("seqpage", urlParam.int(1));
   useClearOnChange({ filter, searchQ }, () => setSeqPage(1));
   // A page of the filter, and the counts for every filter, from the server
   // (A44). This asked for 500 rows with every full sequence, then counted
@@ -2248,7 +2260,9 @@ function ARECampaignDetailPage() {
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
   // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
-  const [tab, setTab] = useState("prospects");
+  // In the address (?tab=, audit U6): a refresh or a link opens the same tab.
+  const [tab, setTabState] = useUrlState("tab", urlParam.oneOf(CAMPAIGN_TABS, "prospects"));
+  const setTab = (t: string) => setTabState(isCampaignTab(t) ? t : "prospects");
   /**
    * Each tab's queries start the first time it is opened (audit 2026-10-20,
    * U24). The page used to read the signal feed, the step table, every
@@ -2273,16 +2287,17 @@ function ARECampaignDetailPage() {
   // leaves the list instead of riding along with the next batch (tracker
   // 12). View, enrichment state and search are the server's (tracker 13,
   // A45): statusCounts counts what list returns for the same filter.
-  const [prospectView, setProspectView] = useState<ProspectView>("review");
-  const [enrichFilter, setEnrichFilter] = useState<EnrichmentState | null>(null);
-  const [prospectSearch, setProspectSearch] = useState("");
+  // View, enrichment state, search and page in the address (audit U6).
+  const [prospectView, setProspectView] = useUrlState<ProspectView>("view", urlParam.oneOf(PROSPECT_VIEW_KEYS, "review"));
+  const [enrichFilter, setEnrichFilter] = useUrlState<EnrichmentState | null>("enrich", ENRICH_PARAM);
+  const [prospectSearch, setProspectSearch] = useUrlState("q", urlParam.string());
   const prospectSearchQ = useDebouncedValue(prospectSearch.trim());
   const prospectFilter = {
     view: prospectView,
     ...(enrichFilter ? { enrichmentStatus: enrichFilter } : {}),
     ...(prospectSearchQ ? { search: prospectSearchQ } : {}),
   };
-  const [prospectPage, setProspectPage] = useState(1);
+  const [prospectPage, setProspectPage] = useUrlState("page", urlParam.int(1));
   useClearOnChange(prospectFilter, () => setProspectPage(1));
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
     { campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
@@ -2482,12 +2497,14 @@ function ARECampaignDetailPage() {
 
   // ?prospect=<id> opens that prospect's dossier (audit 2026-10-20, A49):
   // mention notices and /are/prospects/:id link here, and nothing read it.
-  const linkedProspectId = (() => {
-    const v = Number(new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("prospect"));
-    return Number.isInteger(v) && v > 0 ? v : null;
-  })();
+  // Since U6 the open dossier IS the parameter: opening one writes it, closing
+  // removes it, so a refresh or a copied link opens the same dossier.
+  const [linkedProspectId, setLinkedProspectId] = useUrlState("prospect", urlParam.id());
   const [selectedProspectId, setSelectedProspectId] = useState<number | null>(linkedProspectId);
-  const [dossierOpen, setDossierOpen] = useState(linkedProspectId !== null);
+  useEffect(() => { if (linkedProspectId !== null) setSelectedProspectId(linkedProspectId); }, [linkedProspectId]);
+  const dossierOpen = linkedProspectId !== null;
+  const setDossierOpen = (open: boolean) => setLinkedProspectId(open ? selectedProspectId : null);
+  const openDossier = (id: number) => { setSelectedProspectId(id); setLinkedProspectId(id); };
   // A prospect who is not on the loaded page (a link, the funnel, Rejections)
   // is read by id, so the dossier opens on them instead of "No prospect selected".
   const selectedOnPage = (prospects ?? []).some((p) => p.id === selectedProspectId);
@@ -2516,28 +2533,18 @@ function ARECampaignDetailPage() {
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
-  // URL-persisted reason filter
+  // URL-persisted reason and kind filters, through the shared hook since U6.
   const [location, setLocation] = useLocation();
-  const urlParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
-  const [reasonFilter, setReasonFilterState] = useState<string | null>(
-    urlParams.get("reason") || null
-  );
+  const [reasonParam, setReasonParam] = useUrlState("reason", urlParam.string());
+  const reasonFilter = reasonParam || null;
   // One page of the rejected, for the reason picked (A44): the server
   // filters and pages; this tab used to render every rejection at once.
-  const [rejPage, setRejPage] = useState(1);
+  const [rejPage, setRejPage] = useUrlState("rpage", urlParam.int(1));
   // Who or what rejected them (F19), URL-persisted like the reason.
-  const [kindFilter, setKindFilterState] = useState<RejectionKind | null>(() => {
-    const k = urlParams.get("kind");
-    return isRejectionKind(k) ? k : null;
+  const [kindFilter, setKindFilter] = useUrlState<RejectionKind | null>("kind", {
+    parse: (k) => (isRejectionKind(k) ? k : null),
+    format: (k) => k,
   });
-  const setKindFilter = (k: RejectionKind | null) => {
-    setKindFilterState(k);
-    const params = new URLSearchParams(window.location.search);
-    if (k) params.set("kind", k);
-    else params.delete("kind");
-    const newSearch = params.toString();
-    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
-  };
   useClearOnChange({ reasonFilter, kindFilter }, () => setRejPage(1));
   const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
     { campaignId, reason: reasonFilter, kind: kindFilter, page: rejPage, perPage: REJECTION_PAGE },
@@ -2548,21 +2555,7 @@ function ARECampaignDetailPage() {
   // Mass-action selection over the rejections on this page.
   const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number }>).map((item) => item.id), [rejectionStats]);
   const rejSel = useRowSelection(rejectionIds);
-  const setReasonFilter = (r: string | null) => {
-    setReasonFilterState(r);
-    const params = new URLSearchParams(window.location.search);
-    if (r) params.set("reason", r);
-    else params.delete("reason");
-    const newSearch = params.toString();
-    setLocation(window.location.pathname + (newSearch ? `?${newSearch}` : ""), { replace: true });
-  };
-  // Sync reasonFilter from URL on mount
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    const r = p.get("reason");
-    if (r !== reasonFilter) setReasonFilterState(r);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const setReasonFilter = (r: string | null) => setReasonParam(r ?? "");
   const [dossierTab, setDossierTab] = useState<"intel" | "notes">("intel");
   // The dossier's "Open in Sequences" (U23).
   const [seqFocus, setSeqFocus] = useState<SequenceFocus | null>(null);
@@ -3206,7 +3199,7 @@ function ARECampaignDetailPage() {
                       <ProspectRow
                         p={p}
                         campaignId={campaignId}
-                        onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); setDossierTab("intel"); }}
+                        onSelect={(id) => { openDossier(id); setDossierTab("intel"); }}
                         selected={selectedProspectId === p.id}
                         onReject={setRejectTarget}
                       />
@@ -4542,7 +4535,7 @@ function ARECampaignDetailPage() {
                   return (
                     <div key={r.id}
                       className={`px-3 py-2 flex items-center gap-2 text-xs hover:bg-muted/40 cursor-pointer ${funnelSel.isSelected(r.id) ? "bg-primary/5" : ""}`}
-                      {...pressable(() => { setSelectedProspectId(r.id); setDossierOpen(true); setDossierTab("intel"); })}
+                      {...pressable(() => { openDossier(r.id); setDossierTab("intel"); })}
                     >
                       <span onClick={(e) => e.stopPropagation()} className="shrink-0">
                         <Checkbox checked={funnelSel.isSelected(r.id)} onCheckedChange={() => funnelSel.toggle(r.id)} aria-label="Select" />

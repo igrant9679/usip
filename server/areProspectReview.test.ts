@@ -253,7 +253,8 @@ describe("the tab opens on review, filters by state, and its ✕ is a Reject wit
   it("opens on the review queue and sends the view, enrichment state and search to the server", () => {
     expect(rowFn.length).toBeGreaterThan(1000);
     expect(tab.length).toBeGreaterThan(1000);
-    expect(page).toContain('const [prospectView, setProspectView] = useState<ProspectView>("review");');
+    // 2026-11-08 (audit U6): still opens on review, now kept in ?view=.
+    expect(page).toContain('const [prospectView, setProspectView] = useUrlState<ProspectView>("view", urlParam.oneOf(PROSPECT_VIEW_KEYS, "review"));');
     expect(page).toContain("...(enrichFilter ? { enrichmentStatus: enrichFilter } : {}),");
     expect(page).toContain("...(prospectSearchQ ? { search: prospectSearchQ } : {}),");
     // One chip per view and per enrichment state, each with the server's count.

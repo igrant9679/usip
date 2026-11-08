@@ -35,6 +35,7 @@ import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
+import { urlParam, useUrlState } from "@/lib/urlState";
 import { invalidateCompanyReads } from "@/lib/entityCache";
 
 const RATING_STYLE: Record<string, string> = {
@@ -210,21 +211,25 @@ export default function Companies() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  // filters
-  const [searchInput, setSearchInput] = useState("");
-  const [q, setQ] = useState("");
-  const [industries, setIndustries] = useState<Set<string>>(new Set());
-  const [locations, setLocations] = useState<Set<string>>(new Set());
-  const [hasContacts, setHasContacts] = useState(false);
+  // filters, sort and page, all in the address (audit 2026-10-20, U6): a
+  // refresh keeps the view and a copied link opens the same one.
+  const [q, setQ] = useUrlState("q", urlParam.string());
+  const [searchInput, setSearchInput] = useState(q);
+  const [industries, setIndustries] = useUrlState("industry", urlParam.set());
+  const [locations, setLocations] = useUrlState("location", urlParam.set());
+  const [hasContacts, setHasContacts] = useUrlState("hasContacts", urlParam.bool());
   // Archived companies, where a restore starts (R64).
-  const [archivedOnly, setArchivedOnly] = useState(false);
-  const [minRating, setMinRating] = useState<"" | "fair" | "good" | "excellent">("");
-  const [empMin, setEmpMin] = useState(""); const [empMax, setEmpMax] = useState("");
+  const [archivedOnly, setArchivedOnly] = useUrlState("archived", urlParam.bool());
+  const [minRating, setMinRating] = useUrlState("rating", urlParam.oneOf(["", "fair", "good", "excellent"] as const, ""));
+  const [empMin, setEmpMin] = useUrlState("empMin", urlParam.string()); const [empMax, setEmpMax] = useUrlState("empMax", urlParam.string());
   // Research (2026-10-16): companies sourced by Research, or in a research sector.
-  const [research, setResearch] = useState<"" | "sourced" | "in_sector">("");
-  const [researchSectors, setResearchSectors] = useState<Set<string>>(new Set());
-  const [sort, setSort] = useState<{ field: any; direction: "asc" | "desc" }>({ field: "contactCount", direction: "desc" });
-  const [page, setPage] = useState(1);
+  const [research, setResearch] = useUrlState("research", urlParam.oneOf(["", "sourced", "in_sector"] as const, ""));
+  const [researchSectors, setResearchSectors] = useUrlState("sector", urlParam.set());
+  const [sortField, setSortField] = useUrlState("sort", urlParam.string("contactCount"));
+  const [sortDir, setSortDir] = useUrlState("dir", urlParam.oneOf(["asc", "desc"] as const, "desc"));
+  const sort = useMemo(() => ({ field: sortField as any, direction: sortDir }), [sortField, sortDir]);
+  const setSort = (s: { field: string; direction: "asc" | "desc" }) => { setSortField(s.field); setSortDir(s.direction); };
+  const [page, setPage] = useUrlState("page", urlParam.int(1));
   const perPage = 50;
 
   const [hideFilters, setHideFilters] = useState(false);
@@ -236,7 +241,10 @@ export default function Companies() {
   const toggleGroup = (g: string) => setOpenGroups((p) => { const n = new Set(p); n.has(g) ? n.delete(g) : n.add(g); return n; });
   const toggleIn = (s: Set<string>, setter: (x: Set<string>) => void, v: string) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); setter(n); setPage(1); };
 
-  useEffect(() => { const t = setTimeout(() => { setQ(searchInput); setPage(1); }, 300); return () => clearTimeout(t); }, [searchInput]);
+  // The box already says what the address does (first render, a restored
+  // view): nothing to apply, and the page the address names stays (U6).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (searchInput === q) return; const t = setTimeout(() => { setQ(searchInput); setPage(1); }, 300); return () => clearTimeout(t); }, [searchInput]);
 
   // Industry / location options with counts, counted on the server.
   const { data: facets } = trpc.companies.facets.useQuery(undefined, { staleTime: 60_000 });

@@ -79,8 +79,10 @@ describe("U24: a tab's queries wait for the tab", () => {
     expect(p).toContain('const [openedTabs, setOpenedTabs] = useState<ReadonlySet<string>>(() => new Set(["prospects"]));');
     expect(p).toContain("const opened = (t: string) => validId && (tab === t || openedTabs.has(t));");
     // The tab state is declared before the first query that reads it.
-    expect(p.indexOf('const [tab, setTab] = useState("prospects");')).toBeLessThan(p.indexOf("trpc.are.prospects.list.useQuery("));
-    expect(p.indexOf('const [tab, setTab] = useState("prospects");')).toBeGreaterThan(-1);
+    // 2026-11-08 (audit U6): it is kept in ?tab= through the shared hook.
+    const firstQuery = p.indexOf("trpc.are.prospects.list.useQuery(");
+    expect(firstQuery).toBeGreaterThan(-1);
+    expect(p.slice(0, firstQuery)).toContain('const [tab, setTabState] = useUrlState("tab", urlParam.oneOf(CAMPAIGN_TABS, "prospects"));');
   });
 
   for (const [query, tabKey] of [

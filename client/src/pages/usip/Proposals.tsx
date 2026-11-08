@@ -58,6 +58,7 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmButton } from "@/components/usip/Common";
 import { invalidateProposalReads } from "@/lib/entityCache";
+import { urlParam, useUrlState } from "@/lib/urlState";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -483,6 +484,8 @@ function EngagementBadge({ score }: { score: number }) {
 }
 
 // ── Main list page ────────────────────────────────────────────────────────────
+/** The dashboard's ?expiryFilter= cohorts, as this page's status filter. */
+const LEGACY_EXPIRY_STATUS: Record<string, string> = { expired: "expired_cohort", accepted: "accepted_cohort", active: "active_cohort" };
 export default function Proposals() {
   const [, navigate] = useLocation();
   const searchStr = useSearch();
@@ -492,25 +495,22 @@ export default function Proposals() {
   const { timezone, isLoading: zoneLoading } = useWorkspaceTimezone();
   const today = zonedDayKey(timezone, Date.now());
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>(() => {
-    const params = new URLSearchParams(searchStr);
-    const ef = params.get("expiryFilter");
-    if (ef === "expired") return "expired_cohort";
-    if (ef === "accepted") return "accepted_cohort";
-    if (ef === "active") return "active_cohort";
-    return "all";
-  });
-  const [expiryWindow, setExpiryWindow] = useState<number | null>(() => {
-    const params = new URLSearchParams(searchStr);
-    const w = params.get("window");
-    return w ? parseInt(w) : null;
-  });
+  // Search, status, expiry window and sort live in the address (audit
+  // 2026-10-20, U6), so a refresh keeps the view and a link shares it. The
+  // dashboard's ?expiryFilter= and ?window= links keep working: expiryFilter
+  // picks the status until one is chosen here, which takes its place.
+  void searchStr;
+  const [search, setSearch] = useUrlState("q", urlParam.string());
+  const [statusParam, setStatusParam] = useUrlState("status", urlParam.string());
+  const [legacyExpiry, setLegacyExpiry] = useUrlState("expiryFilter", urlParam.string());
+  const statusFilter = statusParam || LEGACY_EXPIRY_STATUS[legacyExpiry] || "all";
+  const setStatusFilter = (s: string) => { setLegacyExpiry(""); setStatusParam(s === "all" ? "" : s); };
+  const [expiryWindow, setExpiryWindow] = useUrlState("window", urlParam.id());
   const [extMgmtOpen, setExtMgmtOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkExpiryOpen, setBulkExpiryOpen] = useState(false);
   const [bulkExpiryDate, setBulkExpiryDate] = useState("");
-  const [sortBy, setSortBy] = useState<"none" | "expires_asc" | "expires_desc">("none");
+  const [sortBy, setSortBy] = useUrlState("sort", urlParam.oneOf(["none", "expires_asc", "expires_desc"] as const, "none"));
 
   const utils = trpc.useUtils();
   const removeProposal = trpc.proposals.delete.useMutation({
