@@ -1267,6 +1267,41 @@ export const leadsRouter = router({
     }))
     .query(({ ctx, input }) => searchLeads(ctx.workspace.id, input)),
 
+  /**
+   * "Select all N matching" on Leads (audit 2026-10-20, F30): the ids of every
+   * lead the table shows under its filter (at most 5,000) and how many match,
+   * for Add to…, whose own procedures enrol them with every check.
+   */
+  matchingIds: workspaceProcedure
+    .input(z.object({ status: z.string().optional(), search: z.string().max(200).optional() }))
+    .query(async ({ ctx, input }) => {
+      const { matchingLeadIds } = await import("../services/leadSearch");
+      const r = await matchingLeadIds(ctx.workspace.id, input);
+      return { ...r, capped: r.total > r.ids.length };
+    }),
+
+  /**
+   * Delete every lead matching the table's filter (F30), as a job through
+   * bulkDelete a slice at a time. `expectedTotal` is the count the
+   * confirmation stated; a different count now refuses.
+   */
+  bulkByFilter: repProcedure
+    .input(z.object({
+      action: z.enum(["delete"]),
+      filter: z.object({ status: z.string().optional(), search: z.string().max(200).optional() }),
+      expectedTotal: z.number().int().min(1),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { matchingLeadIds } = await import("../services/leadSearch");
+      const { ids, total } = await matchingLeadIds(ctx.workspace.id, input.filter);
+      if (total !== input.expectedTotal) {
+        throw new TRPCError({ code: "CONFLICT", message: `${total.toLocaleString()} leads match now, not ${input.expectedTotal.toLocaleString()}. Check the count and confirm again.` });
+      }
+      if (total > ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: `This acts on at most ${ids.length.toLocaleString()} leads at a time; ${total.toLocaleString()} match. Narrow the filters.` });
+      const { queueBulk } = await import("../services/bulkByFilter");
+      return queueBulk({ workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "leads", action: "delete", ids, scope: { filter: input.filter, matched: total } });
+    }),
+
   /** Leads and contacts a new lead would duplicate, for the New lead dialog (F36). */
   duplicateCheck: workspaceProcedure
     .input(z.object({

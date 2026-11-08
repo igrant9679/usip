@@ -17,7 +17,7 @@ import {
   MoreHorizontal, Pencil, Trash2, Send, Wand2, Download, UserPlus,
   Phone, Mail, Linkedin, Clock
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
@@ -154,8 +154,30 @@ export default function Leads() {
   const total = pageQ.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const [exporting, setExporting] = useState(false);
+  // "Select all N matching" (audit 2026-10-20, F30): the search, acted on by
+  // the server. Add to… gets the matching ids; Delete runs as a job.
+  const [matchingAll, setMatchingAll] = useState(false);
   // Selection belongs to the rows it was made on (R4).
-  useClearOnChange({ query, page }, () => setSelectedIds(new Set()));
+  useClearOnChange({ query, page }, () => { setSelectedIds(new Set()); setMatchingAll(false); });
+  const matchQ = trpc.leads.matchingIds.useQuery({ search: query || undefined }, { enabled: matchingAll });
+  const matchIds = (matchQ.data?.ids ?? []) as number[];
+  const matchReady = !!matchQ.data && !matchQ.data.capped && matchQ.data.total === total;
+  const [deleteJob, setDeleteJob] = useState<number | null>(null);
+  const deleteMatching = trpc.leads.bulkByFilter.useMutation({
+    onSuccess: (r) => { setDeleteJob(r.jobId); setMatchingAll(false); setSelectedIds(new Set()); toast.info(`Deleting ${r.total.toLocaleString()} leads in the background.`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteJobQ = trpc.prospects.bulkJob.useQuery({ jobId: deleteJob ?? 0 }, {
+    enabled: deleteJob != null,
+    refetchInterval: (q) => { const s = (q.state.data as { status?: string } | undefined)?.status; return s === "queued" || s === "running" ? 2500 : false; },
+  });
+  useEffect(() => {
+    const j = deleteJobQ.data;
+    if (!j || deleteJob == null || j.id !== deleteJob || j.status === "queued" || j.status === "running") return;
+    if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Delete ${j.status}${j.message ? `: ${j.message}` : ""}.`);
+    utils.leads.invalidate();
+    setDeleteJob(null);
+  }, [deleteJobQ.data, deleteJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
     onSuccess: () => utils.leads.invalidate(),
@@ -182,13 +204,16 @@ export default function Leads() {
 
   const allIds = (data ?? []).map((l) => l.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.has(id));
-  const someSelected = selectedIds.size > 0;
+  const someSelected = selectedIds.size > 0 || matchingAll;
+  const selCount = matchingAll ? total : selectedIds.size;
 
   function toggleAll() {
+    setMatchingAll(false);
     if (allSelected) setSelectedIds(new Set());
     else setSelectedIds(new Set(allIds));
   }
   function toggleOne(id: number) {
+    setMatchingAll(false);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -204,7 +229,8 @@ export default function Leads() {
         <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
         {someSelected && (
           <>
-            <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">
+            {/* At most LEAD_BULK_SEND_MAX per send (R5): not offered on all matching. */}
+            <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2" disabled={matchingAll} title={matchingAll ? "Send to at most 50 leads at a time — add more to a sequence instead." : undefined}>
               <Send className="h-4 w-4 text-blue-500" />Send Email ({selectedIds.size})
             </Button>
             {/* The ONE route from a lead into outreach: AddToMenu → ARE
@@ -216,19 +242,29 @@ export default function Leads() {
                 int[] so it typechecked, and a lead id silently resolved to
                 whatever CONTACT shared that integer. Removed 2026-09-20;
                 Broadcasts and Segments are contact-keyed products. */}
-            <AddToMenu leadIds={Array.from(selectedIds)} label={`Add to… (${selectedIds.size})`} onDone={() => setSelectedIds(new Set())} />
+            {matchingAll && !matchReady ? (
+              <Button variant="outline" disabled title={matchQ.data?.capped ? "Add to… takes at most 5,000 leads; narrow the search." : "Reading who matches…"}>Add to… ({selCount.toLocaleString()})</Button>
+            ) : (
+              <AddToMenu leadIds={matchingAll ? matchIds : Array.from(selectedIds)} label={`Add to… (${selCount.toLocaleString()})`} onDone={() => { setSelectedIds(new Set()); setMatchingAll(false); }} />
+            )}
             <Button
               variant="outline"
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
+                if (matchingAll) {
+                  confirmAction({ title: `Delete all ${total.toLocaleString()} matching leads?`, description: `Every lead the search matches: ${total.toLocaleString()}. This cannot be undone.`, confirmLabel: `Delete ${total.toLocaleString()}` }, () => {
+                    deleteMatching.mutate({ action: "delete", filter: { search: query || undefined }, expectedTotal: total });
+                  });
+                  return;
+                }
                 const ids = Array.from(selectedIds);
                 confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, description: "This cannot be undone.", confirmLabel: "Delete" }, () => {
                   bulkDeleteMut.mutate({ ids });
                 });
               }}
-              disabled={bulkDeleteMut.isPending}
+              disabled={bulkDeleteMut.isPending || deleteMatching.isPending || deleteJob != null}
             >
-              <Trash2 className="h-4 w-4" />Delete ({selectedIds.size})
+              <Trash2 className="h-4 w-4" />Delete ({selCount.toLocaleString()})
             </Button>
           </>
         )}
@@ -258,6 +294,18 @@ export default function Leads() {
           <EmptyState icon={Target} title="No leads yet" description="Create one or wait for inbound." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">
+            {/* Select all N matching (audit 2026-10-20, F30). */}
+            {(matchingAll || (allSelected && total > allIds.length)) && (
+              <div className="border-b bg-muted/40 px-3 py-1.5 text-center text-xs" role="status">
+                {matchingAll ? (
+                  <>All <strong>{total.toLocaleString()}</strong> leads matching the search are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => { setMatchingAll(false); setSelectedIds(new Set()); }}>Clear the selection</button></>
+                ) : (
+                  <>All {allIds.length} leads on this page are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => setMatchingAll(true)}>Select all {total.toLocaleString()} matching</button></>
+                )}
+              </div>
+            )}
             <div className="overflow-x-auto"><table className="w-full text-sm">
               <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                 <tr>
@@ -279,7 +327,7 @@ export default function Leads() {
                   <tr key={l.id} className={`hover:bg-secondary/30 cursor-pointer ${selectedIds.has(l.id) ? "bg-primary/5" : ""}`}
                     {...pressable(() => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` }), { row: true })}>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" aria-label={`Select ${l.firstName} ${l.lastName}`} checked={selectedIds.has(l.id)} onChange={() => toggleOne(l.id)} className="rounded border-gray-300 cursor-pointer" />
+                      <input type="checkbox" aria-label={`Select ${l.firstName} ${l.lastName}`} checked={matchingAll || selectedIds.has(l.id)} onChange={() => toggleOne(l.id)} className="rounded border-gray-300 cursor-pointer" />
                     </td>
                     <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
                       <Link href={`/leads/${l.id}`} className="underline-offset-2 hover:underline">{l.firstName} {l.lastName}</Link>

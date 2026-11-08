@@ -419,11 +419,13 @@ describe("the client fixes", () => {
   });
 
   it("each bulk-action list clears its selection when its query changes (R4)", () => {
+    // 2026-11-07 (CRMP, F30): a new query also ends "Select all N matching",
+    // so each clear now resets that too; the page selection is still cleared.
     const pins: Array<[string, string]> = [
-      ["client/src/pages/usip/People.tsx", "useClearOnChange(listQuery, () => setChecked(new Set()));"],
-      ["client/src/pages/usip/Companies.tsx", "useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));"],
+      ["client/src/pages/usip/People.tsx", "useClearOnChange(listQuery, () => { setChecked(new Set()); setMatchingAll(false); });"],
+      ["client/src/pages/usip/Companies.tsx", "useClearOnChange({ filters, sort, page }, () => { setChecked(new Set()); setMatchingAll(false); });"],
       // Leads pages on the server since phase 4 (R49): the page is part of the scope.
-      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ query, page }, () => setSelectedIds(new Set()));"],
+      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ query, page }, () => { setSelectedIds(new Set()); setMatchingAll(false); });"],
       // The /prospects list was retired on 2026-10-27 (phase 5 item 2); its
       // pin is gone because the page is, not because R4 relaxed — People.tsx
       // above is the surviving list over the same prospects.list query.

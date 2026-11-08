@@ -60,3 +60,18 @@ export async function searchLeads(ws: number, opts: LeadFilters & { page?: numbe
   const byId = new Map(rows.map((r) => [r.id, r]));
   return { rows: ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r), total: Number(total), page, perPage };
 }
+
+/**
+ * Every lead the table shows under these filters, by id (at most `cap`), and
+ * how many match: "Select all N matching" on Leads (audit 2026-10-20, F30).
+ */
+export async function matchingLeadIds(ws: number, f: LeadFilters, cap = 5000): Promise<{ ids: number[]; total: number }> {
+  const db = await getDb();
+  if (!db) return { ids: [], total: 0 };
+  const where = leadWhere(ws, f);
+  const [rows, [{ total }]] = await Promise.all([
+    db.select({ id: leads.id }).from(leads).where(where).orderBy(...LEAD_ORDER).limit(cap),
+    db.select({ total: sql<number>`count(*)` }).from(leads).where(where),
+  ]);
+  return { ids: rows.map((r) => r.id), total: Number(total) };
+}

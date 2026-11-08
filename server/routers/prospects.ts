@@ -40,6 +40,10 @@ import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimi
 import { promoteProspectRow } from "../services/prospectPromotion";
 import { describeWriteError } from "../services/dbWriteError";
 import { validZone } from "@shared/recipientTime";
+import { PEOPLE_FILTER, PEOPLE_MATCH_MAX, matchingPeopleIds, peopleFilterConditions } from "../services/peopleFilter";
+// Static, so the bulk job kind is registered when the server boots and a job
+// queued before a restart is picked up again (services/jobs/runner).
+import { BULK_JOB, queueBulk } from "../services/bulkByFilter";
 
 /**
  * A People search term as a LIKE pattern that means what was typed: % and _
@@ -138,11 +142,10 @@ export async function deriveLifecycle(
  * "Verify Now" opens this filter, which listed only the literal 'unknown'
  * rows (audit 2026-10-20, P81).
  */
-export function emailStatusCondition(status: string): SQL {
-  return status === "unknown"
-    ? or(isNull(prospects.emailStatus), eq(prospects.emailStatus, "unknown"))!
-    : eq(prospects.emailStatus, status);
-}
+// The People filters live in services/peopleFilter.ts now (F30), read by the
+// list and by the bulk actions on "all matching"; re-exported for the callers
+// that import them from here.
+export { emailStatusCondition } from "../services/peopleFilter";
 
 /**
  * ORDER BY for the People list: the chosen column, then the id the same way
@@ -162,6 +165,33 @@ export function peopleOrder(sortField?: string | null, sortDir?: string | null):
     company: [prospects.company], email: [prospects.email], phone: [prospects.phone], industry: [prospects.industry],
   } as Record<string, MySqlColumn[]>)[sortField ?? ""];
   return col ? [...col.map((c) => sdir(c)), sdir(prospects.id)] : [desc(prospects.createdAt), desc(prospects.id)];
+}
+
+/**
+ * Verify a set of People's emails as one background job (audit 2026-10-20,
+ * F39): managers only, people with no address left out, the shared Reoon
+ * key's daily allowance checked first. Shared by the selection's Verify and
+ * by Verify on "all matching" (F30), so both keep the same checks and caps.
+ */
+async function startPeopleVerify(ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } }, idsIn: number[]) {
+  requireMinRole(ctx.member.role, "manager", "Only managers and admins can verify people's emails.");
+  const ids = Array.from(new Set(idsIn));
+  const withEmail = await peopleWithEmail(ctx.workspace.id, ids);
+  if (withEmail.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of these people has an email address to verify." });
+  const apiKey = await getReoonKey(ctx.workspace.id);
+  if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
+  const { sharedHeadroom } = await import("./emailVerification");
+  const headroom = await sharedHeadroom(ctx.workspace.id, apiKey);
+  if (withEmail.length > headroom) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: headroom === 0
+        ? "This workspace has used today's allowance on the shared Reoon key."
+        : `Today's allowance on the shared Reoon key has room for ${headroom.toLocaleString()} more addresses; this selection has ${withEmail.length.toLocaleString()}. Select fewer, or try again tomorrow.`,
+    });
+  }
+  const q = await queuePeopleVerify(ctx.workspace.id, ctx.user.id, withEmail);
+  return { ...q, queued: withEmail.length, noEmail: ids.length - withEmail.length };
 }
 
 export const prospectsRouter = router({
@@ -769,26 +799,7 @@ export const prospectsRouter = router({
    */
   verifyEmailBulk: workspaceProcedure
     .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(PEOPLE_VERIFY_MAX) }))
-    .mutation(async ({ ctx, input }) => {
-      requireMinRole(ctx.member.role, "manager", "Only managers and admins can verify people's emails.");
-      const ids = Array.from(new Set(input.ids));
-      const withEmail = await peopleWithEmail(ctx.workspace.id, ids);
-      if (withEmail.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of these people has an email address to verify." });
-      const apiKey = await getReoonKey(ctx.workspace.id);
-      if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
-      const { sharedHeadroom } = await import("./emailVerification");
-      const headroom = await sharedHeadroom(ctx.workspace.id, apiKey);
-      if (withEmail.length > headroom) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: headroom === 0
-            ? "This workspace has used today's allowance on the shared Reoon key."
-            : `Today's allowance on the shared Reoon key has room for ${headroom.toLocaleString()} more addresses; this selection has ${withEmail.length.toLocaleString()}. Select fewer, or try again tomorrow.`,
-        });
-      }
-      const q = await queuePeopleVerify(ctx.workspace.id, ctx.user.id, withEmail);
-      return { ...q, queued: withEmail.length, noEmail: ids.length - withEmail.length };
-    }),
+    .mutation(async ({ ctx, input }) => startPeopleVerify(ctx, input.ids)),
 
   /** A bulk verify's progress, for the People toolbar (F39). */
   verifyJob: workspaceProcedure
@@ -797,6 +808,123 @@ export const prospectsRouter = router({
       const job = await getBulkJob(ctx.workspace.id, input.jobId);
       if (!job || job.kind !== PEOPLE_VERIFY_JOB) throw new TRPCError({ code: "NOT_FOUND" });
       return job;
+    }),
+
+  /**
+   * "Select all N matching" (audit 2026-10-20, F30): the ids of everyone the
+   * list shows under this filter, at most 5,000, and how many match. The Add
+   * to… menu enrols them through its own procedures, every check included.
+   */
+  matchingIds: workspaceProcedure
+    .input(z.object({ filter: PEOPLE_FILTER }))
+    .query(async ({ ctx, input }) => {
+      const r = await matchingPeopleIds(ctx.workspace.id, input.filter);
+      return { ...r, capped: r.total > r.ids.length };
+    }),
+
+  /**
+   * A bulk action on everyone matching the list's filter (F30), as a job.
+   * `expectedTotal` is the count the confirmation stated: if the list no
+   * longer matches that many, nothing runs and the person confirms again.
+   * Verify keeps its 200-a-time limit and its credit checks (F39, F8).
+   */
+  bulkByFilter: workspaceProcedure
+    .input(z.object({
+      action: z.enum(["delete", "optOut", "addToList", "tasks", "enrichFull", "verify"]),
+      filter: PEOPLE_FILTER,
+      expectedTotal: z.number().int().min(1),
+      params: z.object({
+        listId: z.number().int().positive().optional(),
+        title: z.string().min(1).max(240).optional(),
+        type: z.string().max(40).optional(),
+        priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+        dueInDays: z.number().int().min(0).max(60).optional(),
+      }).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const cap = input.action === "verify" ? PEOPLE_VERIFY_MAX : PEOPLE_MATCH_MAX;
+      const { ids, total } = await matchingPeopleIds(ctx.workspace.id, input.filter, cap);
+      if (total !== input.expectedTotal) {
+        throw new TRPCError({ code: "CONFLICT", message: `${total.toLocaleString()} ${total === 1 ? "person matches" : "people match"} these filters now, not ${input.expectedTotal.toLocaleString()}. Check the count and confirm again.` });
+      }
+      if (total > cap) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `This acts on at most ${cap.toLocaleString()} people at a time; ${total.toLocaleString()} match. Narrow the filters.` });
+      }
+      if (total === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "No one matches these filters." });
+      if (input.action === "verify") return { ...(await startPeopleVerify(ctx, ids)), verify: true as const, total };
+      if (input.action === "addToList" && !input.params?.listId) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a list." });
+      // A list named at all must be this workspace's, whatever the action
+      // (X1.1): the job carries it.
+      if (input.params?.listId) {
+        const { requireInWorkspace } = await import("../services/foreignIds");
+        const db0 = await getDb();
+        if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { recordLists } = await import("../../drizzle/schema");
+        await requireInWorkspace(db0, recordLists, input.params.listId, ctx.workspace.id, "List");
+      }
+      if (input.action === "tasks" && !input.params?.title) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the task a title." });
+      // Only what the action uses rides in the job.
+      const params = input.action === "addToList" ? { listId: input.params!.listId }
+        : input.action === "tasks" ? { title: input.params!.title, type: input.params?.type, priority: input.params?.priority, dueInDays: input.params?.dueInDays }
+          : undefined;
+      const q = await queueBulk({
+        workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "people", action: input.action, ids,
+        params, scope: { filter: input.filter, matched: total },
+      });
+      return { ...q, verify: false as const };
+    }),
+
+  /**
+   * Enrich fully for a selection (audit 2026-10-20, R66): a job on the server,
+   * a person at a time under the vendors' caps, then one LinkedIn lookup job.
+   * The page sent ten people a request from the browser, so closing the tab
+   * stopped it part-way. The page states the most it can spend first (F8).
+   */
+  enrichFullBulk: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(PEOPLE_MATCH_MAX) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wanted = Array.from(new Set(input.ids));
+      // Only this workspace's people go into the job (X1.1).
+      const here: number[] = [];
+      for (let i = 0; i < wanted.length; i += 1000) {
+        const rows = await db.select({ id: prospects.id }).from(prospects)
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, wanted.slice(i, i + 1000))));
+        here.push(...rows.map((r) => r.id));
+      }
+      if (here.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "None of these people are in this workspace." });
+      return queueBulk({ workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "people", action: "enrichFull", ids: here.sort((a, b) => a - b), scope: "selection" });
+    }),
+
+  /** A bulk job's progress (F30, R66), for the People, Companies and Leads toolbars. */
+  bulkJob: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getBulkJob(ctx.workspace.id, input.jobId);
+      if (!job || job.kind !== BULK_JOB) throw new TRPCError({ code: "NOT_FOUND" });
+      return job;
+    }),
+
+  /** The export rows for everyone matching (F30), at most 5,000; refused without export_data (R63). */
+  exportMatching: workspaceProcedure
+    .input(z.object({ filter: PEOPLE_FILTER }))
+    .query(async ({ ctx, input }) => {
+      await checkPermission(ctx, "export_data");
+      const db = await getDb();
+      if (!db) return [];
+      const { ids, total } = await matchingPeopleIds(ctx.workspace.id, input.filter);
+      if (total > ids.length) throw new TRPCError({ code: "BAD_REQUEST", message: `An export takes at most ${PEOPLE_MATCH_MAX.toLocaleString()} people; ${total.toLocaleString()} match. Narrow the filters.` });
+      if (!ids.length) return [];
+      const out: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < ids.length; i += 1000) {
+        out.push(...(await db.select({
+          firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title, company: prospects.company,
+          email: prospects.email, phone: prospects.phone, linkedinUrl: prospects.linkedinUrl, city: prospects.city,
+          state: prospects.state, country: prospects.country, industry: prospects.industry, seniority: prospects.seniority,
+        }).from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids.slice(i, i + 1000))))));
+      }
+      return out;
     }),
 
   reEnrich: workspaceProcedure
@@ -872,72 +1000,10 @@ export const prospectsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const conditions = [eq(prospects.workspaceId, ctx.workspace.id)];
-      if (input.emailStatus) conditions.push(emailStatusCondition(input.emailStatus));
-      // '' counts as missing on BOTH sides: imports write empty strings, and
-      // a "has email" filter that returns unmailable rows (or a "missing
-      // email" view that hides them) sends the user chasing ghosts.
-      if (input.hasEmail === true) conditions.push(sql`${prospects.email} IS NOT NULL AND ${prospects.email} != ''`);
-      if (input.hasEmail === false) conditions.push(sql`(${prospects.email} IS NULL OR ${prospects.email} = '')`);
-      if (input.hasPhone) conditions.push(sql`${prospects.phone} IS NOT NULL AND ${prospects.phone} <> ''`);
-      if (input.hasLinkedin) conditions.push(sql`${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} <> ''`);
-      // "Saved" means promoted to a lead OR a contact — the People page has
-      // always counted both, while this filter checked only linkedLeadId and
-      // silently dropped contact-only rows from the Saved view. One
-      // vocabulary now, and the tiles below share it. Kept OUT of
-      // `conditions` so the Total/Net new/Saved tiles can be computed across
-      // the whole filtered dataset regardless of which tile is active.
-      const savedExpr = sql`(${prospects.linkedLeadId} IS NOT NULL OR ${prospects.linkedContactId} IS NOT NULL)`;
-      const promotedConds =
-        input.promoted === true ? [savedExpr]
-          : input.promoted === false ? [sql`(${prospects.linkedLeadId} IS NULL AND ${prospects.linkedContactId} IS NULL)`]
-            : [];
-      // Archived people stay out of the list unless the Archived stage is
-      // asked for (audit 2026-10-20, R64): archiving hid nobody.
-      if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
-      else conditions.push(or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected"))!);
-      if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
-      if (input.companyId) conditions.push(eq(prospects.accountId, input.companyId));
-      // Sequence membership — join via enrollments.prospectId (migration 0085).
-      if (input.enrolled === "yes") {
-        conditions.push(
-          sql`EXISTS (SELECT 1 FROM \`enrollments\` \`e\` WHERE \`e\`.\`prospectId\` = ${prospects.id} AND \`e\`.\`workspaceId\` = ${ctx.workspace.id})`,
-        );
-      } else if (input.enrolled === "no") {
-        conditions.push(
-          sql`NOT EXISTS (SELECT 1 FROM \`enrollments\` \`e\` WHERE \`e\`.\`prospectId\` = ${prospects.id} AND \`e\`.\`workspaceId\` = ${ctx.workspace.id})`,
-        );
-      }
-      // Text filters — case-insensitive contains (MySQL default _ci collation).
-      if (input.search) {
-        const s = contains(input.search);
-        conditions.push(
-          or(
-            like(prospects.firstName, s),
-            like(prospects.lastName, s),
-            // Full-name search: "Steven Burke" matches neither name column
-            // alone, so every full-name query returned nothing — the People
-            // search box AND the assistant's people lookup both hit this.
-            sql`CONCAT(${prospects.firstName}, ' ', ${prospects.lastName}) LIKE ${s}`,
-            like(prospects.title, s),
-            like(prospects.company, s),
-            like(prospects.email, s),
-          )!,
-        );
-      }
-      if (input.titleQ) conditions.push(like(prospects.title, contains(input.titleQ)));
-      if (input.companyQ) conditions.push(like(prospects.company, contains(input.companyQ)));
-      if (input.industryQ) conditions.push(like(prospects.industry, contains(input.industryQ)));
-      if (input.educationQ) conditions.push(like(prospects.education, contains(input.educationQ)));
-      if (input.linkedinQ) conditions.push(like(prospects.linkedinUrl, contains(input.linkedinQ)));
-      if (input.locationQ) {
-        const s = contains(input.locationQ);
-        conditions.push(or(like(prospects.city, s), like(prospects.state, s), like(prospects.country, s))!);
-      }
-      if (input.tiers?.length) conditions.push(inArray(prospects.confidenceTier, input.tiers));
-      if (input.seniorities?.length) {
-        conditions.push(or(...input.seniorities.map((s) => like(prospects.seniority, contains(s))))!);
-      }
+      // The filters as SQL, shared with "Select all N matching" (audit
+      // 2026-10-20, F30): services/peopleFilter.ts. `promotedConds` stays
+      // apart so the Total/Net new/Saved tiles count the whole filtered set.
+      const { conditions, promotedConds } = peopleFilterConditions(ctx.workspace.id, input);
 
       const offset = (input.page - 1) * input.perPage;
 

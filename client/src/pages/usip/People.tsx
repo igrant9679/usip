@@ -376,9 +376,14 @@ export default function People() {
   // The previous page stays on screen while the next one loads, pager and all
   // (audit 2026-10-20, U28): a page turn dropped to the skeleton and hid the pager.
   const { data, isLoading, isPlaceholderData, error, refetch } = trpc.prospects.list.useQuery(listQuery, { placeholderData: (prev) => prev });
+  // "Select all N matching" (audit 2026-10-20, F30): the selection becomes
+  // the list's filter, and the bulk actions run on the server by it.
+  const [matchingAll, setMatchingAll] = useState(false);
   // A new search, filter, sort or page is a new set of rows; a selection
   // made on the old one must not ride along to the bulk actions (R4).
-  useClearOnChange(listQuery, () => setChecked(new Set()));
+  useClearOnChange(listQuery, () => { setChecked(new Set()); setMatchingAll(false); });
+  // The filter "all matching" means: the list's query without its paging or sort.
+  const { page: _page, perPage: _perPage, sortField: _sortField, sortDir: _sortDir, ...matchFilter } = listQuery;
 
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];
@@ -673,6 +678,8 @@ export default function People() {
 
   const allOnPageChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
   const toggleAll = () => {
+    // Changing the page's ticks is a page selection again, not "all matching".
+    setMatchingAll(false);
     setChecked((prev) => {
       const next = new Set(prev);
       if (allOnPageChecked) rows.forEach((r) => next.delete(r.id));
@@ -1025,8 +1032,29 @@ export default function People() {
             </div>
 
             {/* selection action bar */}
-            {checked.size > 0 && (
-              <SelectionToolbar selectedIds={[...checked]} onClear={() => setChecked(new Set())} />
+            {(checked.size > 0 || matchingAll) && (
+              <SelectionToolbar
+                selectedIds={[...checked]}
+                onClear={() => { setChecked(new Set()); setMatchingAll(false); }}
+                matching={matchingAll ? { filter: matchFilter, total } : undefined}
+              />
+            )}
+            {/* Select all N matching (F30): offered once the whole page is selected
+                and more match than the page shows. */}
+            {(matchingAll || (allOnPageChecked && total > rows.length)) && (
+              <div className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-center text-[12px]" role="status">
+                {matchingAll ? (
+                  <>
+                    All <strong>{fmtNum(total)}</strong> people matching these filters are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => { setMatchingAll(false); setChecked(new Set()); }}>Clear the selection</button>
+                  </>
+                ) : (
+                  <>
+                    All {rows.length} people on this page are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => setMatchingAll(true)}>Select all {fmtNum(total)} matching</button>
+                  </>
+                )}
+              </div>
             )}
 
             {/* results / states */}
@@ -1114,13 +1142,13 @@ export default function People() {
                             <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
                           )}
                           <Checkbox aria-label="Select person"
-                            checked={checked.has(p.id)}
+                            checked={matchingAll || checked.has(p.id)}
                             onCheckedChange={() =>
-                              setChecked((prev) => {
+                              (setMatchingAll(false), setChecked((prev) => {
                                 const next = new Set(prev);
                                 next.has(p.id) ? next.delete(p.id) : next.add(p.id);
                                 return next;
-                              })
+                              }))
                             }
                             className="size-3.5"
                           />

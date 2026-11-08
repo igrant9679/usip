@@ -26,8 +26,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
-  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope, Archive,
+  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope, Archive, Loader2,
 } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
@@ -259,8 +260,27 @@ export default function Companies() {
   // The previous page stays on screen while the next one loads, with the pager
   // (audit 2026-10-20, U28): it dropped to a skeleton and lost the pager.
   const { data, isLoading, isPlaceholderData, error, refetch } = trpc.companies.search.useQuery({ filters, sort, page, perPage }, { placeholderData: (prev) => prev });
+  // "Select all N matching" (audit 2026-10-20, F30): the search's filters,
+  // acted on by the server as a job.
+  const [matchingAll, setMatchingAll] = useState(false);
   // Selection belongs to the rows it was made on (R4).
-  useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));
+  useClearOnChange({ filters, sort, page }, () => { setChecked(new Set()); setMatchingAll(false); });
+  const [matchingJob, setMatchingJob] = useState<number | null>(null);
+  const enrichMatching = trpc.companies.bulkByFilter.useMutation({
+    onSuccess: (r) => { setMatchingJob(r.jobId); toast.info(`Enriching ${r.total.toLocaleString()} companies in the background.`); },
+    onError: (e) => toast.error(e.message),
+  });
+  const matchingJobQ = trpc.prospects.bulkJob.useQuery({ jobId: matchingJob ?? 0 }, {
+    enabled: matchingJob != null,
+    refetchInterval: (q) => { const s = (q.state.data as { status?: string } | undefined)?.status; return s === "queued" || s === "running" ? 2500 : false; },
+  });
+  useEffect(() => {
+    const j = matchingJobQ.data;
+    if (!j || matchingJob == null || j.id !== matchingJob || j.status === "queued" || j.status === "running") return;
+    if (j.status === "done") toast.success(`${j.message ?? "Done"}.`); else toast.error(`Enrich ${j.status}${j.message ? `: ${j.message}` : ""}.`);
+    utils.companies.search.invalidate();
+    setMatchingJob(null);
+  }, [matchingJobQ.data, matchingJob]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = (data?.data ?? []) as any[];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -269,7 +289,7 @@ export default function Companies() {
   const clearAll = () => { setSearchInput(""); setQ(""); setIndustries(new Set()); setLocations(new Set()); setHasContacts(false); setArchivedOnly(false); setMinRating(""); setEmpMin(""); setEmpMax(""); setResearch(""); setResearchSectors(new Set()); setPage(1); };
 
   const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
-  const toggleAll = () => setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
+  const toggleAll = () => { setMatchingAll(false); setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; }); };
 
   const me = trpc.profile.getMe.useQuery();
   const isAdmin = isAdminRole(me.data?.role);
@@ -472,14 +492,32 @@ export default function Companies() {
               </DropdownMenu>
             </div>
 
-            {checked.size > 0 && (
+            {(checked.size > 0 || matchingAll) && (
               <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-2 text-white text-[13px]" style={{ backgroundColor: accent }}>
-                <span className="font-medium">{checked.size} selected</span>
-                <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={bulkEnrich.isPending} onClick={() => bulkEnrich.mutate({ accountIds: [...checked] })}><RefreshCw className="size-3.5" /> Enrich</Button>
+                <span className="font-medium">{matchingAll ? `All ${total.toLocaleString()} matching` : checked.size} selected</span>
+                <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={bulkEnrich.isPending || enrichMatching.isPending || matchingJob != null}
+                  onClick={() => (matchingAll
+                    ? confirmAction({ title: `Enrich ${total.toLocaleString()} companies?`, description: `Everyone matching the filters: ${total.toLocaleString()} ${total === 1 ? "company" : "companies"}. Enrichment reads the evidence already on file and calls no paid source. It runs on the server in the background.`, confirmLabel: `Enrich ${total.toLocaleString()}` },
+                      () => enrichMatching.mutate({ action: "enrich", filters, expectedTotal: total }))
+                    : bulkEnrich.mutate({ accountIds: [...checked] }))}>
+                  {matchingJob != null ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Enrich
+                </Button>
                 <Button variant="secondary" size="sm" className="h-7 gap-1" onClick={() => setLocation("/v2/lists")}><ListPlus className="size-3.5" /> Add to list</Button>
-                <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={checked.size !== 2} onClick={doMerge}><GitMerge className="size-3.5" /> Merge</Button>
+                <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={matchingAll || checked.size !== 2} onClick={doMerge}><GitMerge className="size-3.5" /> Merge</Button>
                 <div className="flex-1" />
-                <button onClick={() => setChecked(new Set())} className="opacity-80 hover:opacity-100 inline-flex items-center gap-1"><X className="size-3.5" /> Clear</button>
+                <button onClick={() => { setChecked(new Set()); setMatchingAll(false); }} className="opacity-80 hover:opacity-100 inline-flex items-center gap-1"><X className="size-3.5" /> Clear</button>
+              </div>
+            )}
+            {/* Select all N matching (audit 2026-10-20, F30). */}
+            {(matchingAll || (allChecked && total > rows.length)) && (
+              <div className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-center text-[12px]" role="status">
+                {matchingAll ? (
+                  <>All <strong>{total.toLocaleString()}</strong> companies matching these filters are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => { setMatchingAll(false); setChecked(new Set()); }}>Clear the selection</button></>
+                ) : (
+                  <>All {rows.length} companies on this page are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => setMatchingAll(true)}>Select all {total.toLocaleString()} matching</button></>
+                )}
               </div>
             )}
 

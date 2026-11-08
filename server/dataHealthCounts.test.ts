@@ -128,7 +128,10 @@ describe("P81: the email-status filter", () => {
     expect(await ids("valid")).toEqual([3]);
   });
   it("the People list uses it", () => {
-    expect(read("server/routers/prospects.ts")).toContain("if (input.emailStatus) conditions.push(emailStatusCondition(input.emailStatus));");
+    // 2026-11-07 (CRMP, F30): the People filters moved to one builder that the
+    // list and the "all matching" bulk actions share; the list reads it.
+    expect(read("server/services/peopleFilter.ts")).toContain("if (input.emailStatus) conditions.push(emailStatusCondition(input.emailStatus));");
+    expect(read("server/routers/prospects.ts")).toContain("const { conditions, promotedConds } = peopleFilterConditions(ctx.workspace.id, input);");
   });
 });
 
