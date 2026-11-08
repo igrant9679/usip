@@ -715,10 +715,10 @@ export default function Dashboard() {
             {/* Stat row */}
             <div className="grid grid-cols-3 gap-4 mb-5">
               <Link
-                href="/unified-inbox"
+                href="/v2/inbox?tab=social&view=chats"
                 className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
                 style={{ borderLeftWidth: 3, borderLeftColor: "#0A66C2" }}
-                title="View multichannel messages in the Unified Inbox"
+                title="View multichannel messages in the Inbox"
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <MessageSquare className="size-3.5" style={{ color: "#0A66C2" }} />
@@ -729,10 +729,10 @@ export default function Dashboard() {
                 </div>
               </Link>
               <Link
-                href="/unified-inbox"
+                href="/v2/inbox?tab=social&view=chats"
                 className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
                 style={{ borderLeftWidth: 3, borderLeftColor: "#34D399" }}
-                title="View accepted connections in the Unified Inbox"
+                title="View accepted connections in the Inbox"
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <UserPlus className="size-3.5 text-emerald-500" />
@@ -743,10 +743,10 @@ export default function Dashboard() {
                 </div>
               </Link>
               <Link
-                href="/unified-inbox"
+                href="/v2/inbox?tab=social&view=chats"
                 className="rounded-lg border bg-secondary/30 p-3 text-center block hover:bg-secondary/60 transition-colors cursor-pointer"
                 style={{ borderLeftWidth: 3, borderLeftColor: "#FCD34D" }}
-                title="View outreach activity in the Unified Inbox"
+                title="View outreach activity in the Inbox"
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <Target className="size-3.5 text-amber-500" />

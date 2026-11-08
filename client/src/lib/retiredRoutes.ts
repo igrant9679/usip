@@ -93,16 +93,73 @@
  *    was left out of Phase 5 item 3 on purpose.
  */
 
-/** Retired path → its v2 equivalent. Both are real routes in App.tsx. */
+/*
+ * The 2026-11-07 final pass (audit 2026-10-20, U14 and F25) retired two more
+ * sets of duplicates, folding first and redirecting second:
+ *
+ *   /sequences            → /v2/sequences        U14: one sequence editor. The
+ *   /sequences/:id/canvas → /v2/sequences/:id    v2 editor took over what only
+ *                                   the legacy list and the canvas had: A/B
+ *                                   variants, the bulk enrol picker, the daily
+ *                                   cap, reply detection, archive and delete,
+ *                                   "Mark replied", the prospect preview, the
+ *                                   per-step breakdown, AI-written email steps
+ *                                   and waits in hours. The canvas drew
+ *                                   branches the engine never ran (O21); the
+ *                                   editor says what such a drawing held. A
+ *                                   canvas deep link keeps its sequence id.
+ *   /inbox                → /v2/inbox?tab=notifications   F25: one reply
+ *   /mailbox              → /v2/inbox?tab=mailbox         workspace. Each old
+ *   /unified-inbox        → /v2/inbox?tab=social&view=chats  page is a tab or
+ *   /v2/conversations     → /v2/inbox                      filter there, built
+ *                                   from the old page's own component, so no
+ *                                   read or send path was written twice. The
+ *                                   old query strings still work: ?reply= opens
+ *                                   that reply (an old Mailbox link opens its
+ *                                   thread in the Mailbox tab) and
+ *                                   ?channel=social|calls picks that tab
+ *                                   (lib/inboxTabs.ts).
+ *
+ * The old page files are kept, unrouted, so each redirect can be undone by
+ * putting its one <Route> line back in App.tsx.
+ */
+
+/**
+ * Retired path → its v2 equivalent. Both are real routes in App.tsx. A `:name`
+ * segment in a key is filled into the same `:name` in its target, and a target
+ * may carry a query string (the tab or filter it lands on).
+ */
 export const RETIRED_ROUTES = {
   "/prospects": "/v2/people",
   "/dashboard-home2": "/v2/home",
   "/campaigns": "/are/campaigns",
+  "/sequences": "/v2/sequences",
+  "/sequences/:id/canvas": "/v2/sequences/:id",
+  "/inbox": "/v2/inbox?tab=notifications",
+  "/mailbox": "/v2/inbox?tab=mailbox",
+  "/unified-inbox": "/v2/inbox?tab=social&view=chats",
+  "/v2/conversations": "/v2/inbox",
   "/quotes": "/proposals",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;
 
-export function retiredRedirectUrl(from: RetiredRoute): string {
-  return RETIRED_ROUTES[from];
+/**
+ * Where a retired path lands. `params` fills the target's `:name` segments
+ * (a deep link keeps its id); `search` is the query string the old URL
+ * arrived with, carried over so a bookmark like /mailbox?reply=12 still opens
+ * that reply. The target's own keys win over the old ones.
+ */
+export function retiredRedirectUrl(
+  from: RetiredRoute,
+  opts: { params?: Record<string, string | undefined>; search?: string } = {},
+): string {
+  const target: string = RETIRED_ROUTES[from];
+  const [rawPath, rawQuery = ""] = target.split("?");
+  const path = rawPath.replace(/:([A-Za-z_]\w*)/g, (_m, name: string) => encodeURIComponent(opts.params?.[name] ?? ""));
+  const query = new URLSearchParams(rawQuery);
+  const carried = new URLSearchParams((opts.search ?? "").replace(/^\?/, ""));
+  carried.forEach((value, key) => { if (!query.has(key)) query.append(key, value); });
+  const qs = query.toString();
+  return qs ? `${path}?${qs}` : path;
 }

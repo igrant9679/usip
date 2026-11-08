@@ -315,7 +315,7 @@ export const mailboxRouter = router({
   /**
    * Resolve an email_reply notification → enough to open the right
    * conversation in the mailbox. Backs the Inbox "Open in Mailbox"
-   * deep-link (/mailbox?reply=<id>). Returns the sending account the
+   * deep-link (/v2/inbox?tab=mailbox&reply=<id>, F25; the old /mailbox?reply=<id> redirects there). Returns the sending account the
    * reply came in on + the sender email/subject so the UI can switch
    * to that account view and pre-search the thread.
    */

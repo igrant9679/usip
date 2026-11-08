@@ -433,7 +433,7 @@ export default function AREHub() {
                       {funnelData.map((d, i) => {
                         const color = ["#60A5FA","#A78BFA","#34D399","#F59E0B","#F87171","#FB923C","#34D399"][i];
                         const href =
-                          d.name === "Replied" ? "/unified-inbox"
+                          d.name === "Replied" ? "/v2/inbox"
                           : d.name === "Meetings" ? "/calendar"
                           : d.name === "Opps" ? "/pipeline"
                           : "/are/campaigns";

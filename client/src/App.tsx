@@ -40,8 +40,12 @@ const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
 const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
 const SendingAccounts = lazyChunk(() => import("@/pages/usip/SendingAccounts"));
 const SenderPools = lazyChunk(() => import("@/pages/usip/SenderPools"));
+// Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Inbox = lazyChunk(() => import("@/pages/usip/Inbox"));
+// Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Mailbox = lazyChunk(() => import("@/pages/usip/Mailbox"));
+// The one reply workspace (F25): the four pages above and below are its tabs.
+const InboxWorkspace = lazyChunk(() => import("@/pages/usip/InboxWorkspace"));
 const CalendarPage = lazyChunk(() => import("@/pages/usip/Calendar"));
 const Leads = lazyChunk(() => import("@/pages/usip/Leads"));
 const People = lazyChunk(() => import("@/pages/usip/People"));
@@ -74,6 +78,7 @@ const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
 const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
 const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
 const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));
+// Retired (U14, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
 const Settings = lazyChunk(() => import("@/pages/usip/Settings"));
 const SettingsHub = lazyChunk(() => import("@/pages/usip/SettingsHub"));
@@ -81,6 +86,7 @@ const Social = lazyChunk(() => import("@/pages/usip/Social"));
 const Tasks = lazyChunk(() => import("@/pages/usip/Tasks"));
 const TasksV2 = lazyChunk(() => import("@/pages/usip/TasksV2"));
 const MeetingsV2 = lazyChunk(() => import("@/pages/usip/MeetingsV2"));
+// Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const ConversationsV2 = lazyChunk(() => import("@/pages/usip/ConversationsV2"));
 const DealsV2 = lazyChunk(() => import("@/pages/usip/DealsV2"));
 const WorkflowsV2 = lazyChunk(() => import("@/pages/usip/WorkflowsV2"));
@@ -106,6 +112,7 @@ const Workflows = lazyChunk(() => import("@/pages/usip/Workflows"));
 const NotificationPrefs = lazyChunk(() => import("@/pages/usip/NotificationPrefs"));
 const LeadScoring = lazyChunk(() => import("@/pages/usip/LeadScoring"));
 const LeadRouting = lazyChunk(() => import("@/pages/usip/LeadRouting"));
+// Retired (U14, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const SequenceCanvas = lazyChunk(() => import("@/pages/usip/SequenceCanvas"));
 const ResearchPipeline = lazyChunk(() => import("@/pages/usip/ResearchPipeline"));
 const Quota = lazyChunk(() => import("@/pages/usip/Quota"));
@@ -127,6 +134,7 @@ const Segments = lazyChunk(() => import("@/pages/usip/Segments"));
 const PipelineAlerts = lazyChunk(() => import("@/pages/usip/PipelineAlerts"));
 const SegmentRules = lazyChunk(() => import("@/pages/usip/SegmentRules"));
 const ConnectedAccounts = lazyChunk(() => import("@/pages/usip/ConnectedAccounts"));
+// Retired (F25, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const UnifiedInbox = lazyChunk(() => import("@/pages/usip/UnifiedInbox"));
 const InviteAccept = lazyChunk(() => import("@/pages/InviteAccept"));
 const JoinViaLink = lazyChunk(() => import("@/pages/JoinViaLink"));
@@ -489,8 +497,8 @@ function Router() {
       {/* "/" is the home picked with "Set as home" (G56): the Dashboard unless Home was picked. */}
       <Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>
       <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
-      <Route path="/inbox"><AuthGate><Inbox /></AuthGate></Route>
-      <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
+      <Route path="/inbox"><AuthGate><RetiredRedirect from="/inbox" /></AuthGate></Route>
+      <Route path="/mailbox"><AuthGate><RetiredRedirect from="/mailbox" /></AuthGate></Route>
       <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>
       <Route path="/leads"><AuthGate><Leads /></AuthGate></Route>
       {/* The Prospects LIST is retired (phase 5 item 2, 2026-10-27): it and
@@ -516,8 +524,8 @@ function Router() {
       <Route path="/settings/pipelines"><AuthGate><SettingsPipelines /></AuthGate></Route>
       <Route path="/settings/linkedin-limits"><AuthGate><LinkedInLimits /></AuthGate></Route>
       <Route path="/forecast"><AuthGate><Forecast /></AuthGate></Route>
-      <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
-      <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>
+      <Route path="/sequences"><AuthGate><RetiredRedirect from="/sequences" /></AuthGate></Route>
+      <Route path="/sequences/:id/canvas"><AuthGate><RetiredRedirect from="/sequences/:id/canvas" /></AuthGate></Route>
       <Route path="/email-analytics"><AuthGate><EmailAnalytics /></AuthGate></Route>
       <Route path="/email-suppressions"><AuthGate><EmailSuppressions /></AuthGate></Route>
       <Route path="/sending-accounts"><AuthGate><SendingAccounts /></AuthGate></Route>
@@ -566,7 +574,7 @@ function Router() {
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/connected-accounts"><AuthGate><ConnectedAccounts /></AuthGate></Route>
-      <Route path="/unified-inbox"><AuthGate><UnifiedInbox /></AuthGate></Route>
+      <Route path="/unified-inbox"><AuthGate><RetiredRedirect from="/unified-inbox" /></AuthGate></Route>
       <Route path="/data-health"><AuthGate><DataHealth /></AuthGate></Route>
       <Route path="/segments"><AuthGate><Segments /></AuthGate></Route>
       <Route path="/segments/:id"><AuthGate><Segments /></AuthGate></Route>
@@ -614,7 +622,8 @@ function Router() {
       <Route path="/v2/calls"><AuthGate><Calls /></AuthGate></Route>
       <Route path="/v2/tasks"><AuthGate><TasksV2 /></AuthGate></Route>
       <Route path="/v2/meetings"><AuthGate><MeetingsV2 /></AuthGate></Route>
-      <Route path="/v2/conversations"><AuthGate><ConversationsV2 /></AuthGate></Route>
+      <Route path="/v2/conversations"><AuthGate><RetiredRedirect from="/v2/conversations" /></AuthGate></Route>
+      <Route path="/v2/inbox"><AuthGate><InboxWorkspace /></AuthGate></Route>
       <Route path="/v2/deals"><AuthGate><DealsV2 /></AuthGate></Route>
       <Route path="/v2/workflows"><AuthGate><WorkflowsV2 /></AuthGate></Route>
       <Route path="/v2/analytics"><AuthGate><AnalyticsV2 /></AuthGate></Route>
