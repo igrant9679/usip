@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
+import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
 import {
   Link2,
   Check,
@@ -106,12 +107,28 @@ export function useEnrichJob() {
   }, [jobQ.data?.status, jobQ.error, jobQ.isFetching]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = !!jobId || runMut.isPending || runListMut.isPending;
+  // Each person is one LinkedIn profile lookup: the count and what today has
+  // left are said first, and nothing runs without a yes (audit 2026-10-20, F8).
+  const budgets = useSourceBudgets();
+  const askThen = (count: number | null, go: () => void) => {
+    const li = budgets.data?.linkedin;
+    confirmPaidLookup({
+      title: count == null ? "Enrich every list member from LinkedIn?" : `Enrich ${count} ${count === 1 ? "person" : "people"} from LinkedIn?`,
+      vendor: "LinkedIn",
+      count: count ?? 0,
+      unit: "profile lookup",
+      allowance: li && li.accounts > 0 ? { used: li.cap - li.left, cap: li.cap } : null,
+      note: `${count == null ? "One lookup per member who needs one. " : ""}Lookups run at the pace the LinkedIn limits allow; what does not fit today continues tomorrow.`,
+      confirmLabel: "Enrich",
+    }, go);
+  };
   return {
     running,
-    enrich: (prospectIds: number[], triggerType: EnrichTrigger = "people_bulk_action") =>
-      runMut.mutate({ prospectIds, triggerType }),
+    /** `confirmed`: the caller already asked, with this lookup in its own count (Enrich fully). */
+    enrich: (prospectIds: number[], triggerType: EnrichTrigger = "people_bulk_action", opts: { confirmed?: boolean } = {}) =>
+      opts.confirmed ? runMut.mutate({ prospectIds, triggerType }) : askThen(prospectIds.length, () => runMut.mutate({ prospectIds, triggerType })),
     enrichList: (listId: number, opts: { prospectIds?: number[]; enrichAll?: boolean } = {}) =>
-      runListMut.mutate({ listId, ...opts }),
+      askThen(opts.enrichAll ? null : (opts.prospectIds?.length ?? null), () => runListMut.mutate({ listId, ...opts })),
   };
 }
 

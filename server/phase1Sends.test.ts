@@ -682,6 +682,74 @@ describe("waits count once and run from the send; windows use the workspace zone
   });
 });
 
+/* ═══ Recipient time and per-sequence auto-send (F18, F22) ══════════════════ */
+
+describe("a sequence can send in each person's time zone, and choose review or auto-send (F18, F22)", () => {
+  // Fixed dates: Tuesday 2026-10-27, after the UK left summer time (Oct 25)
+  // and before New York did (Nov 1).
+  const NY_WINDOW = { timezone: "America/New_York", sendWindowStart: "08:00", sendWindowEnd: "18:00", skipWeekends: false };
+
+  it("off (the default), a step comes due in the sequence's zone, whoever the person is", async () => {
+    rows("prospects").find((p) => p.id === 301).timezone = "Asia/Tokyo";
+    seq(1, [email("one")], { settings: NY_WINDOW });
+    setNow(Date.parse("2026-10-27T15:00:00Z")); // 11:00 New York, midnight Tokyo
+    enr(11, 1, { prospectId: 301 });
+    await processEnrollments();
+    expect(drafts()).toHaveLength(1);
+  });
+
+  it("on, the step waits for the window in the person's stored zone, and goes when it opens there", async () => {
+    rows("prospects").find((p) => p.id === 301).timezone = "Asia/Tokyo";
+    seq(1, [email("one")], { settings: { ...NY_WINDOW, recipientTime: true } });
+    setNow(Date.parse("2026-10-27T15:00:00Z")); // 11:00 New York, 00:00 Wednesday Tokyo
+    enr(11, 1, { prospectId: 301 });
+    await processEnrollments();
+    expect(drafts()).toHaveLength(0);
+    expect(new Date(row("enrollments", 11).nextActionAt).toISOString()).toBe("2026-10-27T23:00:00.000Z"); // 08:00 Tokyo
+    setNow(Date.parse("2026-10-27T23:00:00Z")); // 19:00 New York: outside the sequence's zone, inside the person's
+    await processEnrollments();
+    expect(drafts()).toHaveLength(1);
+  });
+
+  it("on, with no stored zone, the zone is told from the person's state, else the sequence's", async () => {
+    Object.assign(rows("prospects").find((p) => p.id === 301), { timezone: null, state: "CA", country: "US" });
+    seq(1, [email("one")], { settings: { ...NY_WINDOW, recipientTime: true } });
+    setNow(Date.parse("2026-10-27T13:00:00Z")); // 09:00 New York, 06:00 Los Angeles
+    enr(11, 1, { prospectId: 301 });
+    await processEnrollments();
+    expect(drafts()).toHaveLength(0);
+    expect(new Date(row("enrollments", 11).nextActionAt).toISOString()).toBe("2026-10-27T15:00:00.000Z"); // 08:00 Los Angeles
+    // A lead has no location: the sequence's zone, so it goes now.
+    seq(2, [email("one")], { settings: { ...NY_WINDOW, recipientTime: true } });
+    enr(12, 2, { leadId: 201 });
+    await processEnrollments();
+    expect(draftsOf(12)).toHaveLength(1);
+  });
+
+  it("the Contacts tab says when each person's next step goes, in the zone it runs in", async () => {
+    rows("prospects").find((p) => p.id === 301).timezone = "Asia/Tokyo";
+    seq(1, [email("one")], { settings: { ...NY_WINDOW, recipientTime: true } });
+    setNow(Date.parse("2026-10-27T15:00:00Z"));
+    enr(11, 1, { prospectId: 301 }, { nextActionAt: new Date(Date.parse("2026-10-27T15:00:00Z")) });
+    enr(12, 1, { leadId: 201 }, { status: "paused" });
+    const list = await caller(REP).sequences.listEnrollments({ sequenceId: 1 });
+    const one = list.find((r: any) => r.id === 11) as any;
+    expect(one).toMatchObject({ sendZone: "Asia/Tokyo", zoneSource: "stored" });
+    expect(new Date(one.nextSendAt).toISOString()).toBe("2026-10-27T23:00:00.000Z");
+    expect((list.find((r: any) => r.id === 12) as any).nextSendAt).toBeNull(); // paused: nothing due
+    const page = readFileSync(join(__dirname, "..", "client", "src", "pages", "usip", "SequenceEditor.tsx"), "utf8");
+    expect(page).toContain("Next send ${formatInZone(e.nextSendAt, e.sendZone)}");
+  });
+
+  it("the sequence's own settings are saved by merge, and cleared back to the workspace with null", async () => {
+    seq(1, [email("one")], { status: "paused", settings: { timezone: "Europe/London" } });
+    await caller(ADMIN).sequences.updateMeta({ id: 1, settings: { autoSend: "auto", autoSendScoreMin: 55, autoSendAllowUnscored: false, recipientTime: true } });
+    expect(row("sequences", 1).settings).toEqual({ timezone: "Europe/London", autoSend: "auto", autoSendScoreMin: 55, autoSendAllowUnscored: false, recipientTime: true });
+    await caller(ADMIN).sequences.updateMeta({ id: 1, settings: { autoSend: null, autoSendScoreMin: null, autoSendAllowUnscored: null, recipientTime: null } });
+    expect(row("sequences", 1).settings).toEqual({ timezone: "Europe/London" });
+  });
+});
+
 /* ═══ Held rows step aside (O23) ══════════════════════════════════════════ */
 
 describe("held enrolments cannot block anyone else", () => {
@@ -790,25 +858,49 @@ describe("the SMTP draft paths claim each draft and always carry an unsubscribe"
     });
   }
 
+  // 2026-11-07 (audit F24): sendDraft sends through deliverEmailDraft, the
+  // one delivery path every other draft send uses — the sending account
+  // through the adapter (h.emails), never the workspace SMTP config (h.smtp).
+  // What these pinned still holds: one email for two clicks, the footer and
+  // RFC 8058 headers, and an ambiguous error leaving it failed.
   it("sendDraft: one email for two clicks, with the footer and RFC 8058 headers", async () => {
     smtpConfig();
     draft(110, { toEmail: ANN, status: "approved" });
     const c = caller(REP).smtpConfig;
     const both = await Promise.allSettled([c.sendDraft({ draftId: 110 }), c.sendDraft({ draftId: 110 })]);
     expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(h.smtp).toHaveLength(1);
-    expect(h.smtp[0].headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
-    expect(h.smtp[0].html).toContain("Unsubscribe</a>");
-    expect(h.smtp[0].text).toMatch(/Unsubscribe: https?:\/\//);
+    expect(h.smtp).toHaveLength(0);
+    expect(h.emails).toHaveLength(1);
+    expect(h.emails[0].headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    expect(h.emails[0].bodyHtml).toContain("Unsubscribe</a>");
+    expect(h.emails[0].bodyText).toMatch(/Unsubscribe: https?:\/\//);
     expect(row("email_drafts", 110).status).toBe("sent");
   });
 
-  it("sendDraft: an ambiguous SMTP error leaves it failed, not approved", async () => {
+  it("sendDraft: an ambiguous send error leaves it failed, not approved", async () => {
     smtpConfig();
     draft(111, { toEmail: ANN, status: "approved" });
-    h.smtpFail = new Error("Connection closed unexpectedly");
+    h.transport = async () => { throw new Error("Connection closed unexpectedly"); };
     await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 111 }));
     expect(row("email_drafts", 111).status).toBe("failed");
+    expect(h.smtp).toHaveLength(0);
+  });
+
+  it("sendDraft: held by the daily cap and by a paused enrolment like every other draft send (F24)", async () => {
+    smtpConfig();
+    draft(112, { toEmail: ANN, status: "approved" });
+    h.capHit = true;
+    await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 112 }));
+    expect(row("email_drafts", 112).status).toBe("approved");
+    h.capHit = false;
+    seq(9, [email()]);
+    enr(19, 9, { contactId: 101 }, { status: "paused" });
+    draft(113, { toEmail: ANN, status: "approved", sequenceId: 9, enrollmentId: 19 });
+    const held = await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 113 }));
+    expect(held.message).toContain("paused");
+    expect(row("email_drafts", 113).status).toBe("approved");
+    expect(h.emails).toHaveLength(0);
+    expect(h.smtp).toHaveLength(0);
   });
 
   it('"Send approved" claims per draft, re-checks pause, and every message has headers and a footer', async () => {

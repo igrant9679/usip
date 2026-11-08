@@ -31,13 +31,15 @@ export const PUBLIC_USER_FIELDS = [
 ] as const;
 
 type PublicUserField = (typeof PUBLIC_USER_FIELDS)[number];
-export type PublicUser = Pick<User, PublicUserField> & { hasPassword: boolean };
+export type PublicUser = Pick<User, PublicUserField> & { hasPassword: boolean; emailVerificationPending: boolean };
 
 export function publicUser(user: User | null | undefined): PublicUser | null {
   if (!user) return null;
   const out = {} as Record<string, unknown>;
   for (const k of PUBLIC_USER_FIELDS) out[k] = (user as Record<string, unknown>)[k] ?? null;
   out.hasPassword = !!user.passwordHash;
+  // The banner's flag (audit 2026-10-20, F1); never the token hash itself.
+  out.emailVerificationPending = !user.emailVerifiedAt && !!user.emailVerifyTokenHash;
   return out as PublicUser;
 }
 

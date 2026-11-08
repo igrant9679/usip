@@ -14,6 +14,7 @@ import { canOpenWorkspace } from "@/lib/activeWorkspace";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Archive, Loader2, MailQuestion, UserX } from "lucide-react";
+import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
 
 export type AccessProblem = "deactivated" | "invite_pending" | "none" | "archived";
 
@@ -43,12 +44,15 @@ export function WorkspaceAccessScreen({
   others = [],
   onSwitch,
   onSignOut,
+  notice,
 }: {
   problem: AccessProblem;
   workspaceName?: string | null;
   others?: Array<{ id: number; name: string }>;
   onSwitch?: (id: number) => void;
   onSignOut?: () => void;
+  /** Shown under the message: the email-confirmation banner (F1), when it applies. */
+  notice?: ReactNode;
 }) {
   const copy = COPY[problem];
   const Icon = problem === "archived" ? Archive : problem === "invite_pending" ? MailQuestion : UserX;
@@ -63,6 +67,7 @@ export function WorkspaceAccessScreen({
             <p className="text-sm text-muted-foreground">{copy.body}</p>
           </div>
         </div>
+        {notice}
         {others.length > 0 && onSwitch && (
           <div className="space-y-1.5">
             <p className="text-xs text-muted-foreground">You can carry on in another workspace:</p>
@@ -92,7 +97,9 @@ export function WorkspaceAccessGate({ children }: { children: ReactNode }) {
     if (!state || state === "member") {
       return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
     }
-    return <WorkspaceAccessScreen problem={state} onSignOut={() => void logout()} />;
+    // A stranger who just signed up lands here, so the confirm-your-email
+    // banner (F1) belongs here as well as in the shell.
+    return <WorkspaceAccessScreen problem={state} onSignOut={() => void logout()} notice={<EmailVerificationBanner compact />} />;
   }
   if (current && !canOpenWorkspace(current)) {
     return (

@@ -33,10 +33,13 @@ import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // services/prospectFromSource.ts.
 import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonKey } from "../services/reoon";
+import { PEOPLE_VERIFY_JOB, PEOPLE_VERIFY_MAX, peopleWithEmail, queuePeopleVerify } from "../services/peopleVerify";
+import { getJob as getBulkJob } from "../services/jobs/runner";
 import { resolveProspectProfileImage } from "../services/profileImage";
 import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { promoteProspectRow } from "../services/prospectPromotion";
 import { describeWriteError } from "../services/dbWriteError";
+import { validZone } from "@shared/recipientTime";
 
 /**
  * A People search term as a LIKE pattern that means what was typed: % and _
@@ -464,6 +467,8 @@ export const prospectsRouter = router({
       city: editText(80),
       state: editText(80),
       country: editText(80),
+      /** IANA zone, e.g. "Europe/London" (F18); blank clears it. */
+      timezone: editText(64).refine((v) => v == null || validZone(v) !== null, "Not a time zone. Use a name like Europe/London or America/Chicago."),
       industry: editText(80),
       verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
       verificationNotes: z.string().max(2000).nullable().optional(),
@@ -738,6 +743,45 @@ export const prospectsRouter = router({
       return { email, status: verdict, reoonStatus: raw.status, replaced, previousEmail: p.email ?? null };
     }),
 
+  /**
+   * Verify a selection of People (audit 2026-10-20, F39): a background job
+   * that runs each one through verifyEmail above, so the Data health numbers,
+   * which count People, can move. People with no address are left out and
+   * cost nothing; the shared key's daily allowance is checked first, as the
+   * contact bulk verify checks it. The page confirms the count first (F8).
+   */
+  verifyEmailBulk: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(PEOPLE_VERIFY_MAX) }))
+    .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can verify people's emails.");
+      const ids = Array.from(new Set(input.ids));
+      const withEmail = await peopleWithEmail(ctx.workspace.id, ids);
+      if (withEmail.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of these people has an email address to verify." });
+      const apiKey = await getReoonKey(ctx.workspace.id);
+      if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
+      const { sharedHeadroom } = await import("./emailVerification");
+      const headroom = await sharedHeadroom(ctx.workspace.id, apiKey);
+      if (withEmail.length > headroom) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: headroom === 0
+            ? "This workspace has used today's allowance on the shared Reoon key."
+            : `Today's allowance on the shared Reoon key has room for ${headroom.toLocaleString()} more addresses; this selection has ${withEmail.length.toLocaleString()}. Select fewer, or try again tomorrow.`,
+        });
+      }
+      const q = await queuePeopleVerify(ctx.workspace.id, ctx.user.id, withEmail);
+      return { ...q, queued: withEmail.length, noEmail: ids.length - withEmail.length };
+    }),
+
+  /** A bulk verify's progress, for the People toolbar (F39). */
+  verifyJob: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getBulkJob(ctx.workspace.id, input.jobId);
+      if (!job || job.kind !== PEOPLE_VERIFY_JOB) throw new TRPCError({ code: "NOT_FOUND" });
+      return job;
+    }),
+
   reEnrich: workspaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -747,8 +791,11 @@ export const prospectsRouter = router({
         .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-      const { runDiscovery } = await import("../services/discovery");
-      return runDiscovery(ctx.workspace.id, ctx.user.id, "person", {
+      // A background run like Find prospects' (audit 2026-10-20, P72): it
+      // answers with the run id at once, and the same request already running
+      // is joined rather than paid for again.
+      const { queueDiscovery } = await import("../services/discovery");
+      return queueDiscovery(ctx.workspace.id, ctx.user.id, "person", {
         jobTitle: p.title ?? undefined,
         industry: p.industry ?? undefined,
         companyName: p.company ?? undefined,
@@ -1377,6 +1424,12 @@ export const prospectsRouter = router({
   enrichFull: workspaceProcedure
     .input(z.object({ prospectId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
+      // This workspace's person, before any enrichment is spent (audit
+      // 2026-10-20, X1.1).
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { requireInWorkspace } = await import("../services/foreignIds");
+      await requireInWorkspace(db0, prospects, input.prospectId, ctx.workspace.id, "Prospect");
       const result = await runComprehensiveEnrichment({
         workspaceId: ctx.workspace.id,
         prospectId: input.prospectId,

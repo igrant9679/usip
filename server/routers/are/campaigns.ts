@@ -37,7 +37,9 @@ async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnTyp
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_core/workspace";
-import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
+import { DISCOVERY_REST_MS, DISCOVERY_SOURCE_FEATURE, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
+import { AI_CALLS_PER_SOURCE } from "@shared/spendPreview";
+import { listUsableAccounts } from "../../services/linkedinLookup";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
 import { TIMEZONE_UNSET_ON_LAUNCH, describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
@@ -54,6 +56,18 @@ import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
 import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
+import { assertInWorkspace, requireInWorkspace } from "../../services/foreignIds";
+import { icpProfiles } from "../../../drizzle/schema";
+
+/** The model-token meters (services/spend), summed per source for F12. */
+const TOKEN_METERS = ["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"];
+/** Which prospect_queue sourceType values each ARE source writes (routers/are/scraper.ts saveScrapeJobAndQueue). */
+const QUEUE_TYPES_BY_SOURCE: Record<string, string[]> = {
+  internal: ["internal_contact", "internal_lead"],
+  linkedin: ["linkedin_people"],
+  news: ["news_event"],
+};
+
 
 /**
  * The one surviving trace of a spent sender pool. When the pool reports every
@@ -219,6 +233,8 @@ export const campaignsRouter = router({
         await assertResearchSectorInWorkspace(db, input.researchSectorId, ctx.workspace.id);
         researchSectorId = input.researchSectorId;
       }
+      // The ICP profile it targets is this workspace's (audit 2026-10-20, X1.1).
+      await assertInWorkspace(db, icpProfiles, input.icpProfileId, ctx.workspace.id, "ICP profile");
       if (input.personaId) {
         const [p] = await db
           .select()
@@ -345,6 +361,12 @@ export const campaignsRouter = router({
   applyBestFit: workspaceProcedure
     .input(z.object({ picks: z.array(z.object({ prospectId: z.number().int().positive(), campaignId: z.number().int().positive(), fit: z.number().int().min(0).max(100), reasoning: z.string().max(400).default("") })).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
+      // Every pick's person and campaign are this workspace's (X1.1): the
+      // routing suggestions below were written with whatever ids were sent.
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertInWorkspace(db0, prospects, input.picks.map((p) => p.prospectId), ctx.workspace.id, "person");
+      await assertInWorkspace(db0, areCampaigns, input.picks.map((p) => p.campaignId), ctx.workspace.id, "campaign");
       const { applyPicks } = await import("../../services/campaignRouter");
       const r = await applyPicks(ctx.workspace.id, input.picks.map((p) => ({ ...p, campaignName: null, alternatives: [], usedModel: false })));
       const db = await getDb();
@@ -975,6 +997,9 @@ export const campaignsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // This workspace's campaign (X1.1): the update was scoped, but another's
+      // id still wrote an audit row and a recount for that campaign.
+      await requireInWorkspace(db, areCampaigns, input.campaignId, ctx.workspace.id, "Campaign");
       const r = await db.update(prospectQueue).set({
         sequenceStatus: "approved",
         approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
@@ -1381,10 +1406,33 @@ export const campaignsRouter = router({
 
       const state = (campaign.discoveryQueryState ?? {}) as {
         src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
+        ok?: Record<string, number>;
         lastRunAt?: number;
         lastRunNew?: number;
       };
       const restUntilMs = state.lastRunNew === 0 && state.lastRunAt ? state.lastRunAt + DISCOVERY_REST_MS : null;
+
+      // The admitted step of the yield (audit 2026-10-20, F12): of the people
+      // each source put in this campaign's queue, how many were admitted —
+      // left staging ("sourcing") and were not rejected or skipped. All time
+      // for the campaign, counted in SQL.
+      const queueBySource = await db
+        .select({
+          sourceType: prospectQueue.sourceType,
+          kept: sql<number>`count(*)`,
+          admitted: sql<number>`sum(case when ${prospectQueue.sequenceStatus} in ('pending', 'approved', 'enrolled', 'completed', 'replied', 'paused', 'canceled') then 1 else 0 end)`,
+        })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.campaignId, input.campaignId)))
+        .groupBy(prospectQueue.sourceType);
+      const yieldOf = (sourceId: string) => {
+        const types = QUEUE_TYPES_BY_SOURCE[sourceId] ?? [sourceId];
+        const mine = queueBySource.filter((r) => types.includes(String(r.sourceType)));
+        return { kept: mine.reduce((a, r) => a + Number(r.kept ?? 0), 0), admitted: mine.reduce((a, r) => a + Number(r.admitted ?? 0), 0) };
+      };
+      // LinkedIn's allowance is lookups left today on the workspace's accounts:
+      // the budget the four hand-written sources had none of (F12).
+      const linkedinAccounts = await listUsableAccounts({ workspaceId: wsId, userId: ctx.user.id, isAdmin: true }).catch(() => []);
 
       // The engine's own per-source breakdown, from the summary line it writes
       // once per discovery call. Matched on a marker pinned to the engine's
@@ -1417,6 +1465,7 @@ export const campaignsRouter = router({
           vendor: spendLedger.vendor,
           meter: spendLedger.meter,
           keySource: spendLedger.keySource,
+          feature: spendLedger.feature,
           quantity: spendLedger.quantity,
           calls: spendLedger.calls,
         })
@@ -1434,9 +1483,14 @@ export const campaignsRouter = router({
       const sources = ARE_SOURCES.map((meta) => {
         const d = bySlug.get(meta.id);
         const rest = state.src?.[meta.id] ?? null;
-        const attempt = lastRun?.perSource?.[meta.id] ?? null;
+        // Engines before 2026-11-07 keyed LinkedIn's success by its scrape-job name.
+        const attempt = lastRun?.perSource?.[meta.id] ?? (meta.id === "linkedin" ? lastRun?.perSource?.linkedin_people ?? null : null);
         const vendorSpend = spendRows.filter((r) => r.vendor === meta.id);
         const orderIdx = runOrder.indexOf(meta.id as AreSourceId);
+        // This source's model tokens on this campaign today, by the feature the
+        // engine records them under while the source runs (F12).
+        const feature = DISCOVERY_SOURCE_FEATURE(meta.id, input.campaignId);
+        const tokenRows = spendRows.filter((r) => r.feature === feature && TOKEN_METERS.includes(r.meter));
         return {
           slug: meta.id,
           label: meta.label,
@@ -1489,6 +1543,16 @@ export const campaignsRouter = router({
           lastAttempt: attempt
             ? { raw: attempt.raw, kept: attempt.new, error: attempt.error ?? null, skipped: attempt.skipped ?? null }
             : null,
+          /** When it last returned people that were saved (F12); null = not since this was recorded. */
+          lastSuccessAt: state.ok?.[meta.id] ? new Date(state.ok[meta.id]).toISOString() : null,
+          /** Kept into this campaign's queue, and of those admitted, all time (F12). */
+          yield: yieldOf(meta.id),
+          /** Model tokens this source spent for this campaign today, UTC (F12). */
+          tokensToday: tokenRows.reduce((a, r) => a + Number(r.quantity), 0),
+          /** Model calls one run of this source can make (shared/spendPreview). */
+          aiCallsPerRun: AI_CALLS_PER_SOURCE[meta.id] ?? 0,
+          /** LinkedIn lookups left today across the workspace's accounts (F12); null for other sources. */
+          lookupsLeftToday: meta.id === "linkedin" ? linkedinAccounts.reduce((a, x) => a + x.remainingToday, 0) : null,
           spendToday: vendorSpend.length === 0 ? null : {
             quantity: vendorSpend.reduce((a, r) => a + Number(r.quantity), 0),
             calls: vendorSpend.reduce((a, r) => a + Number(r.calls), 0),

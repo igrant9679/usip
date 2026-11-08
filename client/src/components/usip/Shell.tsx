@@ -91,6 +91,7 @@ import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
+import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
 /**
@@ -961,6 +962,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             ) : null}
           </Link>
         </header>
+        {/* Nothing unless this account registered itself and has not confirmed its email (F1). */}
+        <EmailVerificationBanner />
 
         {helpOpen && <HelpDrawer onClose={() => setHelpOpen(false)} />}
         <AssistantDrawer />

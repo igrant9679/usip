@@ -23,7 +23,7 @@
  *      show "search → 4 sources fanned out → 12 raw finds → … " as a
  *      single coherent trace.
  */
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, isNull, lt } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   areScrapeJobs,
@@ -48,6 +48,8 @@ import {
   quickenrichPulledToday,
 } from "../quickenrich";
 import { processRun, skippedCount, type PersistResult } from "./consolidate";
+import { alreadyInWorkspace, workspaceIdentityIndex } from "../prospectSources/dedupe";
+import { enqueueJob, findActiveJob, kickJobs, registerJobKind, withHeartbeat } from "../jobs/runner";
 
 /**
  * Real LinkedIn people search for Discovery v2 (replaces the old fabricating
@@ -275,6 +277,10 @@ interface RunResult {
   /** This request found the same search already running and waited for it
    *  instead of starting (and paying for) a second one (P72). */
   joinedRunning?: boolean;
+  /** Finds that were already in People when the run found them (F38). */
+  alreadyInPeople?: number;
+  /** Found and kept as raw finds, not saved: someone reviews them first (F38). */
+  heldForReview?: boolean;
 }
 
 /** Build a single Google-style query string from a structured input. */
@@ -415,8 +421,10 @@ export function toRawFindRow(
  * same fan-out a second time. The same search (workspace, mode, fields,
  * campaign, sources) already running in this process is now joined instead:
  * the second request waits for the first run and answers with it. Moving the
- * fan-out to a background job the page polls is what would remove the long
- * request itself; that is not done here.
+ * fan-out to a background job the page polls is what removes the long
+ * request itself: Find prospects, the campaign launcher and Re-enrich now call
+ * queueDiscovery (below). This awaited form stays for code already outside a
+ * request.
  */
 const runningSearches = new Map<string, Promise<RunResult>>();
 
@@ -585,7 +593,7 @@ async function fanOutAndSave(
   startedAt: number,
   mode: SearchMode,
   input: DiscoveryInput,
-  opts?: { sources?: readonly string[] | null },
+  opts?: { sources?: readonly string[] | null; holdForReview?: boolean },
 ): Promise<RunResult> {
   const query = buildQuery(mode, input);
   const icpContext = buildIcpContext(mode, input);
@@ -681,6 +689,26 @@ async function fanOutAndSave(
     }
   }
 
+  // "Already in People?" (audit 2026-10-20, F38): every find is checked
+  // against the workspace's People and campaign queue with the one identity
+  // check Source search uses, before anything is saved, so the run can show
+  // which finds were new and which were someone already there.
+  let alreadyInPeople = 0;
+  if (rowsToInsert.length > 0) {
+    try {
+      const index = await workspaceIdentityIndex(workspaceId);
+      for (const row of rowsToInsert) {
+        const known = alreadyInWorkspace(index, { email: row.email, linkedinUrl: row.linkedinUrl, firstName: row.firstName, lastName: row.lastName, companyName: row.companyName, companyDomain: row.companyDomain });
+        row.knownAs = known.status;
+        row.knownProspectId = known.prospectId;
+        if (known.status === "in_people") alreadyInPeople++;
+      }
+    } catch (e) {
+      // The check is a preview: a failed one leaves the finds unlabelled, never unsaved.
+      console.error("[discovery] already-in-People check failed:", (e as Error)?.message);
+    }
+  }
+
   if (rowsToInsert.length > 0) {
     // Insert in chunks of 50 to keep a single statement reasonable. A failed
     // chunk falls back to per-row so ONE unstorable row cannot lose the whole
@@ -710,7 +738,21 @@ async function fanOutAndSave(
   // totalFinds counts what was STORED: an unstorable row was subtracted above.
   await db.update(discoveryRuns).set({
     rawFindCount: totalFinds,
+    alreadyInPeople,
   }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+
+  // Review before saving (F38): the finds stay as raw finds, labelled new or
+  // already in People, and Save to People on the run (discovery.reprocess)
+  // saves them through the same consolidation.
+  if (opts?.holdForReview && totalFinds > 0) {
+    const durationMs = Date.now() - startedAt;
+    await db.update(discoveryRuns).set({ status: "complete", heldForReview: true, durationMs, completedAt: new Date() })
+      .where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    await emitLog(workspaceId, runId, "discovery.held", "info",
+      `Run complete — ${totalFinds} raw finds, ${alreadyInPeople} already in People. Not saved yet: review them, then Save to People.`,
+      { perSource, durationMs, alreadyInPeople });
+    return { runId, rawFindCount: totalFinds, perSource, prospectsCreated: 0, prospectsUpdated: 0, prospectsSkipped: 0, accountsCreated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0, status: "complete", alreadyInPeople, heldForReview: true };
+  }
 
   // Phase 2: consolidate raw_finds → score → persist into prospects.
   // A Phase 2 failure still leaves a usable run (raw_finds are queryable and
@@ -754,8 +796,125 @@ async function fanOutAndSave(
     { perSource, durationMs, persistResult });
 
   return {
-    runId, rawFindCount: totalFinds, perSource, ...persistResult,
+    runId, rawFindCount: totalFinds, perSource, ...persistResult, alreadyInPeople,
     status: saveError ? "failed" : "complete",
     ...(saveError ? { errorMessage: saveError } : {}),
   };
 }
+
+/* ─── The fan-out as a persisted job (audit 2026-10-20, P72) ─────────── */
+
+/**
+ * The fan-out ran inside the HTTP request: a response lost to a proxy
+ * timeout, a dropped connection or a reload left the run going with no run id
+ * on the page, and a retry paid for it again. Now a search is a discovery run
+ * plus a bulk_jobs row (services/jobs/runner): the request answers at once
+ * with the run id, the worker runs the fan-out, and Find prospects and the
+ * campaign launcher follow the run (discovery.getRun) until it ends. The run
+ * row, its raw finds and its log are what they were.
+ *
+ * Two rules keep it from spending twice:
+ *   - the same search already queued or running is joined: the second click
+ *     gets the first run back (the fingerprint is in the job's payload);
+ *   - the fan-out starts at most once per run: a worker that dies mid-run
+ *     leaves fanOutStartedAt set, and the job that picks the run up again
+ *     marks it stopped instead of calling the vendors a second time.
+ */
+export const DISCOVERY_JOB = "discovery.run";
+
+export type DiscoveryJobPayload = {
+  runId: number;
+  mode: SearchMode;
+  input: DiscoveryInput;
+  campaignId: number | null;
+  sources: string[] | null;
+  fingerprint: string;
+  holdForReview?: boolean;
+};
+
+export type QueuedRun = { runId: number; jobId: number; status: "running"; joinedRunning?: boolean; heldForReview?: boolean };
+
+export const DISCOVERY_RESTARTED_ERROR = "Stopped before it finished (the server restarted mid-run). It was not run again, so nothing was paid for twice. Its raw finds, if any, are kept: re-score them, or run the search again.";
+
+/** One enqueue at a time per search in this process, so two quick clicks cannot both find no job. */
+const queueing = new Map<string, Promise<QueuedRun>>();
+
+export async function queueDiscovery(
+  workspaceId: number,
+  userId: number | null,
+  mode: SearchMode,
+  input: DiscoveryInput,
+  campaignId?: number | null,
+  opts?: { sources?: readonly string[] | null; holdForReview?: boolean },
+): Promise<QueuedRun> {
+  const fingerprint = discoveryFingerprint(workspaceId, mode, input, campaignId, opts?.sources) + (opts?.holdForReview ? "|held" : "");
+  const pending = queueing.get(fingerprint);
+  if (pending) return pending.then((r) => ({ ...r, joinedRunning: true }));
+  const p = (async (): Promise<QueuedRun> => {
+    const active = await findActiveJob<DiscoveryJobPayload>(workspaceId, DISCOVERY_JOB, (pl) => pl.fingerprint === fingerprint);
+    if (active) {
+      const pl = (active.payload ?? {}) as DiscoveryJobPayload;
+      return { runId: pl.runId, jobId: active.id, status: "running", joinedRunning: true, ...(pl.holdForReview ? { heldForReview: true } : {}) };
+    }
+    const db = await getDb();
+    if (!db) throw new Error("DB unavailable");
+    const [created] = await db.insert(discoveryRuns).values({
+      workspaceId, userId, campaignId: campaignId ?? null, mode, input: input as any, status: "running",
+    }).$returningId();
+    const payload: DiscoveryJobPayload = {
+      runId: created.id, mode, input, campaignId: campaignId ?? null,
+      sources: opts?.sources?.length ? Array.from(opts.sources) : null, fingerprint,
+      ...(opts?.holdForReview ? { holdForReview: true } : {}),
+    };
+    const { job } = await enqueueJob({ workspaceId, userId, kind: DISCOVERY_JOB, payload, total: 1 });
+    await emitLog(workspaceId, created.id, "discovery.queued", "info", `Queued as background job ${job.id}; it starts within seconds.`);
+    kickJobs();
+    return { runId: created.id, jobId: job.id, status: "running", ...(opts?.holdForReview ? { heldForReview: true } : {}) };
+  })().finally(() => { queueing.delete(fingerprint); });
+  queueing.set(fingerprint, p);
+  return p;
+}
+
+/** The worker's half: the fan-out for one queued run, at most once. Null when it had already started. */
+export async function runQueuedDiscovery(workspaceId: number, p: DiscoveryJobPayload): Promise<RunResult | null> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [res] = await db.update(discoveryRuns).set({ fanOutStartedAt: new Date() }).where(and(
+    eq(discoveryRuns.id, p.runId),
+    eq(discoveryRuns.workspaceId, workspaceId),
+    eq(discoveryRuns.status, "running"),
+    isNull(discoveryRuns.fanOutStartedAt),
+  ));
+  if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) !== 1) {
+    // Started before by a worker that is gone, or no longer running: never again.
+    await db.update(discoveryRuns).set({ status: "failed", errorMessage: DISCOVERY_RESTARTED_ERROR, completedAt: new Date() })
+      .where(and(eq(discoveryRuns.id, p.runId), eq(discoveryRuns.workspaceId, workspaceId), eq(discoveryRuns.status, "running")));
+    return null;
+  }
+  const startedAt = Date.now();
+  try {
+    return await fanOutAndSave(db, workspaceId, p.runId, startedAt, p.mode, p.input, { sources: p.sources, holdForReview: p.holdForReview });
+  } catch (e) {
+    const message = String((e as Error)?.message ?? e).slice(0, 2000);
+    await db.update(discoveryRuns).set({
+      status: "failed", errorMessage: message, durationMs: Date.now() - startedAt, completedAt: new Date(),
+    }).where(and(eq(discoveryRuns.id, p.runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    await emitLog(workspaceId, p.runId, "discovery.error", "error", `Run failed: ${message}`);
+    return { runId: p.runId, rawFindCount: 0, perSource: {}, prospectsCreated: 0, prospectsUpdated: 0, prospectsSkipped: 0, accountsCreated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0, status: "failed", errorMessage: message };
+  }
+}
+
+registerJobKind<DiscoveryJobPayload>(DISCOVERY_JOB, {
+  // One item, the whole fan-out; it is bounded by each source's own timeouts.
+  async step(job, payload) {
+    const r = await withHeartbeat(job.id, () => runQueuedDiscovery(job.workspaceId, payload));
+    const failed = !r || r.status === "failed";
+    return {
+      cursor: 1,
+      done: failed ? 0 : 1,
+      failures: failed ? [{ id: payload.runId, error: (r?.errorMessage ?? DISCOVERY_RESTARTED_ERROR).slice(0, 200) }] : [],
+      finished: true,
+      message: r ? `Run #${payload.runId}: ${r.rawFindCount} raw finds` : `Run #${payload.runId} stopped`,
+    };
+  },
+});

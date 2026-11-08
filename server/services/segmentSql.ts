@@ -21,24 +21,38 @@
  */
 import { and, eq, gte, isNotNull, isNull, like, lt, ne, notLike, or, sql, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
-import { contacts } from "../../drizzle/schema";
-import { SEGMENT_FIELDS, SEGMENT_OPERATORS, type SegmentRule } from "@shared/segmentRules";
+import { contacts, prospects } from "../../drizzle/schema";
+import { SEGMENT_OPERATORS, segmentFieldsFor, type SegmentRule, type SegmentSubject } from "@shared/segmentRules";
 import { startOfCalendarDay } from "./calendarDeadline";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 
-const COLUMNS: Record<string, MySqlColumn> = {
+const CONTACT_COLUMNS: Record<string, MySqlColumn> = {
   email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName, title: contacts.title,
   phone: contacts.phone, linkedinUrl: contacts.linkedinUrl, seniority: contacts.seniority, city: contacts.city,
   emailVerificationStatus: contacts.emailVerificationStatus, isPrimary: contacts.isPrimary, createdAt: contacts.createdAt,
 };
 
+/**
+ * The People field map as columns (audit 2026-10-20, P21, F42): a People
+ * segment reads the prospects table. Email status is prospects.emailStatus,
+ * which the same verifier writes with the same five values.
+ */
+const PEOPLE_COLUMNS: Record<string, MySqlColumn> = {
+  email: prospects.email, firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title,
+  phone: prospects.phone, linkedinUrl: prospects.linkedinUrl, seniority: prospects.seniority, company: prospects.company,
+  industry: prospects.industry, city: prospects.city, state: prospects.state, country: prospects.country,
+  emailVerificationStatus: prospects.emailStatus, createdAt: prospects.createdAt,
+};
+
+const columnsFor = (subject: SegmentSubject) => (subject === "people" ? PEOPLE_COLUMNS : CONTACT_COLUMNS);
+
 const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 const DAY = 86_400_000;
 
-/** One rule as a condition, or null when it can match nobody. */
-export function ruleSql(rule: SegmentRule, tz: string = "UTC"): SQL | null {
-  const col = COLUMNS[rule.field];
-  const kind = SEGMENT_FIELDS[rule.field];
+/** One rule as a condition, or null when it can match nobody (a field this subject does not have among them). */
+export function ruleSql(rule: SegmentRule, tz: string = "UTC", subject: SegmentSubject = "contacts"): SQL | null {
+  const col = columnsFor(subject)[rule.field];
+  const kind = segmentFieldsFor(subject)[rule.field];
   if (!col || !kind) return null;
   // Read before the operator list, for every kind, as the evaluator does.
   const textual = kind === "text" || kind === "select";
@@ -79,27 +93,35 @@ export function ruleSql(rule: SegmentRule, tz: string = "UTC"): SQL | null {
   }
 }
 
-/** The whole segment as a condition on contacts, or null when it matches nobody. */
-export function segmentSql(rules: SegmentRule[], matchType: "all" | "any", tz: string = "UTC"): SQL | null {
+/** The whole segment as a condition on its table, or null when it matches nobody. */
+export function segmentSql(rules: SegmentRule[], matchType: "all" | "any", tz: string = "UTC", subject: SegmentSubject = "contacts"): SQL | null {
   if (!rules.length) return null;
-  const parts = rules.map((r) => ruleSql(r, tz));
+  const parts = rules.map((r) => ruleSql(r, tz, subject));
   if (matchType === "all") return parts.some((p) => p == null) ? null : and(...(parts as SQL[]))!;
   const live = parts.filter((p): p is SQL => p != null);
   return live.length ? or(...live)! : null;
 }
 
-/** Contacts of this workspace in the segment, as a WHERE clause; null when none can be. */
-export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any", tz: string): SQL | null {
-  const seg = segmentSql(rules, matchType, tz);
-  return seg ? and(eq(contacts.workspaceId, ws), seg)! : null;
+/**
+ * The segment's members in this workspace, as a WHERE clause on its table;
+ * null when none can be. People who are archived (verificationStatus
+ * "rejected", R64) are in no segment, as they are hidden everywhere else.
+ */
+export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any", tz: string, subject: SegmentSubject = "contacts"): SQL | null {
+  const seg = segmentSql(rules, matchType, tz, subject);
+  if (!seg) return null;
+  if (subject === "people") {
+    return and(eq(prospects.workspaceId, ws), or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected"))!, seg)!;
+  }
+  return and(eq(contacts.workspaceId, ws), seg)!;
 }
 
 type Db = { select: (...a: any[]) => any };
 
-/** How many contacts of this workspace the segment holds, counted in SQL. */
-export async function countSegment(db: Db, ws: number, rules: SegmentRule[], matchType: "all" | "any"): Promise<number> {
-  const where = segmentWhere(ws, rules, matchType, await getWorkspaceTimezone(ws));
+/** How many members of this workspace the segment holds, counted in SQL on its table. */
+export async function countSegment(db: Db, ws: number, rules: SegmentRule[], matchType: "all" | "any", subject: SegmentSubject = "contacts"): Promise<number> {
+  const where = segmentWhere(ws, rules, matchType, await getWorkspaceTimezone(ws), subject);
   if (!where) return 0;
-  const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(contacts).where(where);
+  const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(subject === "people" ? prospects : contacts).where(where);
   return Number(n);
 }

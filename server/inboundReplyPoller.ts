@@ -35,6 +35,7 @@ import { bumpCampaignCounter } from "./campaignCounters";
 import { processSignal } from "./routers/are/execution";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 import { noteLeadEngagement } from "./services/leadRescoreQueue";
+import { matchSentByMessageId, referencedMessageIds } from "./services/email/messageIds";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
@@ -268,50 +269,21 @@ export async function processInboundReply(data: InboundReplyData) {
       .limit(1);
     if (seen) return;
   }
-  // 1. Match to outbound draft via In-Reply-To or References.
-  //
-  // Previously this gathered refIds and then *ignored* them — query
-  // matched on toEmail alone and picked drafts[0] (random old draft),
-  // which is what made reply analytics attribute to the wrong message.
-  //
-  // Strategy now:
-  //   a. If we have any In-Reply-To / References values, try matching
-  //      them against emailDrafts.trackingToken. trackingToken on the
-  //      Unipile path stores the provider tracking_id; matching on
-  //      that gives us exact draft identification when the recipient's
-  //      client preserved headers. We strip <> braces both ways.
-  //   b. Failing that, fall back to "most recent sent draft to this
-  //      sender" — at least temporally relevant, not the oldest.
+  // 1. Match to the send it answers, by the full RFC Message-ID in
+  //    In-Reply-To and References (audit 2026-10-20, F5): the draft that went
+  //    out with it, the log row of the send (its draft or campaign queue row),
+  //    a campaign send's own row, a bridged mailbox's sent copy, and last the
+  //    provider tracking id the draft kept (trackingToken). This used to
+  //    look at trackingToken alone — varchar(64), so a full Message-ID never
+  //    matched — and fell straight to the newest draft to that address.
   let matchedDraft: any = null;
   let matchedContactId: number | undefined;
   let matchedLeadId: number | undefined;
   let matchedProspectId: number | undefined;
   let matchedAccountId: number | undefined;
 
-  const stripAngle = (s: string) => s.replace(/^<|>$/g, "").trim();
-  const refIds = [data.inReplyTo, ...(data.references?.split(/\s+/) ?? [])]
-    .map((s) => (s ? stripAngle(s) : ""))
-    .filter((s) => s.length > 0);
-
-  if (refIds.length > 0) {
-    // Exact-match on trackingToken — the Unipile path persists each
-    // outbound's tracking_id there. trackingToken is varchar(64) so
-    // refIds longer than 64 chars (full RFC Message-ID) won't match,
-    // but they don't share format anyway. We include both bare and
-    // angled forms to be tolerant.
-    const candidates = [...refIds, ...refIds.map((id) => `<${id}>`)];
-    const byToken = await db
-      .select()
-      .from(emailDrafts)
-      .where(
-        and(
-          eq(emailDrafts.workspaceId, data.workspaceId),
-          inArray(emailDrafts.trackingToken, candidates),
-        ),
-      )
-      .limit(1);
-    matchedDraft = byToken[0] ?? null;
-  }
+  const sentMatch = await matchSentByMessageId(db, data.workspaceId, referencedMessageIds(data.inReplyTo, data.references));
+  matchedDraft = sentMatch.draft;
 
   if (!matchedDraft) {
     // Fallback: most-recent sent draft to this sender (was previously
@@ -368,8 +340,10 @@ export async function processInboundReply(data: InboundReplyData) {
   //     Matching by email within the workspace is the same rule the tiers
   //     above use. Newest queue row wins if a prospect appears in more than
   //     one campaign.
-  let matchedQueueRow: { id: number; campaignId: number } | null = null;
-  try {
+  // The campaign send the reply names by Message-ID wins (F5): matching by
+  // address picks the newest queue row, which may be another campaign's.
+  let matchedQueueRow: { id: number; campaignId: number } | null = sentMatch.queue;
+  if (!matchedQueueRow) try {
     const [row] = await db
       .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
       .from(prospectQueue)

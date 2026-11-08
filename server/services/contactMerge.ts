@@ -26,6 +26,7 @@ import {
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { normalizeSuppressionEmail } from "../unsubscribe";
+import { noteAuditRecorded } from "../_core/requestContext";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -92,6 +93,9 @@ export async function mergeContacts(
 
   return db.transaction(async (tx) => {
     // The deleted row is recorded first; if that fails, nothing changes.
+    // Written here, not through recordAudit, so it commits with the merge;
+    // the request is marked so no automatic entry is added (G49).
+    noteAuditRecorded();
     await tx.insert(auditLog).values({
       workspaceId: ws, actorUserId: input.actorUserId, action: "delete", entityType: "contact_merge", entityId: primaryId,
       before: secondary as never, after: { survivorId: primaryId, mergedId: secondaryId, filled: Object.keys(patch) } as never,

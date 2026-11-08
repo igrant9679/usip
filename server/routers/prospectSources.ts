@@ -226,6 +226,13 @@ export const prospectSourcesRouter = router({
   promote: workspaceProcedure
     .input(z.object({ runId: z.number().int(), resultIds: z.array(z.number().int()).min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
+      // This workspace's search run (audit 2026-10-20, X1.1). promoteResults
+      // reads only its own rows; another's run id still wrote an audit entry.
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { requireInWorkspace } = await import("../services/foreignIds");
+      const { prospectSearchRuns } = await import("../../drizzle/schema");
+      await requireInWorkspace(db, prospectSearchRuns, input.runId, ctx.workspace.id, "Search run");
       const r = await promoteResults(ctx.workspace.id, ctx.user.id, input.runId, input.resultIds);
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_search_run", entityId: input.runId,

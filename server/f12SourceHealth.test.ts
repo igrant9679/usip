@@ -123,16 +123,21 @@ describe("the engine's per-source breakdown stays pinned to its wording", () => 
   });
 });
 
-describe("nothing claims a success time, because none is stored", () => {
-  it("recordSuccess still writes no timestamp, so the field is lastAttempt", () => {
-    // If someone adds a lastSuccessAt column later, this test should be
-    // updated deliberately — that is the point of pinning the absence.
+describe("a success time is claimed only where one is stored", () => {
+  // 2026-11-07 (audit F12, batch RESB): updated deliberately, as this test
+  // asked. The engine now stores each source's last success per campaign
+  // (discoveryQueryState.ok, written only when a source returned people and
+  // the save succeeded), and the router reads that and nothing else. The
+  // breaker's recordSuccess still writes no timestamp, and "Last attempt"
+  // still means the last summary, so both are kept pinned.
+  it("lastSuccessAt comes from the engine's stored success, never from the breaker or a key check", () => {
     expect(circuit).toContain("export async function recordSuccess(");
     const body = circuit.slice(circuit.indexOf("export async function recordSuccess("));
     expect(body.slice(0, body.indexOf("}\n\n"))).not.toMatch(/lastSuccess/i);
     expect(router).toContain("lastAttempt: attempt");
-    expect(router).not.toMatch(/lastSuccessAt/);
-    expect(strip).toContain("is the engine's last discovery summary for this campaign, not a success time");
+    expect(router).toContain("lastSuccessAt: state.ok?.[meta.id] ? new Date(state.ok[meta.id]).toISOString() : null,");
+    expect(engine).toContain("if (raw.length > 0) lastOk[id] = Date.now();");
+    expect(strip).toContain("\"Last attempt\" is the engine's last discovery summary for this campaign.");
   });
 
   it("an absent attempt reads as 'no attempt on record', bounded by the retention constant", () => {

@@ -51,6 +51,10 @@ const upload = (fileName: string, body: Buffer | string, mimeType?: string) =>
 
 beforeEach(() => {
   h.db = makeSqlFakeDb({ roles: { [WS]: "rep" }, wsId: () => WS });
+  // 2026-11-07 (audit X1.1): a file is refused on a record that is not this
+  // workspace's, so the account the uploads go on is seeded; what these
+  // tests check is unchanged.
+  h.db.rowsOf("accounts").push({ id: 7, workspaceId: WS, name: "Acme" });
   h.put = [];
   h.erased = [];
   h.eraseFails = false;

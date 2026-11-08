@@ -45,6 +45,8 @@ import {
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
 import { NoLinkedInConnected } from "@/components/usip/NoLinkedInConnected";
+import { runSummary, useFollowRun } from "@/lib/discoveryRun";
+import { SourceBudgetLine } from "@/components/usip/SpendPreview";
 
 /* ─── Chip-input shared between the two forms ───────────────────────── */
 function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -268,6 +270,16 @@ function hitName(h: SearchHit): string {
 function hitCompany(h: SearchHit): string {
   return typeof h.company === "string" ? h.company : h.company?.name || "";
 }
+/** A hit as the duplicate check reads it (F38): name, company, profile URL. */
+function hitIdentity(h: SearchHit) {
+  const parts = (h.name ?? "").trim().split(/\s+/);
+  return {
+    firstName: (h.first_name || parts[0] || "").slice(0, 200) || null,
+    lastName: (h.last_name || parts.slice(1).join(" ") || "").slice(0, 200) || null,
+    companyName: hitCompany(h).slice(0, 300) || null,
+    linkedinUrl: (h.public_profile_url || h.profile_url || "").slice(0, 2048) || null,
+  };
+}
 
 function LinkedInSearchCard() {
   const utils = trpc.useUtils();
@@ -281,6 +293,26 @@ function LinkedInSearchCard() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [resolving, setResolving] = useState<"" | "location" | "industry">("");
+  // The next page (audit F43): LinkedIn hands back a cursor with each page.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [lastQuery, setLastQuery] = useState<{ api: "classic" | "sales_navigator"; keywords?: string; filters: Record<string, unknown> } | null>(null);
+  // "Already in People?" per hit, from the one duplicate check (audit F38).
+  const [known, setKnown] = useState<Array<{ status: string; prospectId: number | null }>>([]);
+
+  /** Label hits from `offset` on, and leave the ones already in People unticked. */
+  const checkKnown = async (items: SearchHit[], offset: number) => {
+    try {
+      const res = await utils.discovery.checkInPeople.fetch({ records: items.map(hitIdentity) });
+      setKnown((prev) => [...prev.slice(0, offset), ...res]);
+      setSelected((prev) => {
+        const next = { ...prev };
+        res.forEach((k, i) => { if (k.status === "in_people") next[offset + i] = false; });
+        return next;
+      });
+    } catch {
+      // A preview that failed leaves the hits unlabelled; the save still checks each one.
+    }
+  };
 
   // Whether this person has a LinkedIn account to search through (item 7):
   // known before the first search, so the card can say where to connect one.
@@ -288,13 +320,31 @@ function LinkedInSearchCard() {
   const noLinkedIn = connected.isSuccess && !((connected.data ?? []) as Array<{ provider?: string | null }>).some((a) => a.provider === "LINKEDIN");
   const search = trpc.unipile.searchLinkedIn.useMutation({
     onSuccess: (r: any) => {
-      setHits(r.items ?? []);
-      setSelected(Object.fromEntries((r.items ?? []).map((_: any, i: number) => [i, true])));
-      if (!r.items?.length) toast.info("No results — broaden your filters.");
+      const items: SearchHit[] = r.items ?? [];
+      setHits(items);
+      setCursor(r.cursor ?? null);
+      setKnown([]);
+      setSelected(Object.fromEntries(items.map((_: any, i: number) => [i, true])));
+      if (!items.length) toast.info("No results — broaden your filters.");
+      else void checkKnown(items, 0);
     },
     // The server's message says what is missing and where. The old fallback
     // matched "PRECONDITION" in the message, which never contains it, and
     // pointed at a Settings page that does not exist.
+    onError: (e) => toast.error(e.message),
+  });
+  // The next page of the same search, added below the first (F43). Each page
+  // is one search on the account, held by the same LinkedIn limits.
+  const more = trpc.unipile.searchLinkedIn.useMutation({
+    onSuccess: (r: any) => {
+      const items: SearchHit[] = r.items ?? [];
+      const offset = hits.length;
+      setHits((prev) => [...prev, ...items]);
+      setCursor(r.cursor ?? null);
+      setSelected((prev) => ({ ...prev, ...Object.fromEntries(items.map((_: any, i: number) => [offset + i, true])) }));
+      if (!items.length) toast.info("No more results for this search.");
+      else void checkKnown(items, offset);
+    },
     onError: (e) => toast.error(e.message),
   });
   // Saved to People like the rest of this tab (audit 2026-10-20, P76), as a
@@ -336,11 +386,17 @@ function LinkedInSearchCard() {
       toast.error(api === "classic" ? "Enter keywords" : "Enter keywords, or add a location, industry or tenure");
       return;
     }
+    setLastQuery({ api, keywords: keywords.trim() || undefined, filters });
     search.mutate({ api, category: "people", keywords: keywords.trim() || undefined, filters, limit: 10 });
+  };
+  const loadMore = () => {
+    if (!cursor || !lastQuery) return;
+    more.mutate({ api: lastQuery.api, category: "people", keywords: lastQuery.keywords, filters: lastQuery.filters, limit: 10, cursor });
   };
 
   const selectedHits = hits.filter((_, i) => selected[i]);
   const allOn = hits.length > 0 && selectedHits.length === hits.length;
+  const alreadyCount = known.filter((k) => k?.status === "in_people").length;
 
   return (
     <Card>
@@ -402,6 +458,7 @@ function LinkedInSearchCard() {
             <div className="flex items-center justify-between">
               <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelected(allOn ? {} : Object.fromEntries(hits.map((_, i) => [i, true])))}>
                 {allOn ? "Deselect all" : "Select all"} · {selectedHits.length}/{hits.length}
+                {alreadyCount > 0 && ` · ${alreadyCount} already in People (left unticked)`}
               </button>
               {/* The rows go as LinkedIn sent them; the server checks each one (P75). */}
               <Button size="sm" disabled={!selectedHits.length || importPeople.isPending} onClick={() => importPeople.mutate({ hits: selectedHits })} className="gap-1.5">
@@ -418,11 +475,19 @@ function LinkedInSearchCard() {
                       <div className="text-sm font-medium truncate">{hitName(h)}</div>
                       <div className="text-[12px] text-muted-foreground truncate">{[h.title || h.headline || h.occupation, hitCompany(h), h.location].filter(Boolean).join(" · ")}</div>
                     </div>
-                    {url && <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="shrink-0 text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                    <KnownBadge knownAs={known[i]?.status} prospectId={known[i]?.prospectId} />
+                    {url && <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="shrink-0 text-muted-foreground hover:text-foreground" aria-label={`LinkedIn profile of ${hitName(h)}`}><ExternalLink className="size-3.5" aria-hidden="true" /></a>}
                   </label>
                 );
               })}
             </div>
+            {cursor && (
+              <div className="flex justify-center">
+                <Button variant="outline" size="sm" disabled={more.isPending || search.isPending} onClick={loadMore} className="gap-1.5">
+                  {more.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />} Load the next 10
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>
@@ -492,26 +557,28 @@ export function FindProspectsPanel() {
   });
 
   const utils = trpc.useUtils();
+  // Review before saving (audit 2026-10-20, F38): off keeps the old behaviour,
+  // on keeps the finds unsaved, each labelled new or already in People.
+  const [holdForReview, setHoldForReview] = useState(false);
+  // The run is a background job now (P72): the request answers with its id at
+  // once and this follows it; the summary toast comes when the run ends.
+  const follow = useFollowRun(activeRunId, (run) => {
+    // What was SAVED (P61), what was left out, and what was already in People (F38).
+    const s = runSummary(run);
+    if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });
+    // The run, its trace and the history change too, not only the queues (P142).
+    utils.prospects.list.invalidate();
+    utils.discovery.listRuns.invalidate();
+    utils.discovery.getLogs.invalidate({ runId: run.id });
+    utils.discovery.getRawFinds.invalidate({ runId: run.id });
+  });
   const search = trpc.discovery.search.useMutation({
     onSuccess: (r) => {
       setActiveRunId(r.runId);
-      // What was SAVED (P61): the tiers count saved people only, and what was
-      // left out and the companies saved are said too.
-      const saved = `${r.prospectsCreated} new + ${r.prospectsUpdated} updated`
-        + (r.prospectsSkipped ? ` · ${r.prospectsSkipped} not saved` : "")
-        + (r.accountsCreated ? ` · ${r.accountsCreated} compan${r.accountsCreated === 1 ? "y" : "ies"} saved` : "");
-      const lead = r.joinedRunning ? `That search was already running (run #${r.runId}), so it was not started again — ` : "";
-      if (r.status === "failed") {
-        toast.error(`${lead}Run #${r.runId}: ${r.errorMessage ?? "the finds could not be saved"}`, { duration: 8000 });
-      } else {
-        toast.success(
-          `${lead}Discovery complete — ${r.rawFindCount} raw / ${saved} / ` +
-          `${r.highConfidenceCount} high · ${r.mediumConfidenceCount} medium · ${r.lowConfidenceCount} low`,
-          { duration: 6000 },
-        );
-      }
-      // The run, its trace and the history change too, not only the queues (P142).
-      utils.prospects.list.invalidate();
+      follow.arm(r.runId);
+      toast.info(r.joinedRunning
+        ? `That search was already running (run #${r.runId}), so it was not started again — following it below.`
+        : `Discovery started (run #${r.runId}). It runs in the background; you can leave this page and come back.`);
       utils.discovery.listRuns.invalidate();
       utils.discovery.getRun.invalidate({ id: r.runId });
       utils.discovery.getLogs.invalidate({ runId: r.runId });
@@ -523,6 +590,8 @@ export function FindProspectsPanel() {
       utils.discovery.listRuns.invalidate();
     },
   });
+  const followed = follow.query.data as { id: number; status: string } | undefined;
+  const running = followed?.status === "running" && followed.id === activeRunId;
 
   const runSearch = () => {
     if (runSources.length === 0) {
@@ -535,14 +604,14 @@ export function FindProspectsPanel() {
         toast.error("Fill at least one field");
         return;
       }
-      search.mutate({ mode: "person", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources });
+      search.mutate({ mode: "person", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources, holdForReview });
     } else {
       const i = accountForm;
       if (![i.companyName, i.industry, i.location, i.companySize, i.revenueRange, i.website, i.buyerPersona].some(Boolean) && i.keywords.length === 0) {
         toast.error("Fill at least one field");
         return;
       }
-      search.mutate({ mode: "account", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources });
+      search.mutate({ mode: "account", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources, holdForReview });
     }
   };
 
@@ -599,12 +668,18 @@ export function FindProspectsPanel() {
                 <div className="text-[11px] text-muted-foreground">
                   {runSources.length === 0
                     ? "Pick at least one source."
-                    : `Fans out to ${runSources.length} of ${modeSources.length} sources. Typical run: 5–15 s.`}
+                    : `Fans out to ${runSources.length} of ${modeSources.length} sources. Typical run: 5–15 s, in the background.`}
                 </div>
+                {/* What each paid source has left today, before running (U16). */}
+                <SourceBudgetLine sources={runSources} />
+                <label className="flex items-center gap-1.5 cursor-pointer pt-0.5">
+                  <Checkbox className="size-3.5" checked={holdForReview} onCheckedChange={(v) => setHoldForReview(v === true)} />
+                  <span className="text-[11.5px]">Review before saving <span className="text-muted-foreground">(keep the finds unsaved, marked new or already in People)</span></span>
+                </label>
               </div>
               <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
-                {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
-                {search.isPending ? "Searching…" : "Run discovery"}
+                {search.isPending || running ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+                {search.isPending ? "Starting…" : running ? `Run #${activeRunId} running…` : "Run discovery"}
               </Button>
             </div>
           </CardContent>
@@ -652,6 +727,18 @@ export default function FindProspectsRedirect() {
 }
 
 /* ─── Per-run detail card (raw finds + logs) ─────────────────────────── */
+/** What the one duplicate check said about a find when the run found it (F38). */
+function KnownBadge({ knownAs, prospectId }: { knownAs?: string | null; prospectId?: number | null }) {
+  if (knownAs === "in_people") {
+    return prospectId
+      ? <Link href={`/prospects/${prospectId}`}><span className="shrink-0 text-[10px] text-muted-foreground underline">already in People</span></Link>
+      : <span className="shrink-0 text-[10px] text-muted-foreground">already in People</span>;
+  }
+  if (knownAs === "in_campaign") return <span className="shrink-0 text-[10px] text-muted-foreground">in a campaign</span>;
+  if (knownAs === "new") return <span className="shrink-0 text-[10px] text-emerald-700 dark:text-emerald-400">new</span>;
+  return null;
+}
+
 function RunDetail({ runId }: { runId: number }) {
   const utils = trpc.useUtils();
   const runQ = trpc.discovery.getRun.useQuery({ id: runId }, {
@@ -662,11 +749,14 @@ function RunDetail({ runId }: { runId: number }) {
   const logsQ = trpc.discovery.getLogs.useQuery({ runId }, { refetchInterval: run?.status === "running" ? 3000 : false });
   // What the sources returned, before consolidation (P147: promised, never shown).
   const findsQ = trpc.discovery.getRawFinds.useQuery({ runId });
+  // The finds land when the background run ends (P72): read them again then.
+  const status = run?.status;
+  useEffect(() => { if (status && status !== "running") void findsQ.refetch(); }, [status]); // eslint-disable-line react-hooks/exhaustive-deps
   const logs = logsQ.data ?? [];
   const finds = findsQ.data ?? [];
   const reprocess = trpc.discovery.reprocess.useMutation({
     onSuccess: (r) => {
-      toast.success(`Re-scored — ${r.prospectsCreated} new + ${r.prospectsUpdated} updated`);
+      toast.success(`${held ? "Saved to People" : "Re-scored"} — ${r.prospectsCreated} new + ${r.prospectsUpdated} updated`);
       // The re-score rewrites the run's counts and the people (P142).
       utils.discovery.getRun.invalidate({ id: runId });
       utils.discovery.getLogs.invalidate({ runId });
@@ -675,16 +765,33 @@ function RunDetail({ runId }: { runId: number }) {
     },
     onError: (e) => toast.error(e.message),
   });
+  const held = !!(run as { heldForReview?: boolean } | undefined)?.heldForReview;
   if (runQ.error && !run) return <QueryError what={`run #${runId}`} message={runQ.error.message} onRetry={() => runQ.refetch()} />;
   if (!run) return null;
-  const r = run as typeof run & { prospectsUpdated?: number; prospectsSkipped?: number; accountsCreated?: number };
+  const r = run as typeof run & { prospectsUpdated?: number; prospectsSkipped?: number; accountsCreated?: number; alreadyInPeople?: number };
+  const already = r.alreadyInPeople ?? 0;
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center justify-between">
-          <span>Run #{run.id} — {run.mode} · {run.status}</span>
-          {/* A re-score re-applies every raw find of the run to the people it
-              matched — a whole run, so it asks first (audit 2026-10-20, P3). */}
+          <span className="inline-flex items-center gap-1.5">
+            {run.status === "running" && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+            Run #{run.id} — {run.mode} · {run.status === "running" ? "running in the background" : held ? "found, not saved yet" : run.status}
+          </span>
+          {held ? (
+            // Kept for review (F38): the finds below are labelled new or already
+            // in People, and saving goes through the same consolidation.
+            <Button size="sm" disabled={reprocess.isPending} className="gap-1 text-xs"
+              onClick={() => confirmAction({
+                title: `Save run #${run.id} to People?`,
+                description: `${run.rawFindCount} finds: ${Math.max(0, run.rawFindCount - already)} not in People yet are added, and the ${already} already in People are updated where a find adds something. Nothing is spent: the finds are already paid for.`,
+                confirmLabel: "Save to People",
+              }, () => reprocess.mutate({ runId }))}>
+              <CheckCircle2 className="size-3" /> Save to People
+            </Button>
+          ) : run.status !== "running" && (
+          /* A re-score re-applies every raw find of the run to the people it
+              matched — a whole run, so it asks first (audit 2026-10-20, P3). */
           <Button size="sm" variant="ghost" disabled={reprocess.isPending} className="gap-1 text-xs"
             onClick={() => confirmAction({
               title: `Re-score run #${run.id}?`,
@@ -693,9 +800,10 @@ function RunDetail({ runId }: { runId: number }) {
             }, () => reprocess.mutate({ runId }))}>
             <RefreshCw className="size-3" /> Re-score from raw finds
           </Button>
+          )}
         </CardTitle>
         <CardDescription className="text-[11px]">
-          {run.rawFindCount} raw · {run.prospectsCreated} new · {r.prospectsUpdated ?? 0} updated
+          {run.rawFindCount} raw{already ? ` · ${already} already in People` : ""} · {run.prospectsCreated} new · {r.prospectsUpdated ?? 0} updated
           {r.prospectsSkipped ? ` · ${r.prospectsSkipped} not saved` : ""}
           {r.accountsCreated ? ` · ${r.accountsCreated} companies` : ""}
           {" "}· {run.highConfidenceCount} high · {run.mediumConfidenceCount} med · {run.lowConfidenceCount} low · {run.durationMs}ms
@@ -729,6 +837,7 @@ function RunDetail({ runId }: { runId: number }) {
                     <span className="truncate">
                       {[[f.firstName, f.lastName].filter(Boolean).join(" ") || "(no name)", f.title, f.companyName, f.location].filter(Boolean).join(" · ")}
                     </span>
+                    <KnownBadge knownAs={f.knownAs} prospectId={f.knownProspectId} />
                     {f.sourceUrl && /^https?:\/\//i.test(f.sourceUrl) && (
                       <a href={f.sourceUrl} target="_blank" rel="noopener noreferrer" className="ml-auto shrink-0 text-muted-foreground hover:text-foreground" aria-label={`Source for ${[f.firstName, f.lastName].filter(Boolean).join(" ") || f.companyName || "this find"}`}>
                         <ExternalLink className="size-3" aria-hidden="true" />

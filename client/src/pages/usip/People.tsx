@@ -30,6 +30,9 @@ import { CompanyLogo } from "@/components/usip/company/CompanyLogo";
 import { BatchPhotoUpload } from "@/components/usip/BatchPhotoUpload";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
+import { useSourceBudgets } from "@/components/usip/SpendPreview";
+import { enrichFullyText } from "@shared/spendPreview";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1190,6 +1193,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
   // company) and the Professional summary (LinkedIn About / headline).
   const { data: enr } = trpc.linkedinEnrichment.getProspectEnrichment.useQuery({ prospectId: p.id });
   const utils = trpc.useUtils();
+  const enrichBudgets = useSourceBudgets();
   const enrichFull = trpc.prospects.enrichFull.useMutation({
     onSuccess: (r, vars) => {
       const changed = (r.decisions as Array<{ action: string; field: string }>).filter((x) => x.action === "filled" || x.action === "replaced");
@@ -1383,7 +1387,8 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           variant="secondary"
           className="w-full gap-1.5"
           disabled={enrichFull.isPending}
-          onClick={() => enrichFull.mutate({ prospectId: p.id })}
+          // What it can spend, said first (audit 2026-10-20, F8).
+          onClick={() => confirmAction({ title: `Enrich ${fullName || "this person"} fully?`, description: enrichFullyText(1, enrichBudgets.data), confirmLabel: "Spend and enrich" }, () => enrichFull.mutate({ prospectId: p.id }))}
         >
           {enrichFull.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
           {enrichFull.isPending ? "Enriching…" : "Enrich fully (all sources)"}

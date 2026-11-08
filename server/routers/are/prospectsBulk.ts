@@ -30,6 +30,7 @@ import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS } from "@shared/areStepCade
 import { areEngineLogs, emailSuppressions, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { recordAudit } from "../../audit";
+import { noteAuditRecorded } from "../../_core/requestContext";
 import { upsertPersonForRow, type QueuePersonShape } from "../../services/personLink";
 import { callerContextFor, enqueueJob, findActiveJob, registerJobKind } from "../../services/jobs/runner";
 
@@ -204,6 +205,9 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
     }
     const payload: BulkJobPayload = { campaignId: input.campaignId, action: input.action as BulkJobPayload["action"], prospectIds: ids, force: input.force ?? false };
     const { job } = await enqueueJob({ workspaceId: ws, userId: ctx.user.id, kind: "are.bulk", payload, total: ids.length });
+    // The job writes this action's audit row when it finishes, so the request
+    // adds no automatic one now (audit 2026-10-20, G49; _core/autoAudit.ts).
+    noteAuditRecorded();
     await emitBulkLog(ws, input.campaignId, "info", `Bulk ${input.action}: ${label} for ${plural(rows.length, "prospect")} — running in the background (job ${job.id})`, { prospectIds: input.prospectIds });
     result.summary = `${label} for ${plural(rows.length, "prospect")} in the background — rows update as each finishes; the campaign log has the outcome`;
     result.ok = rows.length; // accepted, not finished — the summary says so
@@ -347,6 +351,7 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
         if (!r.email && !r.linkedinUrl) throw new Error("no email or LinkedIn URL to suppress");
         await caller.are.execution.addSuppression({
           ...(r.email ? { email: r.email } : {}), ...(r.linkedinUrl ? { linkedinUrl: r.linkedinUrl } : {}),
+          ...(r.personProspectId ? { personId: r.personProspectId } : {}),
           reason: areReason,
         } as never);
         if (r.email) {
@@ -354,7 +359,11 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
           const [existing] = await db.select({ id: emailSuppressions.id }).from(emailSuppressions)
             .where(and(eq(emailSuppressions.workspaceId, ws), eq(emailSuppressions.email, email))).limit(1);
           if (!existing) {
-            await db.insert(emailSuppressions).values({ workspaceId: ws, email, reason: siteReason, notes: (input.reason ?? `ARE bulk suppress (campaign ${input.campaignId})`).slice(0, 512) } as never);
+            await db.insert(emailSuppressions).values({
+              workspaceId: ws, email, reason: siteReason, notes: (input.reason ?? `ARE bulk suppress (campaign ${input.campaignId})`).slice(0, 512),
+              // The person (F7), never for a bounce.
+              prospectId: siteReason === "bounce" ? null : r.personProspectId ?? null,
+            } as never);
           }
         }
         // And stop anything already scheduled for them in this campaign.

@@ -10,27 +10,33 @@
  *
  * The runEnrollment procedure is also called by the hourly cron in server/_core/index.ts
  *
- * Segments read the CRM contacts table, not People (audit 2026-10-20, P21), so
- * a rule enrols contacts only. Moving it to People would enrol a new, larger
- * set on the next hourly run without anyone turning a rule on again, so it
- * stays on contacts and the screens say so.
+ * Segments are on People since migration 0363 (audit 2026-10-20, P21, F42):
+ * a People segment's rule enrols People (enrollments.prospectId) through the
+ * same screen every enrolment passes. Moving a segment would have enrolled a
+ * new, larger set on the next hourly run without anyone choosing it, so every
+ * rule on a moved segment arrived switched off (offReason "moved_to_people"),
+ * for a person to turn on again after the dry run (segmentRules.preview:
+ * would enrol X, Y already enrolled, Z blocked). A segment still on contacts
+ * enrols contacts as before. While outbound is paused, no rule enrols anyone.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { notifyOwner } from "../_core/notification";
 import { z } from "zod";
 import {
   audienceSegments,
   contacts,
   enrollments,
+  prospects,
   segmentSequenceRules,
   sequences,
   type AudienceSegment,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { screenEnrollmentCandidates } from "./sequences";
-import { type SegmentRule } from "@shared/segmentRules";
+import { segmentSubjectOf, unmappedRules, unmappedSentence, type SegmentRule, type SegmentSubject } from "@shared/segmentRules";
+import { isOutboundPaused, OUTBOUND_PAUSED_MESSAGE } from "../services/outboundPause";
 import { segmentWhere } from "../services/segmentSql";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
@@ -43,14 +49,16 @@ type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Screened = Awaited<ReturnType<typeof screenEnrollmentCandidates>>;
 
 /**
- * The segment's contacts now, as ids, or why it gives none. The hourly run and
- * the count shown before a rule is turned on share it (audit 2026-10-20, P57),
- * so the number someone confirms comes from the run's own match.
+ * The segment's members now, as ids on the table it reads, or why it gives
+ * none. The hourly run and the count shown before a rule is turned on share
+ * it (audit 2026-10-20, P57), so the number someone confirms comes from the
+ * run's own match.
  */
-async function segmentContactIds(
+async function segmentMemberIds(
   db: Db, workspaceId: number, segment: AudienceSegment | undefined,
-): Promise<{ refused: string; ids: number[] } | { refused: null; ids: number[] }> {
-  if (!segment) return { refused: "The segment no longer exists.", ids: [] };
+): Promise<{ refused: string | null; ids: number[]; subject: SegmentSubject }> {
+  const subject = segmentSubjectOf(segment?.subject);
+  if (!segment) return { refused: "The segment no longer exists.", ids: [], subject };
 
   const segRules = (segment.rules as Rule[]) ?? [];
   const matchType = (segment.matchType ?? "all") as "all" | "any";
@@ -58,34 +66,85 @@ async function segmentContactIds(
   // A segment with no rules matches EVERY contact (audit 2026-10-20, P1):
   // one saved by mistake enrolled the whole base on the next hourly run.
   if (segRules.length === 0) {
-    return { refused: "The segment has no rules, so it would match every contact. Nothing was enrolled.", ids: [] };
+    return { refused: "The segment has no rules, so it would match every contact. Nothing was enrolled.", ids: [], subject };
+  }
+  // A rule moved from contacts that People have no field for (P21): the
+  // segment does not mean what it said until someone edits it, so it enrols
+  // no one meanwhile.
+  const unmapped = unmappedRules(segRules, subject);
+  if (unmapped.length > 0) {
+    return { refused: `${unmappedSentence(unmapped)}, so this segment enrols no one until it is edited.`, ids: [], subject };
   }
 
-  // The segment's contacts, found in SQL: ids only, never the whole table (P52).
-  const where = segmentWhere(workspaceId, segRules, matchType, await getWorkspaceTimezone(workspaceId));
-  const matchingContacts = where ? await db.select({ id: contacts.id }).from(contacts).where(where) : [];
-  return { refused: null, ids: matchingContacts.map((c) => c.id) };
+  // The segment's members, found in SQL: ids only, never the whole table (P52).
+  const where = segmentWhere(workspaceId, segRules, matchType, await getWorkspaceTimezone(workspaceId), subject);
+  if (!where) return { refused: null, ids: [], subject };
+  const matching = subject === "people"
+    ? await db.select({ id: prospects.id }).from(prospects).where(where)
+    : await db.select({ id: contacts.id }).from(contacts).where(where);
+  return { refused: null, ids: matching.map((c) => c.id), subject };
 }
 
+/** Everyone a segment of this subject could hold: the "is that everyone?" check. */
+async function membersInWorkspace(db: Db, workspaceId: number, subject: SegmentSubject): Promise<number> {
+  const [{ n }] = subject === "people"
+    ? await db.select({ n: sql<number>`count(*)` }).from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected"))))
+    : await db.select({ n: sql<number>`count(*)` }).from(contacts).where(eq(contacts.workspaceId, workspaceId));
+  return Number(n);
+}
+
+/** People shown by name in a dry run, at most. */
+const DRY_RUN_SAMPLE = 10;
+
 /**
- * What turning a rule on would do now: the count a person confirms first (P57).
+ * What turning a rule on would do now: the count a person confirms first
+ * (P57), and the auto-enrol dry run (F42): would enrol X, Y already
+ * enrolled, Z blocked, and why.
  *
- * `wouldEnrol` is at most: the matching contacts not already in the sequence.
- * The run also leaves out invalid addresses, the suppressed and anyone a
- * campaign is working, but that screen links contacts to People rows as it
- * goes, and a count must not write.
+ * On a People segment it runs the enrolment's own screen, which only reads
+ * for People, so `wouldEnrol` is exact and `blocked` names each reason, with
+ * the first few people it would enrol. On a contacts segment `wouldEnrol` is
+ * at most: that screen links contacts to People rows as it goes, and a count
+ * must not write.
  */
 export async function previewRule(db: Db, workspaceId: number, segmentId: number, sequenceId: number) {
-  const [[segment], [seq], [{ n }]] = await Promise.all([
+  const [[segment], [seq]] = await Promise.all([
     db.select().from(audienceSegments)
       .where(and(eq(audienceSegments.id, segmentId), eq(audienceSegments.workspaceId, workspaceId))).limit(1),
     db.select({ status: sequences.status }).from(sequences)
       .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, workspaceId))).limit(1),
-    db.select({ n: sql<number>`count(*)` }).from(contacts).where(eq(contacts.workspaceId, workspaceId)),
   ]);
-  const base = { contactsInWorkspace: Number(n), sequenceStatus: seq?.status ?? null };
-  const found = await segmentContactIds(db, workspaceId, segment);
+  const subject = segmentSubjectOf(segment?.subject);
+  const inWorkspace = await membersInWorkspace(db, workspaceId, subject);
+  const base = {
+    subject,
+    contactsInWorkspace: inWorkspace,
+    sequenceStatus: seq?.status ?? null,
+    exact: subject === "people",
+    blocked: { invalidEmail: 0, inCampaign: 0, suppressed: 0 },
+    sample: [] as Array<{ id: number; name: string }>,
+  };
+  const found = await segmentMemberIds(db, workspaceId, segment);
   if (found.refused !== null) return { ...base, refused: found.refused, matched: 0, alreadyEnrolled: 0, wouldEnrol: 0 };
+  if (subject === "people") {
+    const screened = found.ids.length
+      ? await screenEnrollmentCandidates(db, workspaceId, sequenceId, { contactIds: [], leadIds: [], prospectIds: found.ids })
+      : { prospectIds: [] as number[], skipped: { alreadyEnrolled: 0, invalidEmail: 0, inCampaign: 0, suppressed: 0 } };
+    const names = screened.prospectIds.length
+      ? await db.select({ id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName }).from(prospects)
+        .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, screened.prospectIds.slice(0, DRY_RUN_SAMPLE))))
+      : [];
+    return {
+      ...base,
+      refused: null,
+      matched: found.ids.length,
+      alreadyEnrolled: screened.skipped.alreadyEnrolled,
+      wouldEnrol: screened.prospectIds.length,
+      blocked: { invalidEmail: screened.skipped.invalidEmail, inCampaign: screened.skipped.inCampaign, suppressed: screened.skipped.suppressed },
+      sample: names.map((p) => ({ id: p.id, name: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || `Person #${p.id}` })),
+    };
+  }
   const enrolled: Array<{ contactId: number | null }> = found.ids.length
     ? await db.select({ contactId: enrollments.contactId }).from(enrollments).where(and(
         eq(enrollments.workspaceId, workspaceId),
@@ -104,12 +163,13 @@ export async function previewRule(db: Db, workspaceId: number, segmentId: number
  * hourly run enrolled them all with no number on the screen first.
  */
 async function assertConfirmedCount(db: Db, workspaceId: number, segmentId: number, sequenceId: number, confirmed: number | undefined) {
-  const { wouldEnrol } = await previewRule(db, workspaceId, segmentId, sequenceId);
+  const { wouldEnrol, subject } = await previewRule(db, workspaceId, segmentId, sequenceId);
+  const who = (n: number) => (subject === "people" ? (n === 1 ? "person" : "people") : (n === 1 ? "contact" : "contacts"));
   if (confirmed == null) {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Turning this rule on would enrol up to ${wouldEnrol} contact${wouldEnrol === 1 ? "" : "s"}. Check the count and confirm it first.` });
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Turning this rule on would enrol up to ${wouldEnrol} ${who(wouldEnrol)}. Check the count and confirm it first.` });
   }
   if (wouldEnrol > confirmed) {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `This rule would now enrol up to ${wouldEnrol} contacts, more than the ${confirmed} you confirmed. Check the count and confirm again.` });
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `This rule would now enrol up to ${wouldEnrol} ${who(wouldEnrol)}, more than the ${confirmed} you confirmed. Check the count and confirm again.` });
   }
 }
 
@@ -131,6 +191,18 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
     .where(and(eq(segmentSequenceRules.workspaceId, workspaceId), eq(segmentSequenceRules.enabled, true)));
 
   if (rules.length === 0) return { enrolled: 0, peopleSkipped: 0, rulesRefused: 0, rules: 0 };
+
+  // While outbound is paused no rule enrols anyone (owner, 2026-10-06; the
+  // same hold the workflow and score-threshold enrolments keep): an enrolment
+  // made now would send the moment the pause lifts. Each rule says why.
+  if (await isOutboundPaused(workspaceId)) {
+    for (const rule of rules) {
+      await db.update(segmentSequenceRules)
+        .set({ lastRunAt: new Date(), lastRunSummary: { at: new Date().toISOString(), matched: 0, enrolled: 0, refused: OUTBOUND_PAUSED_MESSAGE } } as never)
+        .where(and(eq(segmentSequenceRules.id, rule.id), eq(segmentSequenceRules.workspaceId, workspaceId)));
+    }
+    return { enrolled: 0, peopleSkipped: 0, rulesRefused: rules.length, rules: rules.length };
+  }
 
   // Get all active sequences for this workspace (to verify they're still active)
   const sequenceIds = Array.from(new Set(rules.map((r) => r.sequenceId)));
@@ -163,7 +235,7 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
       continue;
     }
 
-    const found = await segmentContactIds(db, workspaceId, segmentMap.get(rule.segmentId));
+    const found = await segmentMemberIds(db, workspaceId, segmentMap.get(rule.segmentId));
     if (found.refused !== null) {
       totalRefused++;
       await record({ matched: 0, enrolled: 0, refused: found.refused });
@@ -177,26 +249,29 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
 
     // The same screen every enrolment passes (P2): invalid addresses, people
     // already in the sequence (by id or email), people an ARE campaign is
-    // working, and anyone suppressed. This run skipped all four.
+    // working, and anyone suppressed. This run skipped all four. A People
+    // segment enrols the People themselves (P21).
+    const people = found.subject === "people";
     const screened = await screenEnrollmentCandidates(db, workspaceId, rule.sequenceId, {
-      contactIds: found.ids, leadIds: [], prospectIds: [],
+      contactIds: people ? [] : found.ids, leadIds: [], prospectIds: people ? found.ids : [],
     });
     const skipped = screened.skipped;
     totalSkipped += peopleSkippedIn(skipped);
 
     const now = new Date();
-    if (screened.contactIds.length > 0) {
-      await db.insert(enrollments).values(screened.contactIds.map((contactId) => ({
+    const enrolling = people ? screened.prospectIds : screened.contactIds;
+    if (enrolling.length > 0) {
+      await db.insert(enrollments).values(enrolling.map((id) => ({
         workspaceId,
         sequenceId: rule.sequenceId,
-        contactId,
+        ...(people ? { prospectId: id } : { contactId: id }),
         status: "active" as const,
         currentStep: 0,
         nextActionAt: now,
       })));
     }
-    totalEnrolled += screened.contactIds.length;
-    await record({ matched, enrolled: screened.contactIds.length, skipped }, screened.contactIds.length);
+    totalEnrolled += enrolling.length;
+    await record({ matched, enrolled: enrolling.length, skipped, subject: found.subject }, enrolling.length);
   }
 
   return { enrolled: totalEnrolled, peopleSkipped: totalSkipped, rulesRefused: totalRefused, rules: rules.length };
@@ -221,7 +296,7 @@ export const segmentRulesRouter = router({
     const sequenceIds = Array.from(new Set(rules.map((r) => r.sequenceId)));
     const [segs, seqs] = await Promise.all([
       segmentIds.length
-        ? db.select({ id: audienceSegments.id, name: audienceSegments.name }).from(audienceSegments)
+        ? db.select({ id: audienceSegments.id, name: audienceSegments.name, subject: audienceSegments.subject }).from(audienceSegments)
             .where(and(eq(audienceSegments.workspaceId, ctx.workspace.id), inArray(audienceSegments.id, segmentIds)))
         : [],
       sequenceIds.length
@@ -234,6 +309,8 @@ export const segmentRulesRouter = router({
     return rules.map((r) => ({
       ...r,
       segmentName: segById.get(r.segmentId)?.name ?? null,
+      // What the rule enrols: People, or CRM contacts for a segment not moved (P21).
+      segmentSubject: segById.has(r.segmentId) ? segmentSubjectOf(segById.get(r.segmentId)!.subject) : null,
       sequenceName: seqById.get(r.sequenceId)?.name ?? null,
       sequenceStatus: seqById.get(r.sequenceId)?.status ?? null,
     }));
@@ -275,7 +352,7 @@ export const segmentRulesRouter = router({
         }
         await db
           .update(segmentSequenceRules)
-          .set({ enabled: input.enabled })
+          .set({ enabled: input.enabled, ...(input.enabled ? { offReason: null } : {}) })
           .where(and(eq(segmentSequenceRules.id, input.id), eq(segmentSequenceRules.workspaceId, ctx.workspace.id)));
         return { ok: true };
       }
@@ -313,7 +390,7 @@ export const segmentRulesRouter = router({
         if (existing) {
           await tx
             .update(segmentSequenceRules)
-            .set({ enabled: input.enabled })
+            .set({ enabled: input.enabled, ...(input.enabled ? { offReason: null } : {}) })
             .where(and(eq(segmentSequenceRules.id, existing.id), eq(segmentSequenceRules.workspaceId, ctx.workspace.id)));
         } else {
           await tx.insert(segmentSequenceRules).values({

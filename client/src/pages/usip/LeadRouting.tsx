@@ -29,6 +29,8 @@ type Rule = {
   conditions: EditableConditions;
   strategy: "round_robin" | "geography" | "industry" | "direct";
   targetUserIds: number[];
+  /** Capacity-aware routing (audit F43): most open leads per target; null = no limit. */
+  capacityPerRep: number | null;
 };
 
 export default function LeadRouting() {
@@ -64,7 +66,7 @@ export default function LeadRouting() {
         icon={<GitMerge className="size-5" />}
       >
         {isAdmin && (
-          <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [], any: [] }, strategy: "round_robin", targetUserIds: [] })}>
+          <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [], any: [] }, strategy: "round_robin", targetUserIds: [], capacityPerRep: null })}>
             <Plus className="size-4" /> New rule
           </Button>
         )}
@@ -154,6 +156,7 @@ export default function LeadRouting() {
                         conditions: editableConditions(r.conditions),
                         strategy: r.strategy as any,
                         targetUserIds: targets,
+                        capacityPerRep: (r as { capacityPerRep?: number | null }).capacityPerRep ?? null,
                       })}><Pencil className="size-3.5" /> Edit</Button>
                       <Button aria-label={`Delete rule ${r.name}`} size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?`, description: "This routing rule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
                       </>)}
@@ -228,6 +231,15 @@ function RuleEditor({ rule, position, members, onClose, onSaved }: { rule: Rule 
                 );
               })}
               {pickable.length === 0 && <div className="text-xs text-muted-foreground">No workspace members loaded.</div>}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="rule-capacity">Most open leads per target (optional)</Label>
+            <Input id="rule-capacity" type="number" min={1} className="max-w-[160px]" value={draft.capacityPerRep ?? ""}
+              onChange={(e) => setDraft({ ...draft, capacityPerRep: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value) || 1)) })} placeholder="No limit" />
+            <div className="text-xs text-muted-foreground">
+              A target who already owns this many open leads (new, working or qualified) is passed by; when every target is full, the next rule decides. Blank routes as before.
             </div>
           </div>
 

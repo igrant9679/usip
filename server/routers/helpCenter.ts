@@ -13,9 +13,21 @@ import {
   helpArticles,
   helpCategories,
   helpSearchLog,
+  tours,
   userLearningPreferences,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { assertInWorkspace } from "../services/foreignIds";
+
+/**
+ * An article's category and tour are this workspace's (audit 2026-10-20,
+ * X1.1): both are per-workspace rows, and another's id filed the article
+ * under that tenant's category or tour.
+ */
+async function articleLinksHere(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, input: { categoryId?: number; associatedTourId?: number }): Promise<void> {
+  await assertInWorkspace(db, helpCategories, input.categoryId, workspaceId, "help category");
+  await assertInWorkspace(db, tours, input.associatedTourId, workspaceId, "tour");
+}
 import { invokeLLM } from "../_core/llm";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
@@ -211,6 +223,7 @@ export const helpCenterRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await articleLinksHere(db, ctx.workspace.id, input);
       const { id, ...rest } = input;
       const payload = {
         ...rest,
@@ -686,6 +699,7 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await articleLinksHere(db, ctx.workspace.id, input);
       const payload = { ...input, workspaceId: ctx.workspace.id, authorId: ctx.user.id, tags: input.tags ?? [] };
       const [res] = await db.insert(helpArticles).values(payload);
       return { id: (res as any).insertId as number };
@@ -710,6 +724,7 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await articleLinksHere(db, ctx.workspace.id, input);
       const { id, ...rest } = input;
       await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
       await db.update(helpArticles).set(rest).where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, ctx.workspace.id)));

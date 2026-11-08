@@ -88,7 +88,7 @@ import {
 } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { stageIndexFor } from "./_core/stageSemantics";
-import { mergeOwnRequestContext } from "./_core/requestContext";
+import { mergeOwnRequestContext, mergeRequestContext } from "./_core/requestContext";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
@@ -113,6 +113,7 @@ import {
   sequenceCompletionVerdict,
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
+import { addVisitorIdsToEmail } from "./services/visitorLinks";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
 import { describeSuppression, findSuppression } from "./services/suppression";
 import { DISPATCH_INTERRUPTED, HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
@@ -1166,7 +1167,7 @@ async function enrollApprovedForCampaignUnlocked(
       // Suppressed? Skip rather than enroll. The ONE check (A8): both lists,
       // by address, LinkedIn profile and company domain — this read the
       // campaign list by address only, and never the workspace list.
-      const suppression = await findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain }, "any");
+      const suppression = await findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain, personId: row.personProspectId ?? null }, "any");
       if (suppression) {
         await db
           .update(prospectQueue)
@@ -2017,7 +2018,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           }
           // The ONE suppression check, LinkedIn channel (A8): LinkedIn steps
           // checked no list at all. A bounce alone does not stop this channel.
-          const liSuppression = await findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain }, "linkedin");
+          const liSuppression = await findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain, personId: lp.personProspectId ?? null }, "linkedin");
           if (liSuppression) {
             await db.update(areExecutionQueue)
               .set({ status: "skipped", failureReason: `On suppression list (${describeSuppression(liSuppression)})`.slice(0, 500), executedAt: new Date() })
@@ -2151,7 +2152,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         // enrolment): the ONE check (A8) — both lists, by address, LinkedIn
         // profile and company domain. The workspace list was added here on
         // 2026-09-20; the profile and domain columns were never read.
-        const suppression = await findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email");
+        const suppression = await findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain, personId: p.personProspectId ?? null }, "email");
         if (suppression) {
           await db
             .update(areExecutionQueue)
@@ -2228,6 +2229,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             : `${html}\n${optOut.html}`;
           textOut = `${textOut}\n\n${optOut.text}`;
         }
+        // A signed visitor id on links to the workspace's own site (audit
+        // 2026-10-20, P5/P88/F40), for the person this campaign row is. A
+        // query parameter on their own domain, not a tracking-domain rewrite,
+        // and only while the workspace's click tracking is on.
+        if (p.personProspectId) {
+          const decorated = await addVisitorIdsToEmail(wsId, { prospectId: p.personProspectId }, { html, text: textOut });
+          html = decorated.html;
+          textOut = decorated.text;
+        }
 
         /**
          * CLAIM THE ROW BEFORE SENDING — this is cold outbound, so a duplicate
@@ -2297,6 +2307,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
               // inbox a prospect had heard from.
               sendingAccountId: sendRes.accountId ?? null,
               fromEmail: sendRes.fromEmail ?? null,
+              // The sent email's Message-ID (audit 2026-10-20, F5): campaign
+              // sends kept none, so a reply could only be matched by address,
+              // to the newest queue row, whichever campaign it was.
+              externalId: sendRes.messageId ? sendRes.messageId.slice(0, 256) : null,
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
@@ -2502,7 +2516,18 @@ type DiscoveryState = {
   lastRunNew?: number;
   /** Sources resting after empty runs, by source id (A25). `held` = the vendor asked for the wait, not an empty run. */
   src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
+  /** When each source last returned people and they were saved, by source id (audit F12: "true last success"). */
+  ok?: Record<string, number>;
 };
+
+/**
+ * The spend-ledger feature a discovery source's paid calls are recorded under
+ * while it runs for a campaign (audit 2026-10-20, F12: tokens spent per
+ * source). services/spend reads the request context's feature when a call
+ * names none; this names the source and the campaign, so the campaign's
+ * source health can sum each source's tokens.
+ */
+export const DISCOVERY_SOURCE_FEATURE = (sourceId: string, campaignId: number) => `are.discovery.${sourceId}#c${campaignId}`;
 
 /** A campaign whose last discovery run found nobody new waits this long (A25). */
 export const DISCOVERY_REST_MS = 30 * 60 * 1000;
@@ -2828,6 +2853,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   let sourcesAsked = 0;
   let sourcesNotAsked = 0;
   const perSource: Record<string, { raw: number; new: number; error?: string; skipped?: string }> = {};
+  // Last success per source (F12), carried from the stored state.
+  const lastOk: Record<string, number> = { ...(persistedState.ok ?? {}) };
   // F17: the campaign's places, classified once, and what the check found.
   const targetPlaces = parseTargetPlaces(geos);
   const territoryMode = territoryModeOf(campaign.icpOverrides);
@@ -2850,7 +2877,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
     let value: SourceResult;
     try {
-      value = await taskFactories[id](remaining);
+      // Tokens a source spends are recorded under its own feature (F12).
+      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](remaining));
     } catch (err) {
       const empty = (sourceState[id]?.empty ?? 0) + 1;
       sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
@@ -2947,10 +2975,14 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       // claimed in it (A34): the save does not read the queue again.
       await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored, { identityChecked: true });
       totalNew += scored.length;
-      perSource[sourceType] = { raw: raw.length, new: scored.length };
+      // Keyed by the source's id, as every other perSource entry is: the
+      // scrape-job name ("linkedin_people") hid LinkedIn's successful attempts
+      // from the campaign's source health, which reads by id (F12).
+      perSource[id] = { raw: raw.length, new: scored.length };
+      if (raw.length > 0) lastOk[id] = Date.now();
     } catch (e) {
       console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
-      perSource[sourceType] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
+      perSource[id] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
       await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
         `Failed to save ${sourceType} results: ${(e as Error)?.message ?? e}`, errorDetails(e));
     }
@@ -2992,6 +3024,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     lastRunAt: nothingAsked ? persistedState.lastRunAt : now,
     lastRunNew: nothingAsked ? persistedState.lastRunNew : totalNew,
     src: sourceState,
+    ok: lastOk,
     // The QuickEnrich page cursor rides the same JSON: the advanced state
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).

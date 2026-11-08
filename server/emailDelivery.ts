@@ -125,7 +125,7 @@ function fillSenderTokens<T extends SendEmailOptions>(
 export async function sendCampaignEmailViaPool(
   workspaceId: number,
   opts: SendEmailOptions & { fromName?: string; logMeta?: EmailLogMeta },
-): Promise<SendEmailResult & { accountId?: number; fromEmail?: string; blocked?: "daily" | "hourly" }> {
+): Promise<SendEmailResult & { accountId?: number; fromEmail?: string; blocked?: "daily" | "hourly"; messageId?: string }> {
   // The scrub runs AFTER the account is chosen (step 3c below) so the sender
   // tokens can be filled from it first. The no-accounts fallback scrubs
   // inside sendWorkspaceEmail, after filling them from the SMTP config.
@@ -167,8 +167,12 @@ export async function sendCampaignEmailViaPool(
      * refused connection, login or recipient) keeps the retryable prefix; any
      * other is "Send state unknown", which nothing retries by itself.
      */
+    // The sent email's Message-ID (the RFC header where the adapter knows it,
+    // else the provider's id), for the engine to keep on its queue row so a
+    // reply names this exact send (audit 2026-10-20, F5).
+    let sentMessageId: string | undefined;
     try {
-      await adapter.sendEmail({
+      const sent = await adapter.sendEmail({
         to: Array.isArray(opts.to) ? opts.to[0] : opts.to,
         subject: opts.subject,
         bodyHtml: opts.html,
@@ -185,6 +189,7 @@ export async function sendCampaignEmailViaPool(
         // rather than as an anonymous "other".
         logMeta: opts.logMeta ?? { source: opts.logSource ?? "campaign", sourceLabel: opts.logLabel ?? null },
       } as any);
+      sentMessageId = (sent?.rfcMessageId || sent?.messageId) || undefined;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return isDefinitelyNotSent(err)
@@ -221,7 +226,7 @@ export async function sendCampaignEmailViaPool(
       console.error(`[emailDelivery] sent via account ${chosen.id}; recording the daily stat failed:`, e);
     }
 
-    return { ok: true, accountId: chosen.id, fromEmail: (chosen as any).fromEmail };
+    return { ok: true, accountId: chosen.id, fromEmail: (chosen as any).fromEmail, messageId: sentMessageId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: `Pool send failed: ${msg}` };
