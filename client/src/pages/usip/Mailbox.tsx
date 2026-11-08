@@ -16,6 +16,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { trpc } from "@/lib/trpc";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -1148,6 +1149,8 @@ export default function MailboxPage() {
       <PageHeader title="My Mailbox" description="Manage your connected email accounts, compose new messages, and track replies across all inboxes. All sent emails are automatically logged to the relevant contact and deal records." pageKey="mailbox" 
         icon={<Mail className="size-5" />}
       />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="mailbox" />
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
 
         {/* Left panel */}

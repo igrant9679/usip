@@ -162,7 +162,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Analytics
 
-**Analytics** (/v2/analytics) is the one cross-channel funnel: five bands over ONE population — the people the engine sourced — all time, every campaign, stated on the page. A campaign's Step performance tab answers a narrower question (one campaign's journeys, step by step) and is not expected to match band for band. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards. **Engine Performance** (/are/performance) shows what the engine sent, booked and learned. **Forecast** (/forecast) projects revenue from the open pipeline. **Email Analytics** covers drafts and CRM sends only.
+**Analytics** (/v2/analytics) is the one cross-channel funnel: five bands over ONE population — the people the engine sourced — all time, every campaign, stated on the page. A campaign's Step performance tab answers a narrower question (one campaign's journeys, step by step) and is not expected to match band for band. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards. **Engine Performance** (/are/performance) shows what the engine sent, booked and learned. **Forecast** (/forecast) projects revenue from the open pipeline. **Email Analytics** (/email-analytics) shows sends, opens, clicks, replies and bounces, with sequence, CRM and AI-draft email and Revenue Engine campaign email counted apart, reply rates from matched replies only, and the same numbers as the Emails page. Campaign links are not click-tracked, so a campaign's clicks show as site visits from its links.
 
 ## Configuration
 

@@ -9,6 +9,7 @@ import {
   ChevronUp,
   Mail,
   MousePointer,
+  Reply,
   Send,
   ShieldAlert,
   TrendingUp,
@@ -151,34 +152,41 @@ export default function EmailAnalytics() {
     <Shell title="Email Analytics">
       <PageHeader
         title="Email Analytics" pageKey="email-analytics"
-        description="Open rates, click rates and deliverability for the mail this workspace sends: sequence, CRM and AI-draft email, and Revenue Engine campaign email, counted on the workspace's days."
+        description="What the mail this workspace sends does: sends, opens, clicks, replies and deliverability. Sequence, CRM and AI-draft email and Revenue Engine campaign email are counted apart, replies from matched replies only, days on the workspace's time zone. The Emails page shows the same numbers."
       
         icon={<BarChart2 className="size-5" />}
       />
 
-      {/* KPI Cards */}
-      <div className="px-6 pt-2 grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Draft-path and Revenue Engine mail are counted apart, each rate over
-            the sends that can produce it (audit 2026-10-20, O42). */}
+      {/* KPI Cards — the metrics module's numbers (audit 2026-10-20, F44/O42),
+          the ones the Emails page shows. Draft-path and Revenue Engine mail are
+          counted apart, each rate over the sends that can produce it. */}
+      <div className="px-6 pt-2 grid grid-cols-2 lg:grid-cols-5 gap-4">
         <KpiCard
           label="Emails Sent"
           value={summary?.totalSent ?? "—"}
-          sub={summary ? `${summary.draftSent} sequence & CRM · ${summary.campaignSent} Revenue Engine` : undefined}
+          sub={summary ? `Every send path. Tracked: ${summary.draftSent} sequence & CRM · ${summary.campaignSent} Revenue Engine` : undefined}
           icon={Send}
         />
         <KpiCard
           label="Open Rate"
           value={summary ? `${summary.openRate}%` : "—"}
-          sub={summary ? `${summary.uniqueOpened} opened · sequence & CRM ${summary.draftOpenRate}%, Revenue Engine ${summary.campaignOpenRate}%` : undefined}
+          sub={summary ? `${summary.uniqueOpened} of ${summary.trackedSent} tracked sends · sequence & CRM ${summary.draftOpenRate}%, Revenue Engine ${summary.campaignOpenRate}%` : undefined}
           icon={Mail}
           accent="bg-blue-500/10"
         />
         <KpiCard
           label="Click Rate"
           value={summary ? `${summary.clickRate}%` : "—"}
-          sub={summary ? `${summary.uniqueClicked} of ${summary.draftSent} sequence & CRM emails; Revenue Engine sends record no clicks here` : undefined}
+          sub={summary ? `${summary.uniqueClicked} of ${summary.draftSent} sequence & CRM emails. Revenue Engine links aren't click-tracked: ${summary.campaignSiteVisitors} of ${summary.campaignPeople} people visited your site from a campaign link` : undefined}
           icon={MousePointer}
           accent="bg-green-500/10"
+        />
+        <KpiCard
+          label="Reply Rate"
+          value={summary ? `${summary.draftReplyRate}%` : "—"}
+          sub={summary ? `${summary.draftReplied} of ${summary.draftSent} sequence & CRM emails · Revenue Engine ${summary.campaignReplyRate}% (${summary.campaignRepliedPeople} of ${summary.campaignPeople} people). Matched replies only` : undefined}
+          icon={Reply}
+          accent="bg-amber-500/10"
         />
         <KpiCard
           label="Total Events"

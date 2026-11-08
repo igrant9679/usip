@@ -32,6 +32,7 @@ import { workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { remindableMeetingStatuses } from "@shared/meetingStatus";
 import { genuineReplyScope, genuineSocialReplyScope } from "../services/replyScope";
+import { countReplies, emailsSent } from "../services/activityMetrics";
 
 const EMPTY = {
   totalNeedingYou: 0,
@@ -140,12 +141,12 @@ export const attentionRouter = router({
        * draft-matched or campaign-matched (0174) — never all inbound, which
        * would count the owner's private mail as "replies" (the 75k-row trap).
        */
-      db.select({ n: sql<number>`count(*)` }).from(emailLog)
-        .where(and(eq(emailLog.workspaceId, ws), eq(emailLog.status, "sent"), gte(emailLog.sentAt, since))),
+      // Emails sent and replies, the last 24 hours: the metrics module's
+      // definitions (audit 2026-10-20, F44), as every other screen counts them.
+      emailsSent(db, ws, { window: { start: since } }).then((r) => [{ n: r.sent }]),
       db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
         .where(and(eq(prospectQueue.workspaceId, ws), gte(prospectQueue.createdAt, since))),
-      db.select({ n: sql<number>`count(*)` }).from(emailReplies)
-        .where(and(eq(emailReplies.workspaceId, ws), genuineReplyScope(), gte(emailReplies.receivedAt, since))),
+      countReplies(db, ws, { start: since }).then((n) => [{ n }]),
       // "Booked" = the attendee has a time (invited/scheduled/rescheduled) —
       // the shared vocabulary's remindable set, NOT a hand-typed list.
       db.select({ n: sql<number>`count(*)` }).from(meetings)

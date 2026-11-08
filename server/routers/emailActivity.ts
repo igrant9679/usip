@@ -32,7 +32,7 @@
  * row's business, because the log row is the one carrying the delivery outcome.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, like, ne, notExists, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiPipelineJobs,
@@ -62,6 +62,7 @@ import { alias } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { genuineReplyScope } from "../services/replyScope";
 import { workspaceProcedure } from "../_core/workspace";
+import { countReplies, emailEngagement, emailsSent } from "../services/activityMetrics";
 import {
   failureReasonFor, feedSourceApplies, mergeFeed,
   type EmailFeedKind, type EmailFeedRow,
@@ -76,6 +77,8 @@ const listInput = z.object({
   search: z.string().default(""),
   campaignId: z.number().optional(),
   contactId: z.number().optional(),
+  /** One sequence's sent mail and drafts (U15): the banner on a sequence links here. */
+  sequenceId: z.number().int().optional(),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
 });
@@ -125,6 +128,7 @@ export const emailActivityRouter = {
       if (input.source !== "all") conds.push(eq(emailLog.source, input.source));
       if (input.campaignId) conds.push(eq(emailLog.campaignId, input.campaignId));
       if (input.contactId) conds.push(eq(emailLog.contactId, input.contactId));
+      if (input.sequenceId) conds.push(eq(emailLog.sequenceId, input.sequenceId));
       if (input.status === "sent") conds.push(eq(emailLog.status, "sent"));
       if (input.status === "failed") conds.push(eq(emailLog.status, "failed"));
       if (term) {
@@ -170,10 +174,14 @@ export const emailActivityRouter = {
           execOpens: areExecutionQueue.openCount,
           execOpenedAt: areExecutionQueue.openedAt,
           stepIndex: areExecutionQueue.stepIndex,
+          // A sequence send logs no label of its own; its sequence's name is
+          // the one people know it by (audit 2026-10-20, U29).
+          sequenceName: sequences.name,
         })
         .from(emailLog)
         .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
         .leftJoin(areExecutionQueue, and(eq(areExecutionQueue.id, emailLog.executionQueueId), eq(areExecutionQueue.workspaceId, emailLog.workspaceId)))
+        .leftJoin(sequences, and(eq(sequences.id, emailLog.sequenceId), eq(sequences.workspaceId, emailLog.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailLog.sentAt), desc(emailLog.id))
         .limit(takePlus);
@@ -184,7 +192,7 @@ export const emailActivityRouter = {
         id: r.id,
         direction: "outbound",
         source: r.source,
-        sourceLabel: r.sourceLabel,
+        sourceLabel: r.sourceLabel ?? r.sequenceName ?? null,
         subject: r.subject,
         preview: r.preview,
         fromEmail: r.fromEmail,
@@ -223,6 +231,7 @@ export const emailActivityRouter = {
         sql`NOT EXISTS (SELECT 1 FROM \`email_log\` l WHERE l.\`draftId\` = ${emailDrafts.id})`,
       ];
       if (input.contactId) conds.push(eq(emailDrafts.toContactId, input.contactId));
+      if (input.sequenceId) conds.push(eq(emailDrafts.sequenceId, input.sequenceId));
       if (input.source === "sequence") conds.push(sql`${emailDrafts.sequenceId} IS NOT NULL`);
       // Exact inverse of the row classification below (sequence wins over
       // ai_draft): the filter used to admit AI-written sequence drafts the
@@ -511,6 +520,33 @@ export const emailActivityRouter = {
   }),
 
   /**
+   * One sequence's drafts that wait (audit 2026-10-20, U15), for the banner on
+   * its page: awaiting review, and approved but not sent. Together they are
+   * exactly what its link lists (/v2/emails?status=awaiting&sequence=<id>,
+   * EMAIL_STATUS_GROUPS.awaiting), counted in SQL.
+   */
+  sequenceDraftsWaiting: workspaceProcedure
+    .input(z.object({ sequenceId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select({ status: emailDrafts.status, n: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(
+          eq(emailDrafts.workspaceId, ctx.workspace.id),
+          eq(emailDrafts.sequenceId, input.sequenceId),
+          inArray(emailDrafts.status, [...WAITING]),
+          // As the feed excludes them: a draft whose send left a log row is that row's story.
+          notExists(db.select({ one: sql`1` }).from(emailLog).where(and(eq(emailLog.draftId, emailDrafts.id), eq(emailLog.workspaceId, emailDrafts.workspaceId)))),
+        ))
+        .groupBy(emailDrafts.status);
+      const byStatus = new Map(rows.map((r) => [String(r.status), num(r.n)]));
+      const of = (st: string) => byStatus.get(st) ?? 0;
+      const review = of("pending_review") + of("ai_pending_review");
+      const approved = of("approved");
+      return { review, approved, total: review + approved, href: `/v2/emails?status=awaiting&sequence=${input.sequenceId}` };
+    }),
+
+  /**
    * Headline numbers and the per-source counts behind the filter chips.
    *
    * Counted across the WHOLE workspace, never across the page — a chip reading
@@ -525,19 +561,16 @@ export const emailActivityRouter = {
       const wsId = ctx.workspace.id;
       const campaignScope = input.campaignId ? eq(emailLog.campaignId, input.campaignId) : undefined;
 
+      // Sent, failed, replies and engagement are the metrics module's (audit
+      // 2026-10-20, F44/O42): Email Analytics, Analytics and Home read the
+      // same functions, so the same number never differs between screens.
       const [bySource, totals, drafts, queued, inbound, engagement] = await Promise.all([
         db
           .select({ source: emailLog.source, count: sql<number>`count(*)` })
           .from(emailLog)
           .where(and(eq(emailLog.workspaceId, wsId), campaignScope))
           .groupBy(emailLog.source),
-        db
-          .select({
-            sent: sql<number>`sum(case when ${emailLog.status} = 'sent' then 1 else 0 end)`,
-            failed: sql<number>`sum(case when ${emailLog.status} = 'failed' then 1 else 0 end)`,
-          })
-          .from(emailLog)
-          .where(and(eq(emailLog.workspaceId, wsId), campaignScope)),
+        emailsSent(db, wsId, { campaignId: input.campaignId }),
         db
           .select({ count: sql<number>`count(*)` })
           .from(emailDrafts)
@@ -554,38 +587,12 @@ export const emailActivityRouter = {
             inArray(areExecutionQueue.status, ["scheduled", "paused"]),
             input.campaignId ? eq(areExecutionQueue.campaignId, input.campaignId) : undefined,
           )),
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(emailReplies)
-          // Genuine replies only (replyScope.ts) — unscoped, this stat said
-          // "74,943 inbound" on the Emails tab while Conversations said 0.
-          .where(and(eq(emailReplies.workspaceId, wsId), genuineReplyScope())),
-        // Open/click rates read the owning rows, which is where the counters
-        // actually live. Drafts and campaign sends are counted together
-        // because the page presents one funnel, not two.
-        Promise.all([
-          db
-            .select({
-              sent: sql<number>`count(*)`,
-              opened: sql<number>`sum(case when ${emailDrafts.openCount} > 0 then 1 else 0 end)`,
-              clicked: sql<number>`sum(case when ${emailDrafts.clickCount} > 0 then 1 else 0 end)`,
-              bounced: sql<number>`sum(case when ${emailDrafts.bouncedAt} is not null then 1 else 0 end)`,
-            })
-            .from(emailDrafts)
-            .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "sent"))),
-          db
-            .select({
-              sent: sql<number>`count(*)`,
-              opened: sql<number>`sum(case when ${areExecutionQueue.openedAt} is not null then 1 else 0 end)`,
-            })
-            .from(areExecutionQueue)
-            .where(and(
-              eq(areExecutionQueue.workspaceId, wsId),
-              eq(areExecutionQueue.channel, "email"),
-              eq(areExecutionQueue.status, "sent"),
-              input.campaignId ? eq(areExecutionQueue.campaignId, input.campaignId) : undefined,
-            )),
-        ]),
+        // Genuine replies only (replyScope.ts, inside countReplies) — unscoped,
+        // this stat said "74,943 inbound" on the Emails tab while Conversations said 0.
+        countReplies(db, wsId),
+        // Open, click, bounce and reply counts read the rows that own them, per
+        // path (activityMetrics.emailEngagement); with a campaign, only its sends.
+        emailEngagement(db, wsId, { campaignId: input.campaignId }),
       ]);
 
       /**
@@ -602,7 +609,7 @@ export const emailActivityRouter = {
       const stFilter = input.status;
       let chips: { source: string; count: number }[];
       if (stFilter === "received") {
-        chips = [{ source: "inbound", count: num(inbound[0]?.count) }];
+        chips = [{ source: "inbound", count: inbound }];
       } else if (stFilter === "scheduled") {
         chips = [{ source: "campaign", count: num(queued[0]?.count) }];
       } else if (stFilter === "awaiting") {
@@ -663,30 +670,27 @@ export const emailActivityRouter = {
         for (const r of bySource) m.set(r.source, num(r.count));
         for (const r of draftRows) m.set(String(r.source), (m.get(String(r.source)) ?? 0) + num(r.count));
         m.set("campaign", (m.get("campaign") ?? 0) + num(queued[0]?.count));
-        m.set("inbound", (m.get("inbound") ?? 0) + num(inbound[0]?.count));
+        m.set("inbound", (m.get("inbound") ?? 0) + inbound);
         const merged: { source: string; count: number }[] = [];
         m.forEach((count, source) => { merged.push({ source, count }); });
         chips = merged;
       }
 
-      const [draftEng, execEng] = engagement;
-      const sentTotal = num(draftEng[0]?.sent) + num(execEng[0]?.sent);
-      const openedTotal = num(draftEng[0]?.opened) + num(execEng[0]?.opened);
-      const clickedTotal = num(draftEng[0]?.clicked);
-      // Over draft-path sends only (audit 2026-10-20, O42): a campaign send
-      // records no click of its own, so counting it in the denominator pulled
-      // the rate down by every campaign email. Email Analytics divides the same way.
-      const clickableTotal = num(draftEng[0]?.sent);
-
       return {
-        sent: num(totals[0]?.sent),
-        failed: num(totals[0]?.failed),
+        sent: totals.sent,
+        failed: totals.failed,
         awaiting: num(drafts[0]?.count),
         scheduled: num(queued[0]?.count),
-        inbound: num(inbound[0]?.count),
-        bounced: num(draftEng[0]?.bounced),
-        openRate: sentTotal ? Math.round((openedTotal / sentTotal) * 100) : 0,
-        clickRate: clickableTotal ? Math.round((clickedTotal / clickableTotal) * 100) : 0,
+        inbound,
+        bounced: engagement.draft.bounced,
+        // Each rate over the sends that can produce it (O42): opens over all
+        // tracked sends, clicks over sequence/CRM sends (campaign links are not
+        // rewritten), replies per path in its own unit.
+        openRate: engagement.rates.open,
+        clickRate: engagement.rates.click,
+        draftReplyRate: engagement.rates.draftReply,
+        campaignReplyRate: engagement.rates.campaignReply,
+        engagement,
         bySource: chips,
       };
     }),
@@ -713,6 +717,7 @@ export const emailActivityRouter = {
             execFromEmail: areExecutionQueue.fromEmail,
             userName: users.name,
             campaignName: areCampaigns.name,
+            sequenceName: sequences.name,
             draftBody: emailDrafts.body,
             execContent: areExecutionQueue.messageContent,
           })
@@ -729,6 +734,7 @@ export const emailActivityRouter = {
           .leftJoin(users, eq(users.id, emailLog.userId))
           .leftJoin(areCampaigns, and(eq(areCampaigns.id, emailLog.campaignId), eq(areCampaigns.workspaceId, emailLog.workspaceId)))
           .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
+          .leftJoin(sequences, and(eq(sequences.id, emailLog.sequenceId), eq(sequences.workspaceId, emailLog.workspaceId)))
           .where(and(eq(emailLog.id, input.id), eq(emailLog.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
@@ -742,6 +748,7 @@ export const emailActivityRouter = {
           accountEmail: row.accountEmail ?? row.execAccountEmail ?? row.execFromEmail ?? row.log.fromEmail ?? null,
           userName: row.userName ?? null,
           campaignName: row.campaignName ?? null,
+          sequenceName: row.sequenceName ?? null,
         };
       }
 
@@ -755,16 +762,18 @@ export const emailActivityRouter = {
             jobOrgResearch: aiPipelineJobs.orgResearch,
             jobContactResearch: aiPipelineJobs.contactResearch,
             jobFitAnalysis: aiPipelineJobs.fitAnalysis,
+            sequenceName: sequences.name,
           })
           .from(emailDrafts)
           .leftJoin(aiPipelineJobs, and(eq(aiPipelineJobs.id, emailDrafts.pipelineJobId), eq(aiPipelineJobs.workspaceId, emailDrafts.workspaceId)))
+          .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
           .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
         const job = row.jobOrgResearch || row.jobContactResearch || row.jobFitAnalysis
           ? { orgResearch: row.jobOrgResearch, contactResearch: row.jobContactResearch, fitAnalysis: row.jobFitAnalysis }
           : null;
-        return { ...row.d, job, accountName: null, accountEmail: null, userName: null, campaignName: null };
+        return { ...row.d, job, accountName: null, accountEmail: null, userName: null, campaignName: null, sequenceName: row.sequenceName ?? null };
       }
 
       if (input.kind === "queued") {
@@ -787,6 +796,7 @@ export const emailActivityRouter = {
           body: mc?.body ?? null,
           toEmail: row.toEmail ?? null,
           campaignName: row.campaignName ?? null,
+          sequenceName: null,
           accountName: null,
           accountEmail: null,
           userName: null,
@@ -807,6 +817,7 @@ export const emailActivityRouter = {
         accountEmail: row.accountEmail ?? null,
         userName: null,
         campaignName: null,
+        sequenceName: null,
       };
     }),
 };

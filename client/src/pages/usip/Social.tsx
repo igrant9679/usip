@@ -17,6 +17,7 @@
  */
 import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { ConfirmButton, Section, StatusPill, confirmAction, fmtDate } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { ExternalLink, Send, Share2 } from "lucide-react";
@@ -82,6 +83,8 @@ export default function Social() {
         pageKey="social"
         icon={<Share2 className="size-5" />}
       />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="social" />
 
       <div className="p-4 md:p-5 space-y-4">
         <Section title={`Pending LinkedIn invitations (${invites.data?.items?.length ?? 0})`}>
