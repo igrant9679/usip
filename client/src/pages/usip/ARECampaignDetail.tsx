@@ -1759,9 +1759,9 @@ function LogsTab({ campaignId, campaignStatus }: { campaignId: number; campaignS
   // Search, server-side on both feeds (audit 2026-10-20, U22).
   const [logSearch, setLogSearch] = useState("");
   const logSearchQ = useDebouncedValue(logSearch.trim());
-  const engineFilter = {
+  const engineFilter: { campaignId: number; limit: number; level?: "info" | "warn" | "error"; phase?: string; search?: string } = {
     campaignId, limit: LOG_PAGE,
-    ...(levelFilter === "error" ? { level: "error" as const } : {}),
+    ...(levelFilter === "error" ? { level: "error" } : {}),
     ...(phaseFilter !== "all" ? { phase: phaseFilter } : {}),
     ...(logSearchQ ? { search: logSearchQ } : {}),
   };
