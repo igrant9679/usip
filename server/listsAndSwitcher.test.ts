@@ -49,7 +49,8 @@ describe("naming and renaming lists", () => {
   it("Rename is on the Lists page menu and on the list's own page", () => {
     const lists = read("client/src/pages/usip/Lists.tsx");
     expect(lists).toContain('<DropdownMenuItem onClick={onRename}><Pencil className="size-4 mr-2" /> Rename</DropdownMenuItem>');
-    expect(lists).toContain("renameMut.mutate({ id: renaming.id, name: renameTo.trim() });");
+    // 2026-11-07 (CRMP, U31): the same dialog now saves the description too.
+    expect(lists).toContain("renameMut.mutate({ id: renaming.id, name: renameTo.trim(), description });");
     const detail = read("client/src/pages/usip/ListDetail.tsx");
     expect(detail).toContain('aria-label="Rename list"');
     expect(detail).toContain("renameMut.mutate({ id: list.id, name });");

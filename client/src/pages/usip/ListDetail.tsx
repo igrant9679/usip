@@ -18,6 +18,7 @@ import { trpc } from "@/lib/trpc";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { cn } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { pressable } from "@/lib/pressable";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,20 +131,46 @@ export default function ListDetail() {
     renameMut.mutate({ id: list.id, name });
   };
 
+  // The description is entered and edited here too (audit 2026-10-20, U31).
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
+  const descMut = trpc.recordLists.update.useMutation({
+    onSuccess: () => { utils.recordLists.get.invalidate({ id }); utils.recordLists.list.invalidate(); setEditingDesc(false); toast.success("Description saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [sort, setSort] = useState("added");
+  // Owner filter (U31): the record's owner, or for a person their company's.
+  const [owner, setOwner] = useState<string>("");
+  const { data: team } = trpc.team.list.useQuery();
+  const members = ((team ?? []) as Array<{ userId: number; name: string | null; deactivatedAt?: unknown }>).filter((m) => !m.deactivatedAt);
 
   // One page of members, searched and sorted by the server once typing
   // pauses (P49): the list used to arrive whole, every column of every row.
   const [page, setPage] = useState(1);
   const query = useDebouncedValue(search.trim());
-  useClearOnChange({ query, sort }, () => setPage(1));
+  useClearOnChange({ query, sort, owner }, () => setPage(1));
   const membersQ = trpc.recordLists.members.useQuery(
-    { id, page, perPage: PAGE_SIZE, search: query || undefined, sort: sort === "name" ? "name" : "added" },
+    { id, page, perPage: PAGE_SIZE, search: query || undefined, sort: sort === "name" ? "name" : "added", ownerUserId: owner ? Number(owner) : undefined },
     { enabled: Number.isFinite(id), placeholderData: (prev) => prev },
   );
+  // Bulk select and remove (audit 2026-10-20, U19): a member could only be
+  // removed one row at a time. The selection belongs to the page it was made on.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  useClearOnChange({ query, sort, owner, page }, () => setSelected(new Set()));
+  const removeManyMut = trpc.recordLists.removeMembers.useMutation({
+    onSuccess: (res) => {
+      refreshMembers();
+      setSelected(new Set());
+      toast.success(`Removed ${res.removed.toLocaleString()} from the list`, res.removed > 0 && res.recordType ? {
+        action: { label: "Undo", onClick: () => putBackMut.mutate({ listId: res.listId, recordType: res.recordType as "prospect" | "account", recordIds: res.recordIds }) },
+      } : undefined);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const rows = (membersQ.data?.rows ?? []) as { memberId: number; recordType: string; recordId: number; addedAt: string | Date; record: any }[];
   const total = membersQ.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -223,6 +250,11 @@ export default function ListDetail() {
             )}
             <span className="text-[12px] text-muted-foreground">{total.toLocaleString()} {total === 1 ? "record" : "records"}</span>
             <div className="flex-1" />
+            {list && !editingDesc && (
+              <Button variant="ghost" size="sm" className="h-7 text-[12px]" onClick={() => { setDescDraft(list.description ?? ""); setEditingDesc(true); }}>
+                {list.description ? "Edit description" : "Add a description"}
+              </Button>
+            )}
             {/* A list is a targeting set — it should be one click from
                 outreach (seams audit, phase 2). Whole list, People lists only. */}
             {memberProspectIds.length > 0 && (
@@ -237,6 +269,19 @@ export default function ListDetail() {
               <Plus className="size-3.5" /> Add {isCompanies ? "companies" : "people"} to list
             </Button>
           </div>
+          {editingDesc ? (
+            <div className="mt-1.5 flex items-start gap-1.5">
+              <Input aria-label="List description" value={descDraft} onChange={(e) => setDescDraft(e.target.value)} maxLength={1000} autoFocus
+                placeholder="What this list is for" className="h-7 max-w-xl text-[12px]"
+                onKeyDown={(e) => { if (e.key === "Enter" && list) descMut.mutate({ id: list.id, description: descDraft.trim() || null }); if (e.key === "Escape") setEditingDesc(false); }} />
+              <Button size="icon-sm" variant="ghost" aria-label="Save description" disabled={descMut.isPending || !list} onClick={() => list && descMut.mutate({ id: list.id, description: descDraft.trim() || null })}>
+                {descMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+              </Button>
+              <Button size="icon-sm" variant="ghost" aria-label="Cancel description" onClick={() => setEditingDesc(false)}><X className="size-3.5" /></Button>
+            </div>
+          ) : list?.description ? (
+            <p className="mt-0.5 text-[12px] text-muted-foreground max-w-3xl">{list.description}</p>
+          ) : null}
         </div>
 
         {/* toolbar */}
@@ -250,6 +295,12 @@ export default function ListDetail() {
             <input aria-label="Search this list" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search this list" />
             {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
+          <select aria-label={isCompanies ? "Company owner" : "Owner of the person's company"} value={owner} onChange={(e) => setOwner(e.target.value)}
+            title={isCompanies ? "The company's owner" : "The owner of the company each person is filed under"}
+            className="h-7 rounded-md border bg-background px-2 text-[12px]">
+            <option value="">Any owner</option>
+            {members.map((m) => <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>)}
+          </select>
           <div className="flex-1" />
           {!isCompanies && (
             <Button
@@ -282,17 +333,40 @@ export default function ListDetail() {
         <div className="flex-1 min-h-0 overflow-auto">
           {membersQ.isLoading ? (
             <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
-          ) : total === 0 && !query ? (
+          ) : total === 0 && !query && !owner ? (
             <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")} />
           ) : rows.length === 0 ? (
             <div className="text-center py-16 px-4">
-              <p className="text-sm text-muted-foreground">No records match “{query}”.</p>
-              <Button variant="outline" size="sm" className="mt-3" onClick={() => setSearch("")}>Clear search</Button>
+              <p className="text-sm text-muted-foreground">{query ? `No records match “${query}”${owner ? " for this owner" : ""}.` : "No records on this list for this owner."}</p>
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => { setSearch(""); setOwner(""); }}>Clear filters</Button>
             </div>
           ) : (
+            <>
+            {selected.size > 0 && (
+              <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-3 py-1.5 text-[12px]">
+                <span className="font-medium">{selected.size} selected</span>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelected(new Set())}>Clear</Button>
+                {!isCompanies && (
+                  <AddToMenu
+                    prospectIds={rows.filter((m) => selected.has(m.memberId) && m.recordType === "prospect").map((m) => m.recordId)}
+                    label={`Add ${selected.size} to…`}
+                    trigger={<Button size="sm" variant="outline" className="h-7 gap-1.5"><Plus className="size-3.5" /> Add {selected.size} to… <ChevronDown className="size-3 opacity-70" /></Button>}
+                  />
+                )}
+                <Button size="sm" variant="outline" className="h-7 gap-1.5 text-destructive" disabled={removeManyMut.isPending}
+                  onClick={() => removeManyMut.mutate({ listId: id, memberIds: Array.from(selected) })}>
+                  {removeManyMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} Remove {selected.size} from list
+                </Button>
+              </div>
+            )}
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-card border-b border-border">
                 <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <th className="w-8 px-3 py-1.5">
+                    <Checkbox aria-label="Select every member on this page" className="size-3.5"
+                      checked={rows.length > 0 && rows.every((m) => selected.has(m.memberId))}
+                      onCheckedChange={() => setSelected((prev) => (rows.every((m) => prev.has(m.memberId)) ? new Set() : new Set(rows.map((m) => m.memberId))))} />
+                  </th>
                   {isCompanies ? (
                     <>
                       <th className="px-3 py-1.5 font-medium">Company</th>
@@ -315,8 +389,17 @@ export default function ListDetail() {
               <tbody>
                 {rows.map((m) => {
                   const r = m.record ?? {};
+                  // A member row opens its record (audit 2026-10-20, U19): the
+                  // list was a table of plain text that led nowhere.
+                  const href = m.recordType === "account" ? `/v2/companies/${m.recordId}` : `/prospects/${m.recordId}`;
                   return (
-                    <tr key={m.memberId} className="border-b border-border/60 hover:bg-muted/40">
+                    <tr key={m.memberId} className={cn("border-b border-border/60 hover:bg-muted/40 cursor-pointer", selected.has(m.memberId) && "bg-muted/40")}
+                      {...pressable(() => setLocation(href), { row: true })}>
+                      <td className="w-8 px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox aria-label={`Select ${isCompanies ? r.name ?? "company" : `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "person"}`} className="size-3.5"
+                          checked={selected.has(m.memberId)}
+                          onCheckedChange={() => setSelected((prev) => { const n = new Set(prev); n.has(m.memberId) ? n.delete(m.memberId) : n.add(m.memberId); return n; })} />
+                      </td>
                       {isCompanies ? (
                         <>
                           <td className="px-3 py-1.5">
@@ -341,14 +424,15 @@ export default function ListDetail() {
                           <td className="px-2 py-1.5 text-xs text-muted-foreground"><div className="max-w-[140px] truncate">{[r.city, r.state, r.country].filter(Boolean).join(", ") || "—"}</div></td>
                         </>
                       )}
-                      <td className="px-2 py-1.5 text-right">
-                        <Button variant="ghost" size="icon-sm" title="Remove from list" className="text-muted-foreground hover:text-destructive" onClick={() => removeMut.mutate({ memberId: m.memberId })}><Trash2 className="size-3.5" /></Button>
+                      <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon-sm" title="Remove from list" aria-label="Remove from list" className="text-muted-foreground hover:text-destructive" onClick={() => removeMut.mutate({ memberId: m.memberId })}><Trash2 className="size-3.5" /></Button>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </>
           )}
         </div>
         {pages > 1 && (
@@ -373,6 +457,7 @@ export default function ListDetail() {
           setPicked={setPicked}
           adding={addMut.isPending}
           onAdd={(recordIds) => addMut.mutate({ listId: id, recordType: isCompanies ? "account" : "prospect", recordIds })}
+          listId={id}
         />
       )}
     </Shell>
@@ -415,7 +500,7 @@ function EmptyState({ isCompanies, onFind, onImport }: { isCompanies: boolean; o
 
 /* ── Add-records mini-lookup modal (exported for server/recordListsTruth.test.ts) ── */
 export function AddRecordsDialog({
-  open, onClose, isCompanies, accent, picked, setPicked, adding, onAdd,
+  open, onClose, isCompanies, accent, picked, setPicked, adding, onAdd, listId,
 }: {
   open: boolean;
   onClose: () => void;
@@ -425,6 +510,8 @@ export function AddRecordsDialog({
   setPicked: (s: Set<number>) => void;
   adding: boolean;
   onAdd: (ids: number[]) => void;
+  /** The list being added to, so records already on it are marked (U31). */
+  listId?: number;
 }) {
   const [q, setQ] = useState("");
   // People are searched ON THE SERVER, a page at a time (audit 2026-10-20,
@@ -440,7 +527,9 @@ export function AddRecordsDialog({
   );
   const peopleTotal = Number((prospectsQ.data as any)?.total ?? 0);
   const peoplePages = Math.max(1, Math.ceil(peopleTotal / PER_PAGE));
-  const accountsQ = trpc.accounts.list.useQuery(undefined, { enabled: open && isCompanies });
+  // Companies are searched on the server too, 100 at a time (X4.1): this
+  // loaded every account in the workspace to filter in the browser.
+  const accountsQ = trpc.accounts.list.useQuery({ search: search || undefined, limit: 100 }, { enabled: open && isCompanies });
 
   const [, setLocation] = useLocation();
   const all: { id: number; primary: string; secondary?: string }[] = useMemo(() => {
@@ -453,15 +542,18 @@ export function AddRecordsDialog({
   }, [isCompanies, accountsQ.data, prospectsQ.data]);
 
   const loading = isCompanies ? accountsQ.isLoading : prospectsQ.isLoading;
-  // Companies are all loaded and filtered here; people already come back
-  // matching the search.
-  const filtered = useMemo(() => {
-    if (!isCompanies) return all;
-    const s = q.trim().toLowerCase();
-    return s ? all.filter((r) => `${r.primary} ${r.secondary ?? ""}`.toLowerCase().includes(s)) : all;
-  }, [all, q, isCompanies]);
+  // Both kinds come back matching the search from the server.
+  const filtered = all;
+  // Records already on this list are marked, not offered again (audit
+  // 2026-10-20, U31): they were checkable and then "already on it" on Add.
+  const visibleIds = useMemo(() => filtered.map((r) => r.id).slice(0, 200), [filtered]);
+  const membershipQ = trpc.recordLists.membership.useQuery(
+    { id: listId ?? 0, recordIds: visibleIds },
+    { enabled: open && listId != null && visibleIds.length > 0 },
+  );
+  const onList = useMemo(() => new Set((membershipQ.data ?? []) as number[]), [membershipQ.data]);
 
-  const toggle = (id: number) => { const n = new Set(picked); n.has(id) ? n.delete(id) : n.add(id); setPicked(n); };
+  const toggle = (id: number) => { if (onList.has(id)) return; const n = new Set(picked); n.has(id) ? n.delete(id) : n.add(id); setPicked(n); };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -482,24 +574,29 @@ export function AddRecordsDialog({
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <Sparkles className="size-6 text-muted-foreground opacity-50 mb-2" />
-              <p className="text-sm text-muted-foreground">{!isCompanies && search ? `No one matches "${search}".` : all.length === 0 ? `No ${isCompanies ? "companies" : "people"} in this workspace yet.` : "Start your search by typing above."}</p>
+              <p className="text-sm text-muted-foreground">{search ? `No ${isCompanies ? "company" : "one"} matches "${search}".` : all.length === 0 ? `No ${isCompanies ? "companies" : "people"} in this workspace yet.` : "Start your search by typing above."}</p>
               {/* In-app navigation: this set window.location and reloaded the whole app (P139). */}
-              {all.length === 0 && !(!isCompanies && search) && <Button variant="outline" size="sm" className="mt-3" onClick={() => setLocation(isCompanies ? "/v2/companies" : "/v2/people")}>Go find some</Button>}
+              {all.length === 0 && !search && <Button variant="outline" size="sm" className="mt-3" onClick={() => setLocation(isCompanies ? "/v2/companies" : "/v2/people")}>Go find some</Button>}
             </div>
           ) : (
-            filtered.map((r) => (
-              <label key={r.id} className="flex items-center gap-2.5 px-2 py-2 border-b border-border/60 last:border-0 cursor-pointer hover:bg-muted/40">
-                <Checkbox checked={picked.has(r.id)} onCheckedChange={() => toggle(r.id)} className="size-4" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-medium truncate">{r.primary}</div>
-                  {r.secondary && <div className="text-[11px] text-muted-foreground truncate">{r.secondary}</div>}
-                </div>
-              </label>
-            ))
+            filtered.map((r) => {
+              const already = onList.has(r.id);
+              return (
+                <label key={r.id} className={cn("flex items-center gap-2.5 px-2 py-2 border-b border-border/60 last:border-0", already ? "opacity-70" : "cursor-pointer hover:bg-muted/40")}>
+                  <Checkbox checked={already || picked.has(r.id)} disabled={already} onCheckedChange={() => toggle(r.id)} className="size-4" aria-label={already ? `${r.primary} is already on this list` : `Pick ${r.primary}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] font-medium truncate">{r.primary}</div>
+                    {r.secondary && <div className="text-[11px] text-muted-foreground truncate">{r.secondary}</div>}
+                  </div>
+                  {already && <Badge variant="secondary" className="shrink-0 text-[10px]">On this list</Badge>}
+                </label>
+              );
+            })
           )}
         </div>
         <DialogFooter className="items-center">
           <span className="text-[12px] text-muted-foreground mr-auto">{picked.size} selected</span>
+          {isCompanies && ((accountsQ.data ?? []) as unknown[]).length >= 100 && <span className="text-[12px] text-muted-foreground">The first 100 shown; search to find others</span>}
           {!isCompanies && peoplePages > 1 && (
             <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Button variant="outline" size="sm" className="h-7 px-2" disabled={page <= 1 || prospectsQ.isFetching} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</Button>

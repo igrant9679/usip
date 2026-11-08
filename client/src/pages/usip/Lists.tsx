@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { pressable } from "@/lib/pressable";
 import { createSingleFlight } from "@/lib/singleFlight";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 type RecordList = {
   id: number;
@@ -59,6 +60,7 @@ type RecordList = {
   description?: string | null;
   entityType: string; // people | companies
   memberCount?: number;
+  createdByUserId?: number | null;
   updatedAt?: string | Date | null;
   createdAt?: string | Date | null;
 };
@@ -147,9 +149,14 @@ export default function Lists() {
   const lists = (data ?? []) as RecordList[];
 
   const createMut = trpc.recordLists.create.useMutation({
-    onSuccess: (res: any) => { utils.recordLists.list.invalidate(); setCreateOpen(false); setNewName(""); if (res?.id) setLocation(`/v2/lists/${res.id}`); },
+    onSuccess: (res: any) => { utils.recordLists.list.invalidate(); setCreateOpen(false); setNewName(""); setNewDescription(""); if (res?.id) setLocation(`/v2/lists/${res.id}`); },
     onError: (e) => toast.error(e.message),
   });
+  // Who made each list (audit 2026-10-20, U31): "Anyone", "Me" or a teammate.
+  const { user } = useAuth();
+  const { data: team } = trpc.team.list.useQuery();
+  const teamMembers = ((team ?? []) as Array<{ userId: number; name: string | null }>);
+  const [owner, setOwner] = useState<string>("");
   const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => utils.recordLists.list.invalidate(), onError: (e) => toast.error(e.message) });
   // Rename (owner ask 2026-10-06: there was no way to rename a list).
   const [renaming, setRenaming] = useState<RecordList | null>(null);
@@ -158,11 +165,14 @@ export default function Lists() {
     onSuccess: () => { utils.recordLists.list.invalidate(); utils.recordLists.get.invalidate(); setRenaming(null); toast.success("List renamed"); },
     onError: (e) => toast.error(e.message),
   });
-  const openRename = (l: RecordList) => { setRenaming(l); setRenameTo(l.name); };
+  // Rename edits the description too (U31): it was shown and never enterable.
+  const [renameDescription, setRenameDescription] = useState("");
+  const openRename = (l: RecordList) => { setRenaming(l); setRenameTo(l.name); setRenameDescription(l.description ?? ""); };
   const rename = () => {
     if (!renaming || !renameTo.trim()) return;
-    if (renameTo.trim() === renaming.name) { setRenaming(null); return; }
-    renameMut.mutate({ id: renaming.id, name: renameTo.trim() });
+    const description = renameDescription.trim() || null;
+    if (renameTo.trim() === renaming.name && description === (renaming.description ?? null)) { setRenaming(null); return; }
+    renameMut.mutate({ id: renaming.id, name: renameTo.trim(), description });
   };
 
   const [search, setSearch] = useState("");
@@ -176,12 +186,15 @@ export default function Lists() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newObject, setNewObject] = useState<"People" | "Companies">("People");
   const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
 
   const toggleSection = (k: string) => setOpenSections((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; });
 
+  const ownerMatches = (l: RecordList) => !owner || l.createdByUserId === (owner === "me" ? user?.id : Number(owner));
   const sortAndFilter = (entityType: string) => {
     const q = search.trim().toLowerCase();
-    const subset = lists.filter((l) => l.entityType === entityType && (!q || l.name.toLowerCase().includes(q)));
+    const subset = lists.filter((l) => l.entityType === entityType && ownerMatches(l)
+      && (!q || l.name.toLowerCase().includes(q) || (l.description ?? "").toLowerCase().includes(q)));
     const cmp: Record<string, (a: RecordList, b: RecordList) => number> = {
       modified: (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
       name: (a, b) => a.name.localeCompare(b.name),
@@ -190,17 +203,17 @@ export default function Lists() {
     return [...subset].sort(cmp[sort] ?? cmp.modified);
   };
 
-  const peopleLists = useMemo(() => sortAndFilter("people"), [lists, search, sort]);
-  const companyLists = useMemo(() => sortAndFilter("companies"), [lists, search, sort]);
+  const peopleLists = useMemo(() => sortAndFilter("people"), [lists, search, sort, owner, user?.id]);
+  const companyLists = useMemo(() => sortAndFilter("companies"), [lists, search, sort, owner, user?.id]);
 
-  const openCreate = (object: "People" | "Companies") => { setNewObject(object); setNewName(""); setCreateOpen(true); };
+  const openCreate = (object: "People" | "Companies") => { setNewObject(object); setNewName(""); setNewDescription(""); setCreateOpen(true); };
   // Enter twice made two lists: only the button was disabled while one was
   // being made, and isPending lags the keypress (audit 2026-10-20, P135).
   const createOnce = useRef(createSingleFlight()).current;
   const create = () => {
     if (!newName.trim()) return;
     createOnce((done) => createMut.mutate(
-      { name: newName.trim(), entityType: newObject === "People" ? "people" : "companies" },
+      { name: newName.trim(), entityType: newObject === "People" ? "people" : "companies", description: newDescription.trim() || undefined },
       { onSettled: done },
     ));
   };
@@ -228,6 +241,11 @@ export default function Lists() {
             <input aria-label="Search lists" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search lists" />
             {search && <button type="button" aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
+          <select aria-label="Made by" value={owner} onChange={(e) => setOwner(e.target.value)} className="h-7 rounded-md border bg-background px-2 text-[12px]">
+            <option value="">Made by anyone</option>
+            <option value="me">Made by me</option>
+            {teamMembers.filter((m) => m.userId !== user?.id).map((m) => <option key={m.userId} value={String(m.userId)}>Made by {m.name ?? `User ${m.userId}`}</option>)}
+          </select>
           <div className="flex-1" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -304,6 +322,10 @@ export default function Lists() {
               <div className="text-[13px] font-medium mb-1.5">List name</div>
               <Input aria-label="List name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name this list" autoFocus onKeyDown={(e) => { if (e.key === "Enter") create(); }} />
             </div>
+            <div>
+              <div className="text-[13px] font-medium mb-1.5">Description <span className="font-normal text-muted-foreground">(optional)</span></div>
+              <Input aria-label="List description" value={newDescription} onChange={(e) => setNewDescription(e.target.value)} maxLength={1000} placeholder="What this list is for" />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -317,9 +339,15 @@ export default function Lists() {
       <Dialog open={!!renaming} onOpenChange={(o) => { if (!o) setRenaming(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Rename list</DialogTitle></DialogHeader>
-          <div className="py-1">
-            <div className="text-[13px] font-medium mb-1.5">List name</div>
-            <Input aria-label="List name" value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={200} autoFocus onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
+          <div className="py-1 space-y-3">
+            <div>
+              <div className="text-[13px] font-medium mb-1.5">List name</div>
+              <Input aria-label="List name" value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={200} autoFocus onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
+            </div>
+            <div>
+              <div className="text-[13px] font-medium mb-1.5">Description</div>
+              <Input aria-label="List description" value={renameDescription} onChange={(e) => setRenameDescription(e.target.value)} maxLength={1000} placeholder="What this list is for" onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenaming(null)}>Cancel</Button>
