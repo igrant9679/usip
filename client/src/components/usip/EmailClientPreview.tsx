@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
-import { trpc } from "@/lib/trpc";
+import { escapeHtml } from "@shared/escapeHtml";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
@@ -108,25 +108,34 @@ interface PreviewEmail {
   body: string;
 }
 
-function extractEmails(steps: any[], templateById?: Map<number, any>): PreviewEmail[] {
+/**
+ * The emails a sequence sends, in order, with the day each goes out.
+ *
+ * Each step previews ITS OWN copy (audit 2026-10-20, O26; U14). This used to
+ * show a template-linked step's template as it is now, but the step holds a
+ * copy and the copy is what sends, so after a template edit the preview showed
+ * an email nobody would receive. A skipped (retired) step sends nothing and is
+ * left out; a wait still counts toward the days. An AI-written step has no copy
+ * until it runs, so it says that instead of previewing an empty email.
+ */
+export function extractEmails(steps: any[]): PreviewEmail[] {
   const out: PreviewEmail[] = [];
   let day = 1;
   let n = 0;
   for (let i = 0; i < (steps?.length ?? 0); i++) {
     const s = steps[i];
     if (s?.type === "wait") day += Number(s.days) || 0;
-    if (s?.type === "email") {
+    if (s?.type === "email" && s.enabled !== false) {
       n++;
-      // Template-linked steps preview the template's CURRENT content so the
-      // Email Builder formatting stays constant everywhere (builder, step
-      // editors, this preview). The step's stored copy is the fallback.
-      const tpl = typeof s.templateId === "number" ? templateById?.get(s.templateId) : null;
+      const ai = s.emailMode === "dynamic";
       out.push({
         stepIndex: i,
         emailNumber: n,
-        day,
-        subject: String(tpl?.subject ?? s.subject ?? ""),
-        body: String(tpl?.htmlOutput ?? s.body ?? ""),
+        day: Math.floor(day),
+        subject: ai ? "(written by AI when this step runs)" : String(s.subject ?? ""),
+        body: ai
+          ? "<p><em>This step is written by AI for each person when it runs" + (s.aiFocus ? ": " + escapeHtml(String(s.aiFocus)) : "") + ". There is no copy to preview yet.</em></p>"
+          : String(s.body ?? ""),
       });
     }
   }
@@ -393,15 +402,7 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   useEffect(() => { setDevice(isMobile ? "mobile" : "desktop"); }, [isMobile]);
 
-  // Resolve template-linked steps against the live template list (cheap —
-  // shared trpc cache with the step editor's identical query).
-  const templatesQ = trpc.emailTemplates?.list?.useQuery({ status: "all" }, { enabled: open });
-  const templateById = useMemo(
-    () => new Map<number, any>(((templatesQ?.data ?? []) as any[]).map((t) => [t.id, t])),
-    [templatesQ?.data],
-  );
-
-  const emails = useMemo(() => extractEmails(steps, templateById), [steps, templateById]);
+  const emails = useMemo(() => extractEmails(steps), [steps]);
   const current = emails[Math.min(emailIdx, Math.max(0, emails.length - 1))];
 
   const rendered = useMemo(() => {

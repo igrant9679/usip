@@ -13,6 +13,11 @@
  *   - AI-assisted Reply and Forward
  *   - Delete (move to trash) and Move-to-folder
  *   - Compose new email
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F25) /mailbox redirects to the one reply
+ * workspace's Mailbox tab (/v2/inbox?tab=mailbox), which renders MailboxPanel:
+ * this same mailbox, with its own read, reply and send paths. The page wrapper
+ * stays for a one-line undo of the redirect.
  */
 import { useState, useEffect, useRef } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
@@ -1043,7 +1048,27 @@ function CentralInboxThreadList({ accounts, selectedId, onSelect }: {
 
 type SelectedView = { type: "central" } | { type: "account"; accountId: number };
 
+/** Retired page wrapper (F25): the redirect sends /mailbox to the reply workspace. */
 export default function MailboxPage() {
+  return (
+    <Shell title="My Mailbox">
+      <PageHeader title="My Mailbox" description="Manage your connected email accounts, compose new messages, and track replies across all inboxes. All sent emails are automatically logged to the relevant contact and deal records." pageKey="mailbox"
+        icon={<Mail className="size-5" />}
+      />
+      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
+      <SendingStatusBar surface="mailbox" />
+      <MailboxPanel className="h-[calc(100vh-8.5rem)]" />
+    </Shell>
+  );
+}
+
+/**
+ * The mailbox itself: accounts and folders, the thread list, the reading pane
+ * with Reply, Reply all and Forward, and Compose. `?reply=<id>` in the URL
+ * opens that reply's thread (the reply workspace's "Open the thread in
+ * Mailbox" uses it). The caller sizes it.
+ */
+export function MailboxPanel({ className }: { className?: string }) {
   const { user } = useAuth();
   const [selectedView, setSelectedView] = useState<SelectedView>({ type: "central" });
   const [selectedFolder, setSelectedFolder] = useState("INBOX");
@@ -1145,13 +1170,8 @@ export default function MailboxPage() {
   const readingPaneAccountId = selectedThreadAccountId ?? currentAccountId;
 
   return (
-    <Shell title="My Mailbox">
-      <PageHeader title="My Mailbox" description="Manage your connected email accounts, compose new messages, and track replies across all inboxes. All sent emails are automatically logged to the relevant contact and deal records." pageKey="mailbox" 
-        icon={<Mail className="size-5" />}
-      />
-      {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
-      <SendingStatusBar surface="mailbox" />
-      <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
+    <>
+      <div className={cn("flex overflow-hidden", className)}>
 
         {/* Left panel */}
         <div className="w-52 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">
@@ -1296,6 +1316,6 @@ export default function MailboxPage() {
           onClose={() => setComposeState(null)}
         />
       )}
-    </Shell>
+    </>
   );
 }

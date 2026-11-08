@@ -227,7 +227,7 @@ export default function SequencesV2() {
             <Send className="size-4" style={{ color: accent }} />
             <h1 className="text-[15px] font-semibold tracking-tight">Sequences</h1>
             <div className="flex-1" />
-            {can("manage_sequences") && <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>}
+            {can("manage_sequences") && <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} data-tour-id="sequences-new-button" onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>}
           </div>
           <div className="h-2" />
         </div>

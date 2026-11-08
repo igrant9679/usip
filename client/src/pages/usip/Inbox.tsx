@@ -1,3 +1,12 @@
+/**
+ * Notifications: mentions, tasks, deals, renewals, approvals, workflow and
+ * engine events, call-backs and email replies, with their read state.
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F25) /inbox redirects to the one reply
+ * workspace's Notifications tab (/v2/inbox?tab=notifications), which renders
+ * NotificationsPanel from this file. The page wrapper stays for a one-line
+ * undo of the redirect.
+ */
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +58,19 @@ function parseMentionBody(body: string | null | undefined): {
   return { deepLink: null, displayBody: body };
 }
 
+/** Retired page wrapper (F25): the redirect sends /inbox to the reply workspace. */
 export default function Inbox() {
+  return (
+    <Shell title="Inbox">
+      <PageHeader title="Inbox" description="Notifications, @mentions, and system alerts across all modules." pageKey="inbox"
+        icon={<Bell className="size-5" />}
+      />
+      <NotificationsPanel />
+    </Shell>
+  );
+}
+
+export function NotificationsPanel() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<FilterKind>("all");
   const { data, isLoading, isError, error } = trpc.notifications.list.useQuery();
@@ -71,14 +92,6 @@ export default function Inbox() {
   const mentionCount = (data ?? []).filter((n) => n.kind === "mention" && !n.readAt).length;
 
   return (
-    <Shell title="Inbox">
-      <PageHeader title="Inbox" description="Notifications, @mentions, and system alerts across all modules." pageKey="inbox"
-        icon={<Bell className="size-5" />}
-      >
-        <Button variant="outline" className="bg-card" onClick={() => markAll.mutate()}>
-          <CheckCheck className="size-4 mr-2" /> Mark all read
-        </Button>
-      </PageHeader>
       <div className="p-4 md:p-6 max-w-3xl">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           {(["all", "mention", "email_reply", "are_event", "system"] as FilterKind[]).map((f) => (
@@ -92,6 +105,10 @@ export default function Inbox() {
               {f === "mention" && mentionCount > 0 && <Badge variant="secondary" className="ml-1.5 h-4 text-[10px] bg-blue-500/20 text-blue-600">{mentionCount}</Badge>}
             </button>
           ))}
+          <div className="flex-1" />
+          <Button variant="outline" size="sm" className="bg-card" disabled={unreadCount === 0} onClick={() => markAll.mutate()}>
+            <CheckCheck className="size-4 mr-2" /> Mark all read
+          </Button>
         </div>
         {/* Not read yet is not "Inbox zero" (audit 2026-10-20, O56). */}
         {isLoading ? (
@@ -152,8 +169,8 @@ export default function Inbox() {
                         <Link
                           href={
                             n.relatedType === "email_reply" && n.relatedId
-                              ? `/mailbox?reply=${n.relatedId}`
-                              : "/mailbox"
+                              ? `/v2/inbox?tab=mailbox&reply=${n.relatedId}`
+                              : "/v2/inbox?tab=mailbox"
                           }
                           className="text-[11px] text-primary hover:underline flex items-center gap-1"
                         >
@@ -189,6 +206,5 @@ export default function Inbox() {
           </ul>
         )}
       </div>
-    </Shell>
   );
 }

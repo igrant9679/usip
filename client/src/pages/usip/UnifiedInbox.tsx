@@ -1,3 +1,12 @@
+/**
+ * The live chats from the LinkedIn, WhatsApp and other accounts connected
+ * through Unipile: read a thread and reply in it.
+ *
+ * Since 2026-11-07 (audit 2026-10-20, F25) /unified-inbox redirects to the one
+ * reply workspace's Social tab (/v2/inbox?tab=social&view=chats), which
+ * renders SocialChatsPanel from this file. The page wrapper stays for a
+ * one-line undo of the redirect.
+ */
 import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader } from "@/components/usip/Shell";
@@ -186,7 +195,30 @@ function MessageBubble({ msg }: { msg: MessageItem }) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+/** Retired page wrapper (F25): the redirect sends /unified-inbox to the reply workspace. */
 export default function UnifiedInbox() {
+  return (
+    <Shell>
+      <PageHeader
+        title="Unified Inbox"
+        description="Your LinkedIn, WhatsApp and other social conversations from the accounts you connected, in one list. Read a thread and reply from here. Email replies are in Conversations and My Mailbox."
+        pageKey="unified-inbox"
+        icon={<Inbox className="size-5" />}
+      >
+        <Link href="/connected-accounts">
+          <Button variant="outline" size="sm">
+            <Plug className="h-4 w-4 mr-2" />
+            Manage Accounts
+          </Button>
+        </Link>
+      </PageHeader>
+      <SocialChatsPanel className="h-[calc(100vh-140px)]" />
+    </Shell>
+  );
+}
+
+/** The chats and the thread, sized by the caller (the page, or the reply workspace's Social tab). */
+export function SocialChatsPanel({ className }: { className?: string }) {
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [selectedChat, setSelectedChat] = useState<ChatItem | null>(null);
@@ -279,32 +311,7 @@ export default function UnifiedInbox() {
   const connectedProviders = [...new Set(accounts.map((a) => a.provider))];
 
   return (
-    <Shell>
-      <PageHeader
-        title="Unified Inbox"
-        description="Your LinkedIn, WhatsApp and other social conversations from the accounts you connected, in one list. Read a thread and reply from here. Email replies are in Conversations and My Mailbox."
-        pageKey="unified-inbox"
-        icon={<Inbox className="size-5" />}
-      >
-        <Button variant="outline" size="sm" onClick={() => refetchInbox()}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
-        <Link href="/connected-accounts">
-          <Button variant="outline" size="sm">
-            <Plug className="h-4 w-4 mr-2" />
-            Manage Accounts
-          </Button>
-        </Link>
-        <Link
-          href="/v2/emails?status=awaiting&source=sequence"
-          className="text-xs text-muted-foreground hover:text-foreground self-center underline-offset-2 hover:underline"
-          title="Drafts created by sequences awaiting review"
-        >
-          Email Drafts →
-        </Link>
-      </PageHeader>
-
+    <>
       {accounts.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-96 gap-4 p-6">
           <div className="h-16 w-16 rounded-full bg-violet-500/10 flex items-center justify-center">
@@ -324,7 +331,7 @@ export default function UnifiedInbox() {
           </Link>
         </div>
       ) : (
-        <div className="flex h-[calc(100vh-140px)] overflow-hidden">
+        <div className={cn("flex overflow-hidden", className)}>
           {/* ── Left panel: chat list ── */}
           {/* min-h-0 on both flex-col panes below is critical: without it,
               the inner ScrollArea (flex-1) gets implicit min-height:auto
@@ -333,7 +340,7 @@ export default function UnifiedInbox() {
           <div className={cn("w-full md:w-80 flex-shrink-0 border-r flex-col min-h-0", selectedChat ? "hidden md:flex" : "flex")}>
             {/* Filters */}
             <div className="p-3 border-b space-y-2 shrink-0">
-              <div className="relative">
+              <div className="relative flex items-center gap-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input aria-label="Search conversations"
                   placeholder="Search conversations..."
@@ -341,6 +348,9 @@ export default function UnifiedInbox() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
+                <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label="Refresh conversations" onClick={() => refetchInbox()}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
               </div>
               <Select value={providerFilter} onValueChange={setProviderFilter}>
                 <SelectTrigger className="h-8 text-sm">
@@ -476,6 +486,6 @@ export default function UnifiedInbox() {
           </div>
         </div>
       )}
-    </Shell>
+    </>
   );
 }
