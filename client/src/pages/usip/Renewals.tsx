@@ -2,6 +2,7 @@ import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { invalidateCustomerReads } from "@/lib/crmCache";
+import { RecordRenewalOrChurn } from "@/components/usip/RecordRenewalOrChurn";
 import { RENEWAL_STAGES, RENEWAL_STAGE_LABELS, type RenewalStage } from "@shared/renewalStage";
 import { RefreshCw, RotateCw, Sparkles, AlertTriangle } from "lucide-react";
 import { HEALTH_TIER_TONE, isChurnEstimate, type HealthTier } from "@shared/customerHealth";
@@ -65,7 +66,7 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Every customer in a column by how soon their contract ends, from more than 90 days out to past due, with their health and an AI churn-risk score you can run. Record a renewal or a termination as a contract amendment on the Customers page." pageKey="renewals"
+      <PageHeader title="Renewal pipeline" description="Every customer in a column by how soon their contract ends, from more than 90 days out to past due, with their health and an AI churn-risk score you can run. Record a renewal (new term and ARR) or a churn (day and reason) from any card." pageKey="renewals"
         icon={<RefreshCw className="size-5" />}
       />
       {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} className="p-4" /> : (
@@ -94,6 +95,9 @@ export default function Renewals() {
                           renewalDate field, so this line rendered "—" on
                           every card (audit 2026-09-20). */}
                       <div className="text-[11px] text-muted-foreground mt-1">Renewal {fmtDate(c.contractEnd)}</div>
+                      {c.renewalStage === "churned" && c.churnReason && <div className="text-[11px] text-muted-foreground mt-0.5 truncate" title={c.churnReason}>Why: {c.churnReason}</div>}
+                      {/* The outcome, recorded from the card (F36). */}
+                      <RecordRenewalOrChurn customer={c} accountName={c.account?.name ?? null} size="xs" className="mt-1.5" />
 
                       {/* AI churn-risk score */}
                       {(c as any).churnRiskScore != null ? (

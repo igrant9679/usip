@@ -160,10 +160,15 @@ describe("cs.kpis", () => {
   it("returns the same keys it always did", async () => {
     // Customers.tsx and DashboardHome2.tsx read `renewing90` off this object;
     // the derivation changes the VALUE, never the shape.
+    //
+    // 2026-11-07 (audit F36, batch CRMD): two keys ADDED for "Record churn" —
+    // the ARR and the customers churned this quarter, which the Customers ARR
+    // card shows. Every key a reader had is still here with the same meaning;
+    // this pin still fails if one is renamed or dropped.
     h.db = makeDb([customer({})], cap);
     const out = await appRouter.createCaller(makeCtx()).cs.kpis();
     expect(Object.keys(out!).sort()).toEqual(
-      ["arr", "atRisk", "avgNps", "expansion", "npsBand", "renewing90", "total"],
+      ["arr", "atRisk", "avgNps", "churnedArrThisQuarter", "churnedThisQuarter", "expansion", "npsBand", "renewing90", "total"],
     );
   });
 });

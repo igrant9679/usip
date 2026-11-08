@@ -2013,6 +2013,15 @@ export const quotesRouter = router({
         lineTotal: centsToDecimal(line.lineTotalCents),
       });
     }
+    // A quote is a proposal's pricing section (audit 2026-10-20, F34): one made
+    // here (the API; the page is gone) joins its deal's newest proposal, or a
+    // new draft one, as its newest pricing version.
+    try {
+      const { foldQuotesIntoProposals } = await import("../services/quoteFold");
+      await foldQuotesIntoProposals(db, { workspaceId: ctx.workspace.id });
+    } catch (e) {
+      console.warn("[quotes.create] fold into proposal failed:", e);
+    }
     return { id, quoteNumber: num };
   }),
 

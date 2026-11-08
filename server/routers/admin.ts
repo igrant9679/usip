@@ -40,6 +40,8 @@ import { revokeAllSessions } from "../_core/sessionRevocation";
 import { settingsForMember } from "../_core/safeProjections";
 import { adminWsProcedure, assertOutranks, isAdminRole, leavesNoActiveSuperAdmin, roleRank, workspaceProcedure } from "../_core/workspace";
 import { invalidateSecurityPolicyCache } from "../_core/securityPolicy";
+import { getRevenueSettings, invalidateRevenueSettings } from "../services/workspaceRevenue";
+import { isSupportedCurrency } from "@shared/revenueSettings";
 import { getRequestClientIp } from "../_core/requestContext";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
@@ -280,6 +282,13 @@ async function loginHistoryScope(db: NonNullable<Awaited<ReturnType<typeof getDb
 }
 
 export const settingsRouter = router({
+  /**
+   * The workspace's fiscal year start, currency and time zone (audit
+   * 2026-10-20, F29/R41), for every member: every screen that shows money or
+   * a quarter reads these, without the rest of the settings row.
+   */
+  revenue: workspaceProcedure.query(async ({ ctx }) => getRevenueSettings(ctx.workspace.id)),
+
   get: workspaceProcedure.query(async ({ ctx }) => {
     const s = await getOrSeedSettings(ctx.workspace.id);
     // Not a spread of the row (audit 2026-10-20): every member used to receive
@@ -308,6 +317,10 @@ export const settingsRouter = router({
         // A real IANA zone (audit 2026-10-20, G68): free text was stored as
         // typed, and every reader then fell back to UTC without a word.
         timezone: z.string().max(64).refine(isValidTimezone, "Choose a time zone such as America/New_York or Europe/London").optional(),
+        // The fiscal calendar and the currency amounts show in (migration
+        // 0403, audit 2026-10-20, F29/R41). January and USD by default.
+        fiscalYearStartMonth: z.number().int().min(1).max(12).optional(),
+        currency: z.string().refine(isSupportedCurrency, "Choose one of the listed currencies").optional(),
         brandPrimary: z.string().regex(/^#([0-9A-Fa-f]{3,8})$/).optional(),
         brandAccent: z.string().regex(/^#([0-9A-Fa-f]{3,8})$/).optional(),
         emailFromName: z.string().max(120).nullable().optional(),
@@ -419,6 +432,8 @@ export const settingsRouter = router({
       invalidateSecurityPolicyCache(ctx.workspace.id);
       // The engines cache the window (and its time zone) for a minute.
       invalidateSendWindowCache(ctx.workspace.id);
+      // The forecast and quota read the fiscal start and currency from a cache.
+      invalidateRevenueSettings(ctx.workspace.id);
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,

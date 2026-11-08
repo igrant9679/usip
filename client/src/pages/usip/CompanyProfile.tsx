@@ -26,14 +26,17 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import { CompanyResearchCard } from "@/components/usip/company/CompanyResearchCard";
-import { confirmAction } from "@/components/usip/Common";
+import { confirmAction, StatusPill } from "@/components/usip/Common";
 import {
   Globe, Link2, ExternalLink, Users, Building2, MapPin, DollarSign, Briefcase,
-  RefreshCw, Archive, ArchiveRestore, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock,
+  RefreshCw, Archive, ArchiveRestore, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock, HeartPulse,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { pressable } from "@/lib/pressable";
 import { formatAmount } from "@shared/money";
+import { RecordRenewalOrChurn } from "@/components/usip/RecordRenewalOrChurn";
+import { HEALTH_TIER_TONE } from "@shared/customerHealth";
+import { RENEWAL_STAGE_LABELS } from "@shared/renewalStage";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -144,6 +147,10 @@ export default function CompanyProfile() {
             </div>
             {c.description && <p className="mt-3 text-[13px] text-muted-foreground whitespace-pre-wrap">{c.description}</p>}
           </section>
+
+          {/* Customer health and ARR, as stored (U26), with the renewal or
+              churn recorded from here (F36). Nothing for a non-customer. */}
+          <CustomerHealthCard accountId={id} accountName={c.name} />
 
           {/* brand identity (company-enrichment stack) */}
           <CompanyResearchCard account={c as any} />
@@ -351,6 +358,40 @@ function BrandIdentityCard({ accountId, account, isAdmin }: {
       ) : (
         <p className="text-[13px] text-muted-foreground">No brand observations yet{isAdmin ? " — Resolve brand queries Brand Search and records what it finds" : ""}.</p>
       )}
+    </section>
+  );
+}
+
+/**
+ * The company as a customer (audit 2026-10-20, U26): health and ARR from the
+ * customer record, as stored — no new scoring — with the contract's end and
+ * its renewal stage, and Record renewal or churn (F36). A company that is not
+ * a customer shows nothing.
+ */
+export function CustomerHealthCard({ accountId, accountName }: { accountId: number; accountName: string }) {
+  const { data: cust } = trpc.cs.forAccount.useQuery({ accountId }, { enabled: Number.isFinite(accountId) && accountId > 0 });
+  if (!cust) return null;
+  const churned = cust.renewalStage === "churned";
+  const tone = HEALTH_TIER_TONE[cust.healthTier as keyof typeof HEALTH_TIER_TONE] ?? "muted";
+  return (
+    <section className="rounded-lg border border-border p-4" aria-label="Customer health and ARR">
+      <div className="flex items-center gap-2 mb-3">
+        <HeartPulse className="size-4 text-muted-foreground" />
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Customer</div>
+        <StatusPill tone={tone}>{cust.healthTier.replace("_", " ")}</StatusPill>
+        <Link href="/customers" className="ml-auto text-[12px] text-blue-600 hover:underline">Open in Customers</Link>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[13px]">
+        <Detail icon={Gauge} label="Health score" value={`${cust.healthScore} / 100`} />
+        <Detail icon={DollarSign} label={churned ? "ARR (churned)" : "ARR"} value={churned ? `${formatAmount(Number(cust.arr ?? 0))} lost` : formatAmount(cust.activeArr)} />
+        <Detail icon={Calendar} label="Contract ends" value={cust.contractEnd ? new Date(cust.contractEnd).toLocaleDateString() : null} />
+        <Detail icon={RefreshCw} label="Renewal" value={RENEWAL_STAGE_LABELS[cust.renewalStage as keyof typeof RENEWAL_STAGE_LABELS] ?? cust.renewalStage} />
+      </div>
+      <div className="mt-2 text-[12px] text-muted-foreground">
+        Usage {cust.usageScore} · Engagement {cust.engagementScore} · Support {cust.supportScore} · NPS {cust.npsScore}
+        {churned && cust.churnReason ? ` · Churned: ${cust.churnReason}` : ""}
+      </div>
+      <div className="mt-3"><RecordRenewalOrChurn customer={cust} accountName={accountName} /></div>
     </section>
   );
 }

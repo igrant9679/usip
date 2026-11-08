@@ -102,7 +102,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // side by side under CRM and the label alone will not explain the pair.
   "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
-  "/proposals": { body: "Quotes and proposals you've sent, and whether they've been opened." },
+  "/proposals": { body: "Proposals, with their versioned pricing, and whether the client has opened, accepted or declined them." },
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },
 
   // ── Automation and analytics ──

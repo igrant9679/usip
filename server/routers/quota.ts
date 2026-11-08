@@ -13,8 +13,9 @@ import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { z } from "zod";
 import { activities, quotaTargets, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { closedIn, loadMetricDeals, quotaPeriodRange } from "../services/dealMetrics";
-import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { addMonths, closedIn, fiscalQuarterFirstMonth, fiscalQuarterOf, fiscalYearFirstMonth, loadMetricDeals, quotaPeriodRange } from "../services/dealMetrics";
+import { getRevenueSettings } from "../services/workspaceRevenue";
+import { FORECAST_PERIODS, quotaPacingRows } from "../services/forecastCall";
 import { quotaPeriodLabel } from "@shared/quotaPeriod";
 import { router } from "../_core/trpc";
 import { managerProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
@@ -27,33 +28,40 @@ const periodRegex = /^\d{4}-(0[1-9]|1[0-2]|Q[1-4]|FY)$/;
  * one under "2026-FY". So a quarterly target is ONE row for the quarter, shown
  * whichever of its months is picked, not a row per month it was saved from.
  */
-export function quotaPeriodKey(period: string, periodType: "monthly" | "quarterly" | "annual"): string {
+export function quotaPeriodKey(period: string, periodType: "monthly" | "quarterly" | "annual", fyStart = 1): string {
   const m = /^(\d{4})-(\d{2}|Q[1-4]|FY)$/.exec(period);
   if (!m) return period;
-  const year = m[1];
-  const month = /^\d{2}$/.test(m[2]) ? Number(m[2]) : m[2].startsWith("Q") ? (Number(m[2][1]) - 1) * 3 + 1 : 1;
+  const year = Number(m[1]);
+  // Quarters and years are the workspace's fiscal ones (F29): a month belongs
+  // to the fiscal quarter and year it falls in. With a January start (the
+  // default) these are calendar quarters, as before.
+  if (/^\d{2}$/.test(m[2])) {
+    const fq = fiscalQuarterOf(year, Number(m[2]), fyStart);
+    if (periodType === "annual") return `${fq.fy}-FY`;
+    if (periodType === "quarterly") return `${fq.fy}-Q${fq.q}`;
+    return period;
+  }
   if (periodType === "annual") return `${year}-FY`;
-  if (periodType === "quarterly") return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
-  return /^\d{2}$/.test(m[2]) ? period : `${year}-${String(month).padStart(2, "0")}`;
+  if (periodType === "quarterly") return m[2].startsWith("Q") ? period : `${year}-Q1`;
+  const first = m[2].startsWith("Q") ? fiscalQuarterFirstMonth(year, Number(m[2][1]), fyStart) : fiscalYearFirstMonth(year, fyStart);
+  return `${first.y}-${String(first.m).padStart(2, "0")}`;
 }
 
-/** The months a quarter or year key spans ("2026-Q4" → 2026-10…12). */
-function monthKeysIn(period: string): string[] {
+/** The months a quarter or year key spans ("2026-Q4" → 2026-10…12), in the fiscal calendar. */
+function monthKeysIn(period: string, fyStart = 1): string[] {
   const q = /^(\d{4})-Q([1-4])$/.exec(period);
   const fy = /^(\d{4})-FY$/.exec(period);
-  const year = (q ?? fy)?.[1];
-  if (!year) return [];
-  const first = q ? (Number(q[2]) - 1) * 3 + 1 : 1;
-  const n = q ? 3 : 12;
-  return Array.from({ length: n }, (_, i) => `${year}-${String(first + i).padStart(2, "0")}`);
+  if (!q && !fy) return [];
+  const first = q ? fiscalQuarterFirstMonth(Number(q[1]), Number(q[2]), fyStart) : fiscalYearFirstMonth(Number(fy![1]), fyStart);
+  return Array.from({ length: q ? 3 : 12 }, (_, i) => { const a = addMonths(first.y, first.m, i); return `${a.y}-${String(a.m).padStart(2, "0")}`; });
 }
 
 /** Every key a target covering this month could be stored under. */
-function periodKeysCovering(period: string): string[] {
+function periodKeysCovering(period: string, fyStart = 1): string[] {
   const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period);
   if (!m) return [period];
-  const q = Math.floor((Number(m[2]) - 1) / 3) + 1;
-  return [period, `${m[1]}-Q${q}`, `${m[1]}-FY`];
+  const fq = fiscalQuarterOf(Number(m[1]), Number(m[2]), fyStart);
+  return [period, `${fq.fy}-Q${fq.q}`, `${fq.fy}-FY`];
 }
 
 /**
@@ -90,8 +98,8 @@ export const quotaRouter = router({
       const scope = quotaScopeUserId(ctx, input?.userId);
       if (scope !== null) rows = rows.filter((r) => r.userId === scope);
       if (input?.period) {
-        // A picked month also shows the quarter and year targets around it.
-        const keys = periodKeysCovering(input.period);
+        // A picked month also shows the (fiscal) quarter and year targets around it.
+        const keys = periodKeysCovering(input.period, (await getRevenueSettings(ctx.workspace.id)).fiscalYearStartMonth);
         rows = rows.filter((r) => keys.includes(r.period));
       }
       return rows;
@@ -125,7 +133,8 @@ export const quotaRouter = router({
         .where(and(eq(workspaceMembers.userId, input.userId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "User is not a member of this workspace" });
 
-      const period = quotaPeriodKey(input.period, input.periodType);
+      const fyStart = (await getRevenueSettings(ctx.workspace.id)).fiscalYearStartMonth;
+      const period = quotaPeriodKey(input.period, input.periodType, fyStart);
       if (input.onlyIfNew) {
         const [existing] = await db.select({ id: quotaTargets.id }).from(quotaTargets).where(and(
           eq(quotaTargets.workspaceId, ctx.workspace.id),
@@ -159,7 +168,7 @@ export const quotaRouter = router({
       // A quarterly or annual target saved before this was stored under the
       // month it was set from; the row just written supersedes it.
       if (period !== input.period || input.periodType !== "monthly") {
-        const legacy = monthKeysIn(period).filter((k) => k !== period);
+        const legacy = monthKeysIn(period, fyStart).filter((k) => k !== period);
         if (legacy.length > 0) {
           await db.delete(quotaTargets).where(and(
             eq(quotaTargets.workspaceId, ctx.workspace.id),
@@ -206,8 +215,8 @@ export const quotaRouter = router({
 
       if (!target) return null;
 
-      const tz = await getWorkspaceTimezone(ctx.workspace.id);
-      const range = quotaPeriodRange(tz, target.period, target.periodType);
+      const rs = await getRevenueSettings(ctx.workspace.id);
+      const range = quotaPeriodRange(rs.timezone, target.period, target.periodType, rs.fiscalYearStartMonth);
 
       // Won deals by WHEN they were won — the same classification and the
       // same wonAt the Dashboard and Forecast read.
@@ -242,18 +251,28 @@ export const quotaRouter = router({
       };
     }),
 
-  /** Team-wide quota summary for current period */
+  /**
+   * Team quota pacing for a fiscal period (audit 2026-10-20, F29): each rep's
+   * target, closed and Commit, set against how much of the period has gone,
+   * and the team's total. It returned the raw target rows and no screen
+   * called it; the Forecast page shows it to managers now.
+   */
   // teamSummary returns everyone's targets/attainment — strictly a
   // manager+ view. Reps shouldn't see peer compensation numbers.
   teamSummary: managerProcedure
-    .input(z.object({ period: z.string() }))
+    .input(z.object({ period: z.enum(FORECAST_PERIODS).default("quarter") }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return [];
-      const targets = await db
-        .select()
-        .from(quotaTargets)
-        .where(and(eq(quotaTargets.workspaceId, ctx.workspace.id), inArray(quotaTargets.period, periodKeysCovering(input.period))));
-      return targets;
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return quotaPacingRows(db, { workspaceId: ctx.workspace.id, userIds: null, kind: input?.period ?? "quarter" });
+    }),
+
+  /** The caller's own quota pacing for a fiscal period (F29): what a rep sees beside the forecast. */
+  myPacing: workspaceProcedure
+    .input(z.object({ period: z.enum(FORECAST_PERIODS).default("quarter") }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return quotaPacingRows(db, { workspaceId: ctx.workspace.id, userIds: [ctx.user.id], kind: input?.period ?? "quarter" });
     }),
 });

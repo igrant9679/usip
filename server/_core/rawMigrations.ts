@@ -5347,6 +5347,75 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, U25: pipeline alerts as a work queue — snooze until a
+  // date, and say why an alert left the queue (an alert resolved by new
+  // activity on its deal is held like a snooze). Additive and nullable:
+  // every existing alert reads as live and not snoozed, as it was.
+  {
+    name: "0400_pipeline_alert_snooze.sql",
+    statements: [
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `snoozedUntil` timestamp NULL",
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `snoozedByUserId` int NULL",
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `resolvedReason` varchar(16) NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, F48: a portal acceptance's e-signature record (signer
+  // name, email and address; acceptedAt is its time) and portal views (first,
+  // last, count — nothing about the viewer). Additive: existing proposals
+  // read as unsigned and never viewed, which is what is known about them.
+  {
+    name: "0401_proposal_signature_views.sql",
+    statements: [
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedSignerName` varchar(200) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedSignerEmail` varchar(320) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedIp` varchar(64) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalFirstViewedAt` timestamp NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalLastViewedAt` timestamp NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalViewCount` int NOT NULL DEFAULT 0",
+    ],
+  },
+
+  // Audit 2026-10-20, F36: "Record churn" keeps the day and the reason on the
+  // customer. Nullable: no existing customer gains a churn it did not have.
+  {
+    name: "0402_customer_churn_record.sql",
+    statements: [
+      "ALTER TABLE `customers` ADD COLUMN `churnedAt` timestamp NULL",
+      "ALTER TABLE `customers` ADD COLUMN `churnReason` varchar(200) NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, F29 and R41: a fiscal calendar and a workspace currency.
+  // The defaults are January and USD — calendar quarters and dollars, what
+  // every workspace showed before — so nothing moves until an admin chooses.
+  // And a deal's forecast-category history: who set it, when, from what, and
+  // whether it was a manager overriding the deal's owner. New table, additive.
+  {
+    name: "0403_fiscal_calendar_currency_forecast_history.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `fiscalYearStartMonth` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `currency` varchar(3) NOT NULL DEFAULT 'USD'",
+      "CREATE TABLE IF NOT EXISTS `opportunity_forecast_changes` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `opportunityId` int NOT NULL, `fromCategory` varchar(16) NULL, `toCategory` varchar(16) NULL, `changedByUserId` int NULL, `ownerUserId` int NULL, `isOverride` boolean NOT NULL DEFAULT false, `note` varchar(500) NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY `ix_ofc_opp` (`workspaceId`, `opportunityId`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
+  // Audit 2026-10-20, F34 and F36: quotes fold into proposals as their
+  // pricing section, with versions. Additive columns only; every existing
+  // quote reads as version 1, current, not yet attached. The attaching (each
+  // quote to its deal's newest proposal, or a new draft proposal for a deal
+  // with none) is services/quoteFold, run at boot: idempotent, it touches
+  // only quotes not attached yet.
+  {
+    name: "0404_quotes_in_proposals.sql",
+    statements: [
+      "ALTER TABLE `quotes` ADD COLUMN `proposalId` int NULL",
+      "ALTER TABLE `quotes` ADD COLUMN `version` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `quotes` ADD COLUMN `supersededAt` timestamp NULL",
+      "CREATE INDEX `ix_quote_proposal` ON `quotes` (`workspaceId`, `proposalId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

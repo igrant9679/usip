@@ -345,6 +345,21 @@ async function startServer() {
       .catch((e) => console.error("[dealDates] backfill failed:", e));
   }, 45_000);
 
+  // Migration 0404 folded quotes into proposals (audit 2026-10-20, F34): each
+  // quote made before it is attached once to its deal's newest proposal, or a
+  // new draft one. Idempotent — only quotes not attached yet.
+  setTimeout(() => {
+    import("../services/quoteFold")
+      .then(async (m) => {
+        const { getDb } = await import("../db");
+        const db = await getDb();
+        if (!db) return;
+        const r = await m.foldQuotesIntoProposals(db);
+        if (r.attached > 0 || r.skipped > 0) console.log(`[quoteFold] attached=${r.attached} draftsCreated=${r.draftsCreated} skipped=${r.skipped}`);
+      })
+      .catch((e) => console.error("[quoteFold] fold failed:", e));
+  }, 65_000);
+
   // Campaign prospects' identity keys, stored for the indexed duplicate check
   // (audit 2026-10-20, A34): rows not keyed yet are keyed once per boot, a
   // batch at a time. Idempotent; every lookup also keys what it reads.

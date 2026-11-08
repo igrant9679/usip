@@ -1,3 +1,10 @@
+/**
+ * RETIRED 2026-11-07 (audit 2026-10-20, F34): not routed. A quote is now a
+ * proposal's versioned pricing section (components/usip/ProposalPricing.tsx),
+ * and /quotes redirects to /proposals through RetiredRedirect. The file is
+ * kept, as the other retired pages are, so the redirect can be undone by
+ * putting its <Route> line back in App.tsx.
+ */
 import { Button } from "@/components/ui/button";
 import { ConfirmButton, Field, fmt$, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { computeQuoteTotals, formatMoney, formatMoneyCents } from "@shared/quoteTotals";
