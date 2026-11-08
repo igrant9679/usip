@@ -46,6 +46,7 @@ import {
   buildDealStuckPayload, buildRecordPayload, buildRecordUpdatedPayload, buildStageChangedPayload, buildTaskOverduePayload,
 } from "./services/workflowEngine";
 import { dryRunRuleAgainstRecord } from "./services/workflowRecordDryRun";
+import { autoAuditSkipped } from "./_core/autoAudit";
 
 const ROOT = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -251,6 +252,12 @@ describe("a dry run against a chosen record (F46)", () => {
     h.paused = true;
     const out = await dryRunRuleAgainstRecord(h.db, WS, richRule, { recordType: "lead", recordId: 101 });
     expect(out.steps[2]!).toEqual({ action: "enroll_sequence", ok: false, text: 'Would skip "Warm intro": outbound is paused for this workspace.' });
+  });
+
+  // Merged with SEC (G49) 2026-11-07: workspace mutations leave an automatic
+  // audit entry; the dry run promises to log nothing, so it is on the skip list.
+  it("the dry run leaves no automatic audit entry", () => {
+    expect(autoAuditSkipped("workflows.dryRun")).toBe(true);
   });
 
   it("deal_stuck: the days gate is read off the deal", async () => {
