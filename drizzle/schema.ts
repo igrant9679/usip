@@ -6,6 +6,7 @@ import {
   index,
   int,
   json,
+  longtext,
   mediumtext,
   mysqlEnum,
   mysqlTable,
@@ -1366,6 +1367,8 @@ export const qbrs = mysqlTable(
     scheduledAt: timestamp("scheduledAt"),
     completedAt: timestamp("completedAt"),
     status: mysqlEnum("status", ["scheduled", "completed", "cancelled"]).default("scheduled").notNull(),
+    /** Set when scheduled at a time; null for a day-only QBR (migration 0370, audit U27). */
+    durationMinutes: int("durationMinutes"),
     aiPrep: json("aiPrep"), // {wins, risks, asks, agenda}
     notes: text("notes"),
     nextActions: json("nextActions"),
@@ -3030,6 +3033,16 @@ export const contactImports = mysqlTable(
     postImportActions: json("postImportActions"),
     ownerId: int("ownerId").notNull(), // user who triggered the import
     completedAt: timestamp("completedAt"),
+    /** contacts | prospects (migration 0371, audit F32); null on older imports. */
+    destination: varchar("destination", { length: 16 }),
+    /** The mapping preset that read the file ("leadrocks"), if any (0371). */
+    preset: varchar("preset", { length: 32 }),
+    /** Companies this import created, for Undo (0371). */
+    createdAccountIds: json("createdAccountIds"),
+    /** Set when "Undo this import" removed what it made (0371). */
+    undoneAt: timestamp("undoneAt"),
+    undoneByUserId: int("undoneByUserId"),
+    undoSummary: json("undoSummary"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -3039,6 +3052,34 @@ export const contactImports = mysqlTable(
   }),
 );
 export type ContactImport = typeof contactImports.$inferSelect;
+
+/**
+ * An uploaded import file, kept under a token for a day (migration 0371,
+ * audit F32/R86): validation and commit read it here instead of the browser
+ * sending the whole file again. One pending file per person per workspace.
+ */
+export const importFiles = mysqlTable(
+  "import_files",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    token: varchar("token", { length: 64 }).notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    preset: varchar("preset", { length: 32 }),
+    content: longtext("content").notNull(),
+    byteSize: int("byteSize").default(0).notNull(),
+    rowCount: int("rowCount").default(0).notNull(),
+    /** The last validation's error rows ({rowIndex, reason}), for the full report. */
+    lastErrorRows: json("lastErrorRows"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+  },
+  (t) => ({
+    byToken: uniqueIndex("ux_import_files_token").on(t.token),
+    byOwner: index("ix_import_files_owner").on(t.workspaceId, t.userId),
+  }),
+);
 
 export const contactImportRows = mysqlTable(
   "contact_import_rows",

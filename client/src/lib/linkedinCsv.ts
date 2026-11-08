@@ -150,3 +150,52 @@ export function rowsFromMapping(
   }
   return out;
 }
+
+/**
+ * Up to two distinct values from each column, for the mapping step's choices
+ * (audit 2026-10-20, U31): a column is picked by what it holds, not only by
+ * what its header says.
+ */
+export function columnSamples(records: string[][], headerRow: number | null, max = 2): string[][] {
+  const width = records.reduce((n, r) => Math.max(n, r.length), 0);
+  const out: string[][] = Array.from({ length: width }, () => []);
+  for (let i = headerRow === null ? 0 : headerRow + 1; i < records.length; i++) {
+    records[i].forEach((v, c) => {
+      const s = (v ?? "").trim();
+      if (s && out[c].length < max && !out[c].includes(s)) out[c].push(s.length > 40 ? `${s.slice(0, 37)}…` : s);
+    });
+    if (out.every((x) => x.length >= max)) break;
+  }
+  return out;
+}
+
+/**
+ * The first rows as the mapping reads them, before anything is sent (U31):
+ * each data row with the value every mapped field takes, and whether it will
+ * be imported (a row with no URL in the mapped column is left out, as
+ * rowsFromMapping leaves it out) or looks wrong (a URL that is not a LinkedIn
+ * profile, which the server will mark invalid).
+ */
+export function mappingPreview(
+  records: string[][],
+  headerRow: number | null,
+  map: Partial<Record<LinkedInImportField, number>>,
+  max = 5,
+): { fields: LinkedInImportField[]; rows: Array<{ line: number; values: Partial<Record<LinkedInImportField, string>>; status: "ok" | "no_url" | "not_profile" }>; noUrl: number; notProfile: number } {
+  const fields = LINKEDIN_IMPORT_FIELDS.map((f) => f.key).filter((k) => map[k] !== undefined);
+  const rows: Array<{ line: number; values: Partial<Record<LinkedInImportField, string>>; status: "ok" | "no_url" | "not_profile" }> = [];
+  let noUrl = 0;
+  let notProfile = 0;
+  for (let i = headerRow === null ? 0 : headerRow + 1; i < records.length; i++) {
+    const cells = records[i];
+    if (cells.every((c) => !(c ?? "").trim())) continue;
+    const values: Partial<Record<LinkedInImportField, string>> = {};
+    for (const k of fields) values[k] = (cells[map[k]!] ?? "").trim();
+    const url = values.linkedinUrl ?? "";
+    const status = !url ? "no_url" as const : isLinkedInUrl(url) ? "ok" as const : "not_profile" as const;
+    if (status === "no_url") noUrl++;
+    if (status === "not_profile") notProfile++;
+    if (rows.length < max) rows.push({ line: i + 1, values, status });
+  }
+  return { fields, rows, noUrl, notProfile };
+}

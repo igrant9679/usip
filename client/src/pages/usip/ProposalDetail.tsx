@@ -1568,7 +1568,8 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
-  const { data: opportunities } = trpc.opportunities.list.useQuery(undefined, { enabled: linkDialogOpen });
+  // The search runs on the server (audit 2026-10-20, X4.1): the dialog loaded every deal.
+  const { data: opportunities } = trpc.opportunities.list.useQuery({ search: search.trim() || undefined, limit: 50 }, { enabled: linkDialogOpen });
   const linkOpp = trpc.proposals.linkOpportunity.useMutation({
     onSuccess: () => {
       toast.success("Opportunity linked");

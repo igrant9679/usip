@@ -230,6 +230,14 @@ export default function People() {
   const [missingEmail, setMissingEmail] = useState(urlParams?.get("missingEmail") === "1");
   const [verification, setVerification] = useState<string>(""); // verified | needs_review | rejected
   const [promoted, setPromoted] = useState<"all" | "promoted" | "not">("all");
+  // One company's people: /v2/people?companyId=42, the company page's "Open in
+  // People" (audit 2026-10-20, F36). A saved search can keep it, like any pill.
+  const [companyId, setCompanyId] = useState<number | null>(() => {
+    const n = Number(urlParams?.get("companyId") ?? "");
+    return Number.isInteger(n) && n > 0 ? n : null;
+  });
+  const companyRecordQ = trpc.accounts.get.useQuery({ id: companyId ?? 0 }, { enabled: companyId != null, staleTime: 60_000 });
+  const companyName = (companyRecordQ.data as { name?: string } | null | undefined)?.name ?? (companyId ? `Company #${companyId}` : "");
   const [page, setPage] = useState(1);
   const perPage = 50;
 
@@ -276,7 +284,7 @@ export default function People() {
   // sent the user here promised. Seeding `viewRestored` true is how the
   // one-shot restore below is skipped without a second flag.
   const [viewRestored, setViewRestored] = useState(
-    !!(urlParams?.get("emailStatus") || urlParams?.get("missingEmail") || urlParams?.get("hasEmail") || urlParams?.get("q")),
+    !!(urlParams?.get("emailStatus") || urlParams?.get("missingEmail") || urlParams?.get("hasEmail") || urlParams?.get("q") || urlParams?.get("companyId")),
   );
 
   // ── view state ──
@@ -295,7 +303,7 @@ export default function People() {
   });
   const [pinned, setPinned] = useState<Set<string>>(new Set(["emailStatus", "jobTitles"]));
   const [openGroups, setOpenGroups] = useState<Set<string>>(
-    new Set(["quick", "emailStatus", "jobTitles", "fit"]),
+    new Set(["quick", "emailStatus", "jobTitles", "fit", ...(urlParams?.get("companyId") ? ["company"] : [])]),
   );
 
   const toggleGroup = (id: string) =>
@@ -349,6 +357,7 @@ export default function People() {
     hasEmail: missingEmail ? false : (hasEmail || undefined),
     verificationStatus: (verification || undefined) as any,
     promoted: promoted === "promoted" ? true : promoted === "not" ? false : undefined,
+    companyId: companyId ?? undefined,
     enrolled: enrolled === "all" ? undefined : enrolled,
     search: qText.search || undefined,
     titleQ: qText.titleQ || undefined,
@@ -364,10 +373,17 @@ export default function People() {
     sortField: SERVER_SORT[sortField],
     sortDir,
   };
-  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery(listQuery);
+  // The previous page stays on screen while the next one loads, pager and all
+  // (audit 2026-10-20, U28): a page turn dropped to the skeleton and hid the pager.
+  const { data, isLoading, isPlaceholderData, error, refetch } = trpc.prospects.list.useQuery(listQuery, { placeholderData: (prev) => prev });
+  // "Select all N matching" (audit 2026-10-20, F30): the selection becomes
+  // the list's filter, and the bulk actions run on the server by it.
+  const [matchingAll, setMatchingAll] = useState(false);
   // A new search, filter, sort or page is a new set of rows; a selection
   // made on the old one must not ride along to the bulk actions (R4).
-  useClearOnChange(listQuery, () => setChecked(new Set()));
+  useClearOnChange(listQuery, () => { setChecked(new Set()); setMatchingAll(false); });
+  // The filter "all matching" means: the list's query without its paging or sort.
+  const { page: _page, perPage: _perPage, sortField: _sortField, sortDir: _sortDir, ...matchFilter } = listQuery;
 
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];
@@ -421,7 +437,7 @@ export default function People() {
   // whether any *server-backed* filter is set — distinguishes "no results for
   // this query" (show the adjust-filters state) from "empty workspace".
   const serverFilterActive = !!(
-    emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all" ||
+    emailStatus || hasEmail || verification || promoted !== "all" || enrolled !== "all" || companyId ||
     qText.search || qText.titleQ || qText.companyQ || qText.locationQ || qText.industryQ || qText.educationQ || qText.linkedinQ
   );
 
@@ -435,6 +451,7 @@ export default function People() {
     (missingEmail ? 1 : 0) +
     (verification ? 1 : 0) +
     (promoted !== "all" ? 1 : 0) +
+    (companyId ? 1 : 0) +
     (search ? 1 : 0) +
     (titleQ ? 1 : 0) +
     (companyQ ? 1 : 0) +
@@ -456,6 +473,7 @@ export default function People() {
     if (missingEmail) f.push({ id: "missingEmail", group: "Email Status", label: "Missing email" });
     if (verification) f.push({ id: "verification", group: "Stage", label: cap(verification) });
     if (promoted !== "all") f.push({ id: "promoted", group: "Saved status", label: promoted === "promoted" ? "Saved" : "Net new" });
+    if (companyId) f.push({ id: "companyId", group: "Company", label: companyName });
     if (enrolled !== "all") f.push({ id: "enrolled", group: "Sequence", label: enrolled === "yes" ? "In a sequence" : "Not in a sequence" });
     if (qText.search) f.push({ id: "search", group: "Keywords", label: qText.search });
     if (qText.titleQ) f.push({ id: "titleQ", group: "Job titles", label: qText.titleQ });
@@ -469,7 +487,7 @@ export default function People() {
     tiers.forEach((t) => f.push({ id: `tier:${t}`, group: "ICP fit", label: cap(t) }));
     seniorities.forEach((s) => f.push({ id: `sen:${s}`, group: "Management level", label: cap(s) }));
     return f;
-  }, [emailStatus, hasEmail, missingEmail, verification, promoted, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
+  }, [emailStatus, hasEmail, missingEmail, verification, promoted, companyId, companyName, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
 
   const removeFilter = (id: string) => {
     // Dropping a filter means the table is no longer the saved search, so the
@@ -484,6 +502,7 @@ export default function People() {
       case "missingEmail": setMissingEmail(false); resetPage(); break;
       case "verification": setVerification(""); resetPage(); break;
       case "promoted": setPromoted("all"); resetPage(); break;
+      case "companyId": setCompanyId(null); resetPage(); break;
       case "enrolled": setEnrolled("all"); resetPage(); break;
       case "search": setSearch(""); break;
       case "titleQ": setTitleQ(""); break;
@@ -498,7 +517,7 @@ export default function People() {
   };
 
   const clearAll = () => {
-    setEmailStatus(""); setHasEmail(false); setMissingEmail(false); setVerification(""); setPromoted("all");
+    setEmailStatus(""); setHasEmail(false); setMissingEmail(false); setVerification(""); setPromoted("all"); setCompanyId(null);
     setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ(""); setEducationQ("");
     setLinkedinQ(""); setEnrolled("all");
     setHasPhone(false); setHasLinkedin(false); setTiers(new Set()); setSeniorities(new Set());
@@ -560,6 +579,7 @@ export default function People() {
     // the same way the prospects.list call's is.
     if (tiers.size) filters.tiers = Array.from(tiers) as TierValue[];
     if (seniorities.size) filters.seniorities = Array.from(seniorities);
+    if (companyId) filters.companyId = companyId;
     return { columns: visibleColumns, filters, sort: { field: sortField, dir: sortDir } };
   };
 
@@ -585,6 +605,7 @@ export default function People() {
     setHasLinkedin(!!f.hasLinkedin);
     setTiers(new Set(f.tiers ?? []));
     setSeniorities(new Set(f.seniorities ?? []));
+    setCompanyId(f.companyId ?? null);
     setSearch(f.search ?? "");
     setTitleQ(f.titleQ ?? "");
     setCompanyQ(f.companyQ ?? "");
@@ -659,6 +680,8 @@ export default function People() {
 
   const allOnPageChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
   const toggleAll = () => {
+    // Changing the page's ticks is a page selection again, not "all matching".
+    setMatchingAll(false);
     setChecked((prev) => {
       const next = new Set(prev);
       if (allOnPageChecked) rows.forEach((r) => next.delete(r.id));
@@ -798,7 +821,13 @@ export default function People() {
         );
       case "company":
         return (
-          <FilterGroup key={id} {...common} label="Company" icon={Building2} count={companyQ ? 1 : 0}>
+          <FilterGroup key={id} {...common} label="Company" icon={Building2} count={(companyQ ? 1 : 0) + (companyId ? 1 : 0)}>
+            {companyId != null && (
+              <div className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-[12px]">
+                <span className="min-w-0 flex-1 truncate">People at <strong>{companyName}</strong></span>
+                <button type="button" aria-label="Show every company's people" onClick={() => removeFilter("companyId")} className="shrink-0 text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+              </div>
+            )}
             <Input aria-label="Company" value={companyQ} onChange={(e) => setCompanyQ(e.target.value)} placeholder="Company name…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
@@ -1005,8 +1034,29 @@ export default function People() {
             </div>
 
             {/* selection action bar */}
-            {checked.size > 0 && (
-              <SelectionToolbar selectedIds={[...checked]} onClear={() => setChecked(new Set())} />
+            {(checked.size > 0 || matchingAll) && (
+              <SelectionToolbar
+                selectedIds={[...checked]}
+                onClear={() => { setChecked(new Set()); setMatchingAll(false); }}
+                matching={matchingAll ? { filter: matchFilter, total } : undefined}
+              />
+            )}
+            {/* Select all N matching (F30): offered once the whole page is selected
+                and more match than the page shows. */}
+            {(matchingAll || (allOnPageChecked && total > rows.length)) && (
+              <div className="shrink-0 border-b border-border bg-muted/40 px-3 py-1.5 text-center text-[12px]" role="status">
+                {matchingAll ? (
+                  <>
+                    All <strong>{fmtNum(total)}</strong> people matching these filters are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => { setMatchingAll(false); setChecked(new Set()); }}>Clear the selection</button>
+                  </>
+                ) : (
+                  <>
+                    All {rows.length} people on this page are selected.{" "}
+                    <button type="button" className="font-medium underline underline-offset-2" onClick={() => setMatchingAll(true)}>Select all {fmtNum(total)} matching</button>
+                  </>
+                )}
+              </div>
             )}
 
             {/* results / states */}
@@ -1046,7 +1096,7 @@ export default function People() {
                   <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear all filters</Button>
                 </div>
               ) : (
-                <table className="w-full border-separate border-spacing-0 text-[13px]">
+                <table className={cn("w-full border-separate border-spacing-0 text-[13px] transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   {/* Sticky axes live on the CELLS (not thead/tr): every th is
                       sticky-top; the checkbox + name cells are also sticky-left
                       so identity stays visible under horizontal scroll. Body
@@ -1094,13 +1144,13 @@ export default function People() {
                             <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
                           )}
                           <Checkbox aria-label="Select person"
-                            checked={checked.has(p.id)}
+                            checked={matchingAll || checked.has(p.id)}
                             onCheckedChange={() =>
-                              setChecked((prev) => {
+                              (setMatchingAll(false), setChecked((prev) => {
                                 const next = new Set(prev);
                                 next.has(p.id) ? next.delete(p.id) : next.add(p.id);
                                 return next;
-                              })
+                              }))
                             }
                             className="size-3.5"
                           />

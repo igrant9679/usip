@@ -219,10 +219,14 @@ describe("Add all N to a campaign goes in batches (P48)", () => {
 
   it("the menu's Confirm pushes batch by batch and reports once, the review says so; best-fit isn't split", () => {
     const menu = read("client/src/components/usip/AddToMenu.tsx");
-    expect(menu).toContain("for (const batch of pushChunks({ prospectIds, contactIds, leadIds })) {");
+    // 2026-11-07 (CRMP, F36): the batches run over the ids the review kept,
+    // which are every id given unless people at a do-not-contact company were
+    // left out; the default is still the whole selection.
+    expect(menu).toContain("ids: { prospectIds: number[]; contactIds: number[]; leadIds: number[] } = { prospectIds, contactIds, leadIds },");
+    expect(menu).toContain("for (const batch of pushChunks(ids)) {");
     expect(menu).toContain("await pushExisting.mutateAsync({ campaignId: campaign.id, ...batch });");
     // The pick is a review (R48); Confirm runs the batches.
-    expect(menu).toContain('if (picked.kind === "campaign") void pushToCampaign(picked);');
+    expect(menu).toContain('if (picked.kind === "campaign") void pushToCampaign(picked, ids);');
     expect(menu).not.toContain("pushExisting.mutate({ campaignId: picked.id, prospectIds, contactIds, leadIds })");
     expect(menu).toContain('{picked.kind === "campaign" && n > PUSH_BATCH ? <span className="block text-[11.5px] text-muted-foreground mt-0.5">They go in {PUSH_BATCH} at a time.</span> : null}');
     expect(menu).toContain("disabled={bestFitTooMany}");

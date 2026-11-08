@@ -17,7 +17,7 @@
  * pick shows who goes where and enrols on Confirm. List picks a list here and
  * adds the people to it; it used to open the Lists page and drop them.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { Activity, Bot, ChevronDown, ChevronRight, Loader2, ListChecks, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -69,13 +69,16 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     onError: (e: any) => toast.error(e.message),
   });
   const [pushing, setPushing] = useState(false);
-  const pushToCampaign = async (campaign: { id: number; name: string }) => {
+  const pushToCampaign = async (
+    campaign: { id: number; name: string },
+    ids: { prospectIds: number[]; contactIds: number[]; leadIds: number[] } = { prospectIds, contactIds, leadIds },
+  ) => {
     setPushing(true);
     const added: number[] = [];
     const skipped: Array<{ reason: string }> = [];
     let failed = false;
     try {
-      for (const batch of pushChunks({ prospectIds, contactIds, leadIds })) {
+      for (const batch of pushChunks(ids)) {
         const r: any = await pushExisting.mutateAsync({ campaignId: campaign.id, ...batch });
         added.push(...r.added);
         skipped.push(...r.skipped);
@@ -140,10 +143,38 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
   // Best-fit scores at most one batch; it is not split, since scoring can call the model.
   const bestFitTooMany = n > PUSH_BATCH;
   const who = n === 1 ? "this person" : `${n} people`;
+  // Before anyone is enrolled: who works at a company research flags "do not
+  // contact now" (audit 2026-10-20, F36). Confirm waits until the person
+  // either leaves them out or says to include them.
+  type DncHit = { people: number; companies: Array<{ accountId: number; name: string; people: number }>; flagged: { prospectIds: number[]; contactIds: number[]; leadIds: number[] } };
+  const [dnc, setDnc] = useState<DncHit | null>(null);
+  const [dncChoice, setDncChoice] = useState<"ask" | "include" | "leave_out">("ask");
+  const dncCheck = trpc.prospects.doNotContactCompanies.useMutation({
+    onSuccess: (r) => setDnc(r),
+    // A failed check does not hold the enrolment; it says it could not look.
+    onError: (e) => { setDnc({ people: 0, companies: [], flagged: { prospectIds: [], contactIds: [], leadIds: [] } }); toast.error(`Could not check the companies' do-not-contact flags: ${e.message}`); },
+  });
+  const pickedKey = picked ? `${picked.kind}:${picked.id}` : "";
+  useEffect(() => {
+    setDnc(null);
+    setDncChoice("ask");
+    if (pickedKey) dncCheck.mutate({ prospectIds, contactIds, leadIds });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedKey]);
+  const dncFlagged = (dnc?.people ?? 0) > 0;
+  const dncBlocks = !!picked && (dnc == null || (dncFlagged && dncChoice === "ask"));
   const confirm = () => {
     if (!picked) return;
-    if (picked.kind === "campaign") void pushToCampaign(picked);
-    else bulkEnroll.mutate({ sequenceId: picked.id, prospectIds, contactIds, leadIds });
+    const skip = dncFlagged && dncChoice === "leave_out" ? dnc!.flagged : null;
+    const keep = (ids: number[], out?: number[]) => (out?.length ? ids.filter((id) => !out.includes(id)) : ids);
+    const ids = {
+      prospectIds: keep(prospectIds, skip?.prospectIds),
+      contactIds: keep(contactIds, skip?.contactIds),
+      leadIds: keep(leadIds, skip?.leadIds),
+    };
+    if (ids.prospectIds.length + ids.contactIds.length + ids.leadIds.length === 0) { toast.info("No one left to add."); close(); return; }
+    if (picked.kind === "campaign") void pushToCampaign(picked, ids);
+    else bulkEnroll.mutate({ sequenceId: picked.id, ...ids });
   };
   // The review: what Confirm will do, in words, before it does it.
   const review = picked && (
@@ -154,9 +185,27 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         {picked.kind === "campaign" && n > PUSH_BATCH ? <span className="block text-[11.5px] text-muted-foreground mt-0.5">They go in {PUSH_BATCH} at a time.</span> : null}
         {picked.status && picked.status !== "active" ? <span className="block text-[11.5px] text-amber-700 mt-0.5">It is {picked.status}: nothing is sent until it is active.</span> : null}
       </p>
+      {dncFlagged && (
+        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[12px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <p className="font-medium">
+            {dnc!.people === 1 ? "1 of them works" : `${dnc!.people} of them work`} at a company flagged "Financial distress: do not contact now":{" "}
+            {dnc!.companies.slice(0, 3).map((c) => c.name).join(", ")}{dnc!.companies.length > 3 ? ` and ${dnc!.companies.length - 3} more` : ""}.
+          </p>
+          <div className="mt-1.5 space-y-1">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="dnc-choice" checked={dncChoice === "leave_out"} onChange={() => setDncChoice("leave_out")} />
+              Leave {dnc!.people === 1 ? "them" : "those people"} out
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="dnc-choice" checked={dncChoice === "include"} onChange={() => setDncChoice("include")} />
+              Add {dnc!.people === 1 ? "them" : "them all"} anyway
+            </label>
+          </div>
+        </div>
+      )}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={() => setPicked(null)} disabled={pending}>Back</Button>
-        <Button size="sm" onClick={confirm} disabled={pending}>
+        <Button size="sm" onClick={confirm} disabled={pending || dncBlocks}>
           {pending ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
           Confirm
         </Button>

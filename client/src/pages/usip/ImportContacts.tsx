@@ -39,6 +39,8 @@ import {
   requiredFieldsFor,
 } from "@shared/importFields";
 import { pressable } from "@/lib/pressable";
+import { confirmAction } from "@/components/usip/Common";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 /* ─── System fields ──────────────────────────────────────────────────────────
  * Imported, not mirrored. This file used to declare its own copy under a comment
@@ -103,6 +105,17 @@ const STATUS_BADGE: Record<string, { label: string; className: string }> = {
   unknown: { label: "Unknown", className: "bg-muted text-muted-foreground border-border" },
 };
 
+/** Save CSV text the server built as a file. */
+function saveCsv(csv: string, name: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name.toLowerCase().endsWith(".csv") ? name : `${name}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ─── Main panel ────────────────────────────────────────────────────────── */
 /**
  * The whole import wizard as an embeddable panel. Since 2026-08-21 it renders
@@ -128,6 +141,13 @@ export function ImportContactsPanel() {
   const [totalParsedRows, setTotalParsedRows] = useState(0);
   const [previewRows, setPreviewRows] = useState<Array<Record<string, string>>>([]);
   const [columnStats, setColumnStats] = useState<Array<{ header: string; filled: number; samples: string[] }>>([]);
+  // The upload is kept on the server under this token (audit 2026-10-20,
+  // R86): validation and commit name it instead of sending the file again.
+  const [fileToken, setFileToken] = useState<string | null>(null);
+  // A LeadRocks export is read through its preset (F32); the person can read
+  // it as a plain CSV instead.
+  const [preset, setPreset] = useState<string | null>(null);
+  const [detectedPreset, setDetectedPreset] = useState<string | null>(null);
 
   // Step 3: validation results. newCount + duplicateCount + errorCount is the
   // file; importCount is what the button creates (new, plus duplicates when
@@ -179,8 +199,33 @@ export function ImportContactsPanel() {
   /* ── tRPC mutations ── */
   const utils = trpc.useUtils();
   const parseCSVMutation = trpc.imports.parseCSV.useMutation();
+  const setPresetMutation = trpc.imports.setPreset.useMutation({ onError: (e) => toast.error(e.message) });
   const validateRowsMutation = trpc.imports.validateRows.useMutation();
   const commitMutation = trpc.imports.commit.useMutation();
+
+  /** What the server read: its columns, through the preset when there is one. */
+  function applyParsed(result: { fileToken: string; detectedPreset: string | null; preset: string | null; presetMapping: Record<string, string> | null; headers: string[]; totalRows: number; previewRows: unknown; columnStats?: unknown }) {
+    setFileToken(result.fileToken);
+    setDetectedPreset(result.detectedPreset);
+    setPreset(result.preset);
+    setHeaders(result.headers);
+    setTotalParsedRows(result.totalRows ?? 0);
+    setPreviewRows((result.previewRows as Array<Record<string, string>>) ?? []);
+    setColumnStats((result.columnStats as typeof columnStats) ?? []);
+    // A preset maps every column to its own field; otherwise exact label /
+    // key / alias matching, one column per field (shared/importFields.ts).
+    setFieldMapping(result.presetMapping ?? autoMapHeaders(result.headers));
+    // A LeadRocks list is prospects to clean, as its old importer put them.
+    if (result.preset === "leadrocks") setDestination("prospects");
+  }
+  async function switchPreset(next: "leadrocks" | null) {
+    if (!fileToken) return;
+    try {
+      applyParsed(await setPresetMutation.mutateAsync({ fileToken, preset: next }));
+    } catch {
+      /* said by onError */
+    }
+  }
 
   /* ── Step 1: File upload ── */
   function handleFile(f: File) {
@@ -211,14 +256,9 @@ export function ImportContactsPanel() {
   async function handleParseCSV() {
     if (!csvText) return;
     try {
+      // The one upload: the server keeps the file and answers with a token.
       const result = await parseCSVMutation.mutateAsync({ csvText, filename });
-      setHeaders(result.headers);
-      setTotalParsedRows(result.totalRows ?? 0);
-      setPreviewRows((result.previewRows as Array<Record<string, string>>) ?? []);
-      setColumnStats(((result as any).columnStats as typeof columnStats) ?? []);
-      // Exact label / key / alias matching, one column per field — see
-      // shared/importFields.ts for why this is not a similarity match.
-      setFieldMapping(autoMapHeaders(result.headers));
+      applyParsed(result);
       setStep(2);
     } catch (err: any) {
       toast.error(err.message ?? "Failed to parse CSV.");
@@ -231,8 +271,10 @@ export function ImportContactsPanel() {
   // counts from the previous setting).
   async function handleValidate(override?: { matchOnNameCompany?: boolean; skipDuplicates?: boolean }) {
     try {
+      if (!fileToken) { toast.error("Upload the file again."); setStep(1); return; }
       const result = await validateRowsMutation.mutateAsync({
-        csvText,
+        // The stored upload, not the file again (R86).
+        fileToken,
         filename,
         fieldMapping,
         matchOnNameCompany: override?.matchOnNameCompany ?? matchOnNameCompany,
@@ -260,8 +302,9 @@ export function ImportContactsPanel() {
   /* ── Step 4: Commit ── */
   async function handleCommit() {
     try {
+      if (!fileToken) { toast.error("Upload the file again."); setStep(1); return; }
       const result = await commitMutation.mutateAsync({
-        csvText,
+        fileToken,
         filename,
         fieldMapping,
         skipDuplicates,
@@ -281,18 +324,16 @@ export function ImportContactsPanel() {
   }
 
   /* ── Download error report ── */
-  function downloadErrorReport() {
-    const lines = [
-      "Row,Reason",
-      ...errorRows.map((r) => `${r.rowIndex},"${r.reason.replace(/"/g, '""')}"`),
-    ];
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `import-errors-${filename}`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Every error row with its own columns, row number and reason, built by the
+  // server from the stored upload (F32): the file can be fixed and imported again.
+  async function downloadErrorReport() {
+    if (!fileToken) return;
+    try {
+      const r = await utils.imports.errorReport.fetch({ fileToken });
+      saveCsv(r.csv, r.filename);
+    } catch (err: any) {
+      toast.error(err.message ?? "Could not build the error report.");
+    }
   }
 
   const totalRows = totalRowCount || newCount + duplicateCount + errorCount;
@@ -436,6 +477,27 @@ export function ImportContactsPanel() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* LeadRocks is a preset of this importer (F32): its fourteen
+                  email columns become one best address, its location three
+                  fields, its website the company domain. */}
+              {detectedPreset === "leadrocks" && (
+                <Alert className="border-sky-200 bg-sky-50 dark:bg-sky-950/40" data-testid="leadrocks-preset">
+                  <Info className="h-4 w-4 text-sky-600 dark:text-sky-300" />
+                  <AlertDescription className="text-sm text-sky-900 dark:text-sky-200 flex flex-wrap items-center gap-2">
+                    {preset === "leadrocks" ? (
+                      <>
+                        <span className="flex-1 min-w-0">This is a LeadRocks export, read with the LeadRocks preset: the best of its email columns, its first phone and its location split into city, state and country. Rows need a LinkedIn profile URL. LeadRocks' own email verdict is kept with each person; Velocity verifies the address before it is used.</span>
+                        <Button size="sm" variant="outline" className="h-7" disabled={setPresetMutation.isPending} onClick={() => void switchPreset(null)}>Read as a plain CSV</Button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex-1 min-w-0">This looks like a LeadRocks export.</span>
+                        <Button size="sm" variant="outline" className="h-7" disabled={setPresetMutation.isPending} onClick={() => void switchPreset("leadrocks")}>Use the LeadRocks preset</Button>
+                      </>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="rounded-lg border overflow-hidden">
                 <div className="overflow-x-auto"><table className="w-full text-sm">
                   <thead className="bg-muted/50">
@@ -976,6 +1038,10 @@ export function ImportContactsPanel() {
                 </div>
               </div>
 
+              <div className="flex justify-center">
+                <UndoImportButton importId={importResult.importId} onUndone={() => utils.imports.getHistory.invalidate()} />
+              </div>
+
               <div className="flex justify-center gap-3 pt-2">
                 {/* The CTA lands where the rows are. Both destinations end up
                     on People now that the /prospects list is retired (phase 5
@@ -1008,6 +1074,9 @@ export function ImportContactsPanel() {
                     setColumnStats([]);
                     setDuplicateSamples([]);
                     setErrorReasonSummary([]);
+                    setFileToken(null);
+                    setPreset(null);
+                    setDetectedPreset(null);
                   }}
                   className="gap-2"
                 >
@@ -1041,6 +1110,7 @@ export default function ImportContactsRedirect() {
  * there is history — a first-run user sees no empty box. */
 function ImportHistoryCard() {
   const { data: history = [] } = trpc.imports.getHistory.useQuery({ limit: 8 });
+  const [openId, setOpenId] = useState<number | null>(null);
   if (!Array.isArray(history) || history.length === 0) return null;
   const when = (d: unknown) => {
     const dt = new Date(d as string);
@@ -1050,23 +1120,125 @@ function ImportHistoryCard() {
     <Card className="mt-4">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm">Recent imports</CardTitle>
-        <CardDescription className="text-xs">Every committed import, newest first — the label you set is recorded on each contact as provenance.</CardDescription>
+        <CardDescription className="text-xs">Every committed import, newest first. Open one to see the rows it did not import and why, download the full report, or undo it.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="rounded-lg border divide-y">
+          {/* A row opens its errors (audit 2026-10-20, U27): it showed a count and led nowhere. */}
           {(history as any[]).map((h) => (
-            <div key={h.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-xs">
+            <div key={h.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-xs cursor-pointer hover:bg-muted/40" {...pressable(() => setOpenId(h.id))}>
               <FileText className="size-3.5 shrink-0 self-center text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate font-medium">{h.filename}</span>
               <span className="shrink-0 tabular-nums text-emerald-700 dark:text-emerald-400">{h.importedRows} imported</span>
               {h.skippedRows > 0 && <span className="shrink-0 tabular-nums text-amber-700 dark:text-amber-400">{h.skippedRows} skipped</span>}
               {h.errorRows > 0 && <span className="shrink-0 tabular-nums text-red-700 dark:text-red-400">{h.errorRows} errors</span>}
-              <span className={`shrink-0 ${h.status === "failed" ? "text-red-600" : "text-muted-foreground"}`}>{h.status}</span>
+              <span className={`shrink-0 ${h.status === "failed" ? "text-red-600" : "text-muted-foreground"}`}>{h.undoneAt ? "undone" : h.status}</span>
               <span className="shrink-0 text-muted-foreground">{when(h.createdAt)}</span>
+              <ChevronRight className="size-3.5 shrink-0 self-center text-muted-foreground" />
             </div>
           ))}
         </div>
       </CardContent>
+      {openId != null && <ImportDetailDialog importId={openId} onClose={() => setOpenId(null)} />}
     </Card>
+  );
+}
+
+/** One import: the rows it did not import, a page at a time, the full report, and Undo (U27, F32). */
+function ImportDetailDialog({ importId, onClose }: { importId: number; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [page, setPage] = useState(1);
+  const PER = 50;
+  const q = trpc.imports.getImport.useQuery({ importId, page, perPage: PER }, { placeholderData: (prev) => prev });
+  const rec = q.data?.record as any;
+  const total = q.data?.errorTotal ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PER));
+  const [downloading, setDownloading] = useState(false);
+  const download = async () => {
+    setDownloading(true);
+    try {
+      const r = await utils.imports.errorReport.fetch({ importId });
+      saveCsv(r.csv, r.filename);
+    } catch (err: any) {
+      toast.error(err.message ?? "Could not build the error report.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader><DialogTitle>{rec?.filename ?? "Import"}</DialogTitle></DialogHeader>
+        {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : q.error ? <p className="text-sm text-destructive">{q.error.message}</p> : (
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-muted-foreground">
+              {rec?.importedRows ?? 0} imported · {rec?.skippedRows ?? 0} skipped as duplicates · {rec?.errorRows ?? 0} errors
+              {rec?.destination ? ` · into ${rec.destination === "prospects" ? "People" : "CRM contacts"}` : ""}
+              {rec?.preset === "leadrocks" ? " · LeadRocks preset" : ""}
+              {rec?.undoneAt ? ` · undone ${new Date(rec.undoneAt).toLocaleString()}` : ""}
+            </p>
+            {total === 0 ? <p className="text-xs text-muted-foreground">Every row was imported.</p> : (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium">{total.toLocaleString()} row{total === 1 ? "" : "s"} not imported</span>
+                  <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" disabled={downloading} onClick={() => void download()}>
+                    <Download className="h-3 w-3" /> Download the full report
+                  </Button>
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border divide-y">
+                  {(q.data?.errorRows ?? []).map((r: any) => (
+                    <div key={r.id} className="flex items-start gap-2 px-3 py-1.5 text-xs">
+                      <span className="shrink-0 tabular-nums text-muted-foreground">Row {r.rowIndex}</span>
+                      <span className={r.status === "duplicate" ? "text-amber-700 dark:text-amber-400" : "text-destructive"}>{r.errorReason ?? r.status}</span>
+                    </div>
+                  ))}
+                </div>
+                {pages > 1 && (
+                  <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+                    <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+                    <span>Page {page} of {pages}</span>
+                    <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+                  </div>
+                )}
+              </>
+            )}
+            {rec && !rec.undoneAt && rec.status === "completed" && (
+              <div className="border-t pt-3">
+                <UndoImportButton importId={importId} onUndone={() => { utils.imports.getImport.invalidate({ importId }); utils.imports.getHistory.invalidate(); }} />
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * "Undo this import" (F32): removes what this import created and nothing
+ * else. Asked first, with what is kept; the removed rows stay in the audit
+ * log, from which they can be restored.
+ */
+function UndoImportButton({ importId, onUndone }: { importId: number; onUndone?: () => void }) {
+  const utils = trpc.useUtils();
+  const undo = trpc.imports.undo.useMutation({
+    onSuccess: (s) => {
+      toast.success(`Import undone: ${s.removedPeople + s.removedContacts} record${s.removedPeople + s.removedContacts === 1 ? "" : "s"} removed${s.removedCompanies ? `, ${s.removedCompanies} compan${s.removedCompanies === 1 ? "y" : "ies"}` : ""}`, {
+        description: s.keptInUse ? `${s.keptInUse} kept: promoted, enrolled, in a campaign or on a deal since the import.` : undefined,
+      });
+      utils.prospects.list.invalidate();
+      onUndone?.();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs text-destructive" disabled={undo.isPending}
+      onClick={() => confirmAction({
+        title: "Undo this import?",
+        description: "This deletes the people or contacts this import created, and the companies it created that nothing else uses. Rows that were promoted, enrolled in a sequence, put in a campaign or put on a deal since are kept. Nothing else is touched. The removed rows are kept in the audit log.",
+        confirmLabel: "Undo the import",
+      }, () => undo.mutate({ importId }))}>
+      {undo.isPending ? <RefreshCw className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />} Undo this import
+    </Button>
   );
 }

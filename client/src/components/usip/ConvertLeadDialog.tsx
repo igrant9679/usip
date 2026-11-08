@@ -35,6 +35,11 @@ export function ConvertLeadDialog({
   const [withDeal, setWithDeal] = useState(false);
   const [dealName, setDealName] = useState("");
   const [dealValue, setDealValue] = useState("");
+  // Who owns what the convert creates (audit 2026-10-20, F31): "lead" keeps
+  // the lead's owner, which the server applies when no one is picked.
+  const [owner, setOwner] = useState<string>("lead");
+  const { data: team } = trpc.team.list.useQuery(undefined, { enabled: open });
+  const members = ((team ?? []) as Array<{ userId: number; name: string | null; deactivatedAt?: unknown }>).filter((m) => !m.deactivatedAt);
 
   // Default to the matches once they load, for each lead opened.
   useEffect(() => {
@@ -45,7 +50,9 @@ export function ConvertLeadDialog({
     setWithDeal(false);
     setDealName(`${d.newAccountName} – New opportunity`);
     setDealValue("");
+    setOwner("lead");
   }, [preview.data, leadId]);
+  const leadOwnerName = members.find((m) => m.userId === preview.data?.leadOwnerUserId)?.name;
 
   const convert = trpc.leads.convert.useMutation({
     onSuccess: (r) => {
@@ -73,6 +80,7 @@ export function ConvertLeadDialog({
       createOpportunity: withDeal,
       opportunityValue: withDeal ? Number(dealValue) : undefined,
       opportunityName: withDeal && dealName.trim() ? dealName.trim() : undefined,
+      ownerUserId: owner === "lead" ? undefined : Number(owner),
     });
   };
 
@@ -131,6 +139,18 @@ export function ConvertLeadDialog({
                 </div>
               )}
             </fieldset>
+            <div className="space-y-1">
+              <Label htmlFor="convert-owner">Owner of the new records</Label>
+              <select id="convert-owner" value={owner} onChange={(e) => setOwner(e.target.value)} className="h-9 w-full rounded-md border bg-background px-2 text-sm">
+                <option value="lead">
+                  {d.leadOwnerUserId ? `The lead's owner${leadOwnerName ? ` (${leadOwnerName})` : ""}` : "You (the lead's owner no longer works here)"}
+                </option>
+                {members.filter((m) => m.userId !== d.leadOwnerUserId).map((m) => (
+                  <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">A new contact and deal go to this person. A new account does too, except that with the lead's owner kept, a territory rule that names an owner takes it.</p>
+            </div>
           </div>
         )}
         <DialogFooter>

@@ -30,7 +30,11 @@ import { join } from "path";
 /* ── Schema ──────────────────────────────────────────────────────────────── */
 
 /** Column builders the schema actually uses. Enumerated, not guessed: */
-const COLUMN_KINDS = "int|bigint|varchar|text|mysqlEnum|boolean|timestamp|json|date|decimal";
+// longtext/mediumtext added 2026-11-07: import_files.content (CRMP, F32) is
+// the schema's first longtext (an upload up to 20 MB; text holds 64 KB).
+// An unknown kind made the column look missing, so its write was reported
+// as UNKNOWN COLUMN.
+const COLUMN_KINDS = "int|bigint|varchar|longtext|mediumtext|text|mysqlEnum|boolean|timestamp|json|date|decimal";
 
 /**
  * Parse `drizzle/schema.ts` into tableVar → { physical, cols }.
