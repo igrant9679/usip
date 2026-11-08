@@ -45,7 +45,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/calendar": { body: "Your meetings, including any the AI booked for you." },
 
   // ── Prospect and enrich ──
-  "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on.", article: "leads-contacts-accounts" },
+  "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on. Inbound enquiries still to be qualified are Leads.", article: "leads-contacts-accounts" },
   "/v2/companies": { body: "The organisations behind your contacts, with the enrichment data found for each.", article: "leads-contacts-accounts" },
   "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set." },
   "/v2/saved-people": { body: "People you saved from a prospect search, before deciding whether to work them." },
@@ -58,7 +58,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
   // Re-keyed 2026-08-21: Import Contacts folded into Data Enrichment's tab.
   "/v2/data-enrichment?tab=import-contacts": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },
-  "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms.", article: "leads-contacts-accounts" },
+  "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms. Not the person database: that is People.", article: "leads-contacts-accounts" },
 
   // ── Engage ──
   "/v2/sequences": { body: "Fixed multi-step email follow-ups — the same steps to everyone you enroll. Not the same as a Revenue Engine campaign, which writes per person and can source its own people.", article: "sequences-vs-campaigns" },

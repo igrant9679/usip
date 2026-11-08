@@ -158,6 +158,20 @@
  *                            analysis and pipeline switcher. The hash rides
  *                            along, so /v2/deals#alerts still opens the alerts.
  *                            DealsV2.tsx is kept, unrouted.
+ *
+ * Audit X6.3 listed "two or more versions of the same screen". With the
+ * above, each is settled: one task page, one home, one deal board; one
+ * sequence list and one editor, and one reply workspace for the four inboxes
+ * (batch CONA, above); the Prospects list folded into People (phase 5 item 2).
+ *
+ * People and Leads are NOT a pair, and stay two lists by design: People is
+ * the person database (every person imported or sourced, table prospects,
+ * what outreach draws on); a lead is an inbound enquiry (chat, booking page,
+ * form) waiting to be qualified, scored and routed, which converting turns
+ * into a company, a contact and a deal. Merging them would put unqualified
+ * enquiries into the list sequences enrol from, or bury the qualification
+ * queue in the database. So each page's description says which it is and
+ * points at the other (People.tsx, Leads.tsx, toolRegistry, helpText).
  */
 
 /**

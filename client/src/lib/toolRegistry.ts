@@ -145,12 +145,15 @@ export const TOOLS: Tool[] = [
     description: "AI chat widgets that qualify and book meetings.", keywords: ["inbound"] },
 
   /* ── CRM — the records, and the spine Prospect → Lead → Opportunity ─── */
+  // People and Leads stay two lists by design (audit X6.3, 2026-11-08): People
+  // is the person database, a lead an inbound enquiry still to qualify. Each
+  // description says which, so they read as two jobs, not two copies.
   { href: "/v2/people", label: "People", icon: Users, group: "CRM", primary: true,
-    description: "Every person record — search, filter, act.", keywords: ["contacts", "prospects"] },
+    description: "Every person record, imported or sourced — the database outreach draws on. Inbound enquiries are Leads.", keywords: ["contacts", "prospects"] },
   { href: "/v2/companies", label: "Companies", icon: Building2, group: "CRM", primary: true,
     description: "Every company record with its people and activity.", keywords: ["accounts"] },
   { href: "/leads", label: "Leads", icon: Target, group: "CRM", primary: true,
-    description: "Scored, routable leads awaiting qualification." },
+    description: "Inbound enquiries awaiting qualification — scored and routed. Not the person database: that is People." },
   // Back on the rail (owner, 2026-09-20: "bring back the traditional Sales
   // Pipeline page"). It was never deleted — it simply had no entry here, and
   // the rail, Library and palette all render ONLY from this file, so it went
