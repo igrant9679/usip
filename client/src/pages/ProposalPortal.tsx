@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -91,13 +91,23 @@ export default function ProposalPortal() {
   );
 
   usePageTitle(data?.proposal.title ?? "Proposal");
+  // One visit recorded per page load (audit 2026-10-20, F48): the team sees
+  // when the proposal was first and last opened, and how often. Only when.
+  const recordView = trpc.proposals.recordView.useMutation({ meta: { silentError: true }, onError: () => {} });
+  const viewSent = useRef(false);
+  useEffect(() => {
+    if (!data || viewSent.current || !token) return;
+    viewSent.current = true;
+    recordView.mutate({ token });
+  }, [data, token]); // eslint-disable-line react-hooks/exhaustive-deps
   const [feedbackForm, setFeedbackForm] = useState({ name: "", email: "", message: "" });
   const [submitted, setSubmitted] = useState(false);
 
+  // "Request changes" (F48): the feedback path, named for what it asks.
   const submitFeedback = trpc.proposals.submitFeedback.useMutation({
     onSuccess: () => {
       setSubmitted(true);
-      toast.success("Feedback submitted — thank you!");
+      toast.success("Change request sent. The team will get back to you.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -346,7 +356,7 @@ export default function ProposalPortal() {
               </TabsTrigger>
             )}
             <TabsTrigger value="feedback" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
-              Submit Feedback
+              Request changes
             </TabsTrigger>
             {extensionHistory && extensionHistory.length > 0 && (
               <TabsTrigger value="extension_history" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
@@ -402,18 +412,18 @@ export default function ProposalPortal() {
             </TabsContent>
           )}
 
-          {/* Feedback */}
+          {/* Request changes (F48): the feedback path, named for what it does. */}
           <TabsContent value="feedback" className="mt-0">
             <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-base font-semibold text-gray-800 mb-1">Submit Feedback</h2>
+              <h2 className="text-base font-semibold text-gray-800 mb-1">Request changes</h2>
               <p className="text-sm text-gray-500 mb-4">
-                Have questions or comments about this proposal? Send them directly to the team.
+                Want something changed, or have a question first? Tell the team what you need and they will come back to you with a revised proposal or an answer.
               </p>
 
               {submitted ? (
                 <div className="flex flex-col items-center py-8 text-center">
                   <CheckCircle2 className="size-12 text-teal-500 mb-3" />
-                  <p className="font-semibold text-gray-800">Feedback received!</p>
+                  <p className="font-semibold text-gray-800">Change request sent</p>
                   <p className="text-sm text-gray-500 mt-1">The team will follow up with you shortly.</p>
                 </div>
               ) : (
@@ -443,7 +453,7 @@ export default function ProposalPortal() {
                     <Textarea aria-label="Message"
                       value={feedbackForm.message}
                       onChange={(e) => setFeedbackForm(f => ({ ...f, message: e.target.value }))}
-                      placeholder="Your questions or comments about this proposal..."
+                      placeholder="What would you like changed, or what would you like to ask?"
                       className="mt-1 min-h-[120px]"
                       maxLength={5000}
                     />
@@ -459,7 +469,7 @@ export default function ProposalPortal() {
                     className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
                   >
                     <MessageSquare className="size-4" />
-                    {submitFeedback.isPending ? "Submitting..." : "Submit Feedback"}
+                    {submitFeedback.isPending ? "Sending..." : "Send change request"}
                   </Button>
                 </div>
               )}
@@ -573,9 +583,13 @@ export default function ProposalPortal() {
               <ul className="space-y-0.5">
                 <li>• The proposal team is notified immediately</li>
                 <li>• A follow-up task is created for your account manager</li>
-                <li>• You can still submit feedback via the Feedback tab</li>
+                <li>• You can still ask for changes from the Request changes tab</li>
               </ul>
             </div>
+            {/* What the e-signature record keeps (F48), said before it is made. */}
+            <p className="text-xs text-gray-500">
+              Accepting with your name is an electronic signature. Your name, the email you give, the time and the network address you accept from are kept with this proposal.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAcceptDialogOpen(false)}>

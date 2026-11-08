@@ -4000,6 +4000,19 @@ export const proposals = mysqlTable(
     emailOpenedAt: timestamp("emailOpenedAt"),
     emailClickedAt: timestamp("emailClickedAt"),
     acceptedAt: timestamp("acceptedAt"),
+    /**
+     * Migration 0401 (audit 2026-10-20, F48): the e-signature record of a
+     * portal acceptance — the name typed, the email given and the address the
+     * accepting request came from; acceptedAt is its time. NULL for a
+     * proposal a team member marked accepted, or one accepted before this.
+     */
+    acceptedSignerName: varchar("acceptedSignerName", { length: 200 }),
+    acceptedSignerEmail: varchar("acceptedSignerEmail", { length: 320 }),
+    acceptedIp: varchar("acceptedIp", { length: 64 }),
+    /** Portal views (0401, F48): when, and how many visits. Nothing about who. */
+    portalFirstViewedAt: timestamp("portalFirstViewedAt"),
+    portalLastViewedAt: timestamp("portalLastViewedAt"),
+    portalViewCount: int("portalViewCount").default(0).notNull(),
     expiresAt: timestamp("expiresAt"),
     /** When true, the email-open auto-extend logic is skipped for this proposal */
     skipAutoExtend: boolean("skipAutoExtend").default(false).notNull(),

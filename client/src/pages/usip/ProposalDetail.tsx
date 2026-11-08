@@ -81,7 +81,7 @@ import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTML";
 import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
-import { FileDown, FileType2 } from "lucide-react";
+import { FileDown, FileType2, PenLine } from "lucide-react";
 import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
@@ -333,6 +333,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           Auto-extend is <span className="font-medium text-amber-600">disabled</span> for this proposal (workspace rule overridden).
         </div>
       )}
+      <PortalRecord proposal={proposal} />
       {/* ── Pipeline Integration Panel ── */}
       <PipelinePanel proposal={proposal} onRefetch={onRefetch} />
       {proposal.description && (
@@ -386,6 +387,52 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
       <div>
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
         <ActivityFeed proposalId={proposal.id} />
+      </div>
+    </div>
+  );
+}
+
+// ── E-signature and portal views (audit 2026-10-20, F48) ──────────────────────
+/**
+ * What the client portal recorded: the e-signature on an acceptance (who
+ * typed their name, the email they gave, when, and from which address) and
+ * when the proposal was opened. A proposal a team member marked accepted has
+ * no signature, and says so.
+ */
+export function PortalRecord({ proposal }: { proposal: any }) {
+  const views = Number(proposal.portalViewCount ?? 0);
+  const accepted = proposal.status === "accepted";
+  const signed = accepted && !!proposal.acceptedSignerName;
+  if (!accepted && views === 0) return null;
+  const when = (v: unknown) => (v ? new Date(v as string).toLocaleString() : "—");
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {accepted && (
+        <div className="bg-muted/40 rounded-lg p-3 border border-emerald-500/30" data-testid="esignature">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><PenLine className="size-3" /> E-signature</div>
+          {signed ? (
+            <dl className="text-sm grid grid-cols-[6rem_1fr] gap-x-2 gap-y-0.5">
+              <dt className="text-muted-foreground">Signed by</dt><dd className="font-medium">{proposal.acceptedSignerName}</dd>
+              <dt className="text-muted-foreground">Email</dt><dd>{proposal.acceptedSignerEmail || "Not given"}</dd>
+              <dt className="text-muted-foreground">Time</dt><dd>{when(proposal.acceptedAt)}</dd>
+              <dt className="text-muted-foreground">From address</dt><dd className="font-mono text-xs">{proposal.acceptedIp || "Unknown"}</dd>
+            </dl>
+          ) : (
+            <p className="text-sm text-muted-foreground">Marked accepted {proposal.acceptedAt ? `on ${when(proposal.acceptedAt)} ` : ""}without a portal signature.</p>
+          )}
+        </div>
+      )}
+      <div className="bg-muted/40 rounded-lg p-3 border border-border" data-testid="portal-views">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><Eye className="size-3" /> Portal views</div>
+        {views === 0 ? (
+          <p className="text-sm text-muted-foreground">Not opened on the portal yet.</p>
+        ) : (
+          <dl className="text-sm grid grid-cols-[6rem_1fr] gap-x-2 gap-y-0.5">
+            <dt className="text-muted-foreground">Visits</dt><dd className="font-medium">{views}</dd>
+            <dt className="text-muted-foreground">First viewed</dt><dd>{when(proposal.portalFirstViewedAt)}</dd>
+            <dt className="text-muted-foreground">Last viewed</dt><dd>{when(proposal.portalLastViewedAt)}</dd>
+          </dl>
+        )}
       </div>
     </div>
   );
@@ -907,11 +954,12 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
 function FeedbackTab({ feedback }: { feedback: any[] }) {
   return (
     <div className="space-y-4">
-      <h3 className="font-semibold">Client Feedback</h3>
+      {/* The portal's "Request changes" tab writes these (F48). */}
+      <h3 className="font-semibold">Change requests from the client</h3>
       {feedback.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <MessageSquare className="size-10 mx-auto mb-3 opacity-30" />
-          <p>No feedback received yet. Share the proposal link with your client to collect feedback.</p>
+          <p>No change requests yet. The client asks for changes from the Request changes tab on the proposal link.</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -1523,7 +1571,7 @@ export default function ProposalDetail() {
             { value: "overview", label: "Overview" },
             { value: "content", label: "Content" },
             { value: "timeline", label: "Timeline" },
-            { value: "feedback", label: `Feedback${feedback.length > 0 ? ` (${feedback.length})` : ""}` },
+            { value: "feedback", label: `Change requests${feedback.length > 0 ? ` (${feedback.length})` : ""}` },
             { value: "history", label: "History" },
             { value: "share", label: "Share" },
           ].map((t) => (

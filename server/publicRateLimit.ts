@@ -78,6 +78,8 @@ const PUBLIC_WRITE_PROCEDURES = [
   "landingPages.recordView",
   // Its twin for forms (F47), and a booking's own reschedule and cancel.
   "forms.recordView",
+  // And for the proposal portal (F48): first/last viewed and a visit count.
+  "proposals.recordView",
   "bookingLinks.manageCancel",
   "bookingLinks.manageReschedule",
 ];

@@ -6,7 +6,7 @@
  *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, inArray, isNull, like, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, like, lt, ne, or, sql } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
 import {
@@ -25,6 +25,7 @@ import {
   proposalScoreHistory,
   contacts,
   accounts,
+  workspaceMembers,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
@@ -110,6 +111,9 @@ function generateShareToken() {
 
 /** Statuses a client can accept from: the proposal is out with them (R24). */
 const ACCEPTABLE_STATUSES = ["sent", "under_review", "revision_requested"] as const;
+
+/** Reopening the portal within this long is the same visit (F48). */
+export const PORTAL_VIEW_GAP_MS = 30 * 60_000;
 
 /**
  * Insert a system activity row for a proposal event.
@@ -1048,6 +1052,44 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       return { proposal: portalView(proposal), sections: sections.map(portalSection), milestones: milestones.map(portalMilestone) };
     }),
 
+  /**
+   * The portal was opened (audit 2026-10-20, F48): first and last viewed and
+   * a view count, shown to the team on the proposal. Nothing about the viewer
+   * is kept — no address, no browser — only when. Reopening within
+   * PORTAL_VIEW_GAP_MS is the same visit, so a refresh does not count twice,
+   * and a signed-in member of the proposal's own workspace (a rep checking
+   * the link) is not counted at all. A draft or unknown link records nothing.
+   */
+  recordView: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const [p] = await db.select({ id: proposals.id, workspaceId: proposals.workspaceId, status: proposals.status })
+        .from(proposals).where(eq(proposals.shareToken, input.token)).limit(1);
+      if (!p || !servedOnPortal(p.status)) return { counted: false };
+      if (ctx.user) {
+        const [m] = await db.select({ id: workspaceMembers.id }).from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, p.workspaceId), eq(workspaceMembers.userId, ctx.user.id))).limit(1);
+        if (m) return { counted: false };
+      }
+      const now = new Date();
+      const visit = await db.update(proposals)
+        .set({
+          portalViewCount: sql`${proposals.portalViewCount} + 1`,
+          portalFirstViewedAt: sql`COALESCE(${proposals.portalFirstViewedAt}, ${now})`,
+          portalLastViewedAt: now,
+        } as never)
+        .where(and(
+          eq(proposals.id, p.id),
+          or(isNull(proposals.portalLastViewedAt), lt(proposals.portalLastViewedAt, new Date(now.getTime() - PORTAL_VIEW_GAP_MS))),
+        ));
+      if (Number((visit as any)?.[0]?.affectedRows ?? 0) === 1) return { counted: true };
+      // The same visit: only the last-viewed time moves.
+      await db.update(proposals).set({ portalLastViewedAt: now } as never).where(eq(proposals.id, p.id));
+      return { counted: false };
+    }),
+
   /** Submit client feedback — public. */
   submitFeedback: publicProcedure
     .input(
@@ -1119,9 +1161,17 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       // were accepted from the link, and a double click ran every side effect
       // twice. The update names the states it accepts from, so of two clicks
       // one lands.
+      //
+      // The e-signature record (audit 2026-10-20, F48) is written by that same
+      // update, so it is the winning click's: the name typed, the email given,
+      // the server's time and the address the request came from. It is shown
+      // on the proposal; the timeline keeps the fuller record below.
+      const signerName = (input.signerName || input.clientName || "").trim().slice(0, 200) || null;
+      const signerEmail = (input.signerEmail || "").trim().slice(0, 320) || null;
+      const signerIp = (ctx.req ? clientIpOf(ctx.req as never) : null)?.slice(0, 64) || null;
       const claim = await db
         .update(proposals)
-        .set({ status: "accepted", acceptedAt: new Date() })
+        .set({ status: "accepted", acceptedAt: new Date(), acceptedSignerName: signerName, acceptedSignerEmail: signerEmail, acceptedIp: signerIp })
         .where(and(
           eq(proposals.id, proposal.id),
           inArray(proposals.status, ACCEPTABLE_STATUSES),
@@ -1140,15 +1190,15 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
        * Who accepted (audit 2026-10-20, G18). Written only by the click that
        * won the claim above, so a double click records one acceptance.
        */
-      const signer = (input.signerName || input.clientName || "").trim() || null;
+      const signer = signerName;
       await logProposalActivity(db, {
         workspaceId: proposal.workspaceId,
         proposalId: proposal.id,
         subject: signer ? `Accepted by ${signer} on the client portal`.slice(0, 240) : "Accepted on the client portal",
         body: acceptanceRecord({
           signerName: signer,
-          signerEmail: input.signerEmail || null,
-          ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+          signerEmail,
+          ip: signerIp,
           userAgent: String((ctx.req as { headers?: Record<string, unknown> } | undefined)?.headers?.["user-agent"] ?? "") || null,
           timeZone: input.timeZone ?? null,
           at: new Date(),

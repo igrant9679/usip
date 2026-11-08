@@ -5338,6 +5338,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F48: a portal acceptance's e-signature record (signer
+  // name, email and address; acceptedAt is its time) and portal views (first,
+  // last, count — nothing about the viewer). Additive: existing proposals
+  // read as unsigned and never viewed, which is what is known about them.
+  {
+    name: "0401_proposal_signature_views.sql",
+    statements: [
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedSignerName` varchar(200) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedSignerEmail` varchar(320) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `acceptedIp` varchar(64) NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalFirstViewedAt` timestamp NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalLastViewedAt` timestamp NULL",
+      "ALTER TABLE `proposals` ADD COLUMN `portalViewCount` int NOT NULL DEFAULT 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
