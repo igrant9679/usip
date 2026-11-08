@@ -4244,6 +4244,16 @@ export const prospectQueue = mysqlTable(
     // references ONE prospects row; the person columns above become a
     // display/engine mirror, never a second source of truth.
     personProspectId: int("person_prospect_id"),
+    /**
+     * The row's identity keys, stored so a duplicate check reads only rows
+     * that share one (migration 0333, audit A34). Made by queueIdentityColumns
+     * (services/are/queueIdentity.ts) from queueIdentityKeys; identityVersion
+     * 0 = not keyed yet (read by every lookup until keyed).
+     */
+    identityEmail: varchar("identityEmail", { length: 320 }),
+    identityLinkedin: varchar("identityLinkedin", { length: 255 }),
+    identityNameOrg: varchar("identityNameOrg", { length: 400 }),
+    identityVersion: int("identityVersion").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -4254,6 +4264,10 @@ export const prospectQueue = mysqlTable(
     byStatus: index("ix_pq_status").on(t.campaignId, t.enrichmentStatus),
     byPerson: index("ix_pq_person").on(t.personProspectId),
     byRejectionKind: index("ix_pq_rejkind").on(t.campaignId, t.rejectionKind),
+    byIdentityEmail: index("ix_pq_id_email").on(t.workspaceId, t.identityEmail),
+    byIdentityLinkedin: index("ix_pq_id_li").on(t.workspaceId, t.identityLinkedin),
+    byIdentityNameOrg: index("ix_pq_id_nameorg").on(t.workspaceId, t.identityNameOrg),
+    byIdentityVersion: index("ix_pq_id_version").on(t.workspaceId, t.identityVersion),
   }),
 );
 export type ProspectQueue = typeof prospectQueue.$inferSelect;

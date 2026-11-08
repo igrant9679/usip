@@ -89,7 +89,7 @@ import {
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { stageIndexFor } from "./_core/stageSemantics";
 import { mergeOwnRequestContext, mergeRequestContext } from "./_core/requestContext";
-import { queueIdentityKeys } from "./services/are/queueIdentity";
+import { queueIdentityIndexFor, queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
 import {
@@ -2743,25 +2743,21 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // same people — the original behavior) and CAMPAIGN EXCLUSIVITY (owner
   // directive 2026-08-12: a prospect may belong to only one ARE campaign, so
   // a person already claimed by a sibling campaign is never added here).
-  const existing = await db
-    .select({
-      campaignId: prospectQueue.campaignId,
-      email: prospectQueue.email,
-      linkedinUrl: prospectQueue.linkedinUrl,
-      firstName: prospectQueue.firstName,
-      lastName: prospectQueue.lastName,
-      companyDomain: prospectQueue.companyDomain,
-      companyName: prospectQueue.companyName,
-    })
-    .from(prospectQueue)
-    .where(eq(prospectQueue.workspaceId, campaign.workspaceId))
-    .orderBy(prospectQueue.id);
+  //
+  // Read per source's finds, through the identity indexes (audit A34): this
+  // read the workspace's whole queue on every run. A batch's queue claims are
+  // loaded before the batch is checked, so a person already queued anywhere in
+  // the workspace still wins over this run's own claim, as before. Every queue
+  // row counts, whatever its campaign, as it always did here.
   const claimed = new Map<string, number | null>();
-  for (const e of existing) {
-    for (const k of queueIdentityKeys(e)) {
-      if (!claimed.has(k)) claimed.set(k, e.campaignId);
-    }
-  }
+  const looked = new Set<string>();
+  const loadClaims = async (batch: Array<Record<string, unknown>>) => {
+    const fresh = batch.filter((p) => queueIdentityKeys(p).some((k) => !claimed.has(k) && !looked.has(k)));
+    if (fresh.length === 0) return;
+    for (const p of fresh) for (const k of queueIdentityKeys(p)) looked.add(k);
+    const found = await queueIdentityIndexFor(campaign.workspaceId, fresh, { liveCampaignsOnly: false });
+    found.forEach((v, k) => { if (!claimed.has(k)) claimed.set(k, v.campaignId); });
+  };
   let excludedOtherCampaign = 0;
   // Research phase 4: never-target words rule people out before they are queued.
   const neverTarget = await campaignNeverTarget(campaign);
@@ -2962,6 +2958,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
     // Within-tick + cross-tick dedup AND cross-campaign exclusivity, one
     // vocabulary (services/are/queueIdentity).
+    await loadClaims(raw);
     const unique = raw.filter((p) => {
       const keys = queueIdentityKeys(p);
       for (const k of keys) {

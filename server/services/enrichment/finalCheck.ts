@@ -19,6 +19,7 @@ import { getDb } from "../../db";
 import { prospects, prospectQueue } from "../../../drizzle/schema";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 import { runComprehensiveEnrichment } from "./comprehensivePass";
+import { withIdentityRekey } from "../are/queueIdentity";
 
 const STALE_MS = 30 * 86_400_000;
 
@@ -102,7 +103,7 @@ export async function runFinalCheckForQueueRow(
     const mirror = emailToMirror(person, row.email);
     if (mirror) {
       await db.update(prospectQueue)
-        .set({ email: mirror.slice(0, 320) } as never)
+        .set(withIdentityRekey({ email: mirror.slice(0, 320) }) as never)
         .where(eq(prospectQueue.id, row.id));
     }
     return { ran, mirroredEmail: mirror };

@@ -125,7 +125,10 @@ describe("the preview rehearses the push with the push's own inputs", () => {
 
   it("the preview calls the SAME classifier over the SAME index and active lookup", () => {
     expect(preview).toContain("classifyPushCandidate(s.shape, campaign.id, index, activeSeq.get(s.p.id))");
-    expect(preview).toContain("workspaceQueueIdentityIndex(workspaceId)");
+    // 2026-11-07 (audit A34, batch ARES): both read the indexed lookup for
+    // these people (queueIdentityIndexFor), still the same function each.
+    expect(preview).toContain("queueIdentityIndexFor(workspaceId, people.map(identityShapeOfPerson))");
+    expect(write).toContain("queueIdentityIndexFor(workspaceId, people.map(identityShapeOfPerson))");
     expect(preview).toContain("activeSequencesForProspects(workspaceId, peopleIds)");
     // And the identity shape is built by the write path's own helper.
     expect(preview).toContain("identityShapeOfPerson(p)");

@@ -24,7 +24,8 @@ const proc = router.slice(router.indexOf("pushExisting: workspaceProcedure"), ro
 
 describe("it reuses the one identity vocabulary", () => {
   it("resolves exclusivity through queueIdentity, not a local rule", () => {
-    expect(proc).toMatch(/workspaceQueueIdentityIndex\((ctx\.workspace\.id|workspaceId)\)/);
+    // 2026-11-07 (audit A34, batch ARES): the indexed lookup for these people.
+    expect(proc).toMatch(/queueIdentityIndexFor\((ctx\.workspace\.id|workspaceId), /);
     expect(proc).toContain("existingClaim(index, shape)");
   });
 

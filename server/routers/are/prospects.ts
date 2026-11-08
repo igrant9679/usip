@@ -75,6 +75,7 @@ import { suppressionBlockingNewEmail } from "../../services/suppression";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
 import { finderMissKey, isDefinitiveFinderMiss, quickenrichMissKey, recentMisses, recordMiss } from "../../services/are/lookupMisses";
+import { withIdentityRekey } from "../../services/are/queueIdentity";
 import { buildBrandContext } from "../../services/brandContext";
 import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 // The A/B metadata row must be keyed by the same step index + variant key the
@@ -593,7 +594,7 @@ Produce:
     }
 
     // Update prospect with ICP score + everything the chain recovered.
-    await db.update(prospectQueue).set({
+    await db.update(prospectQueue).set(withIdentityRekey({
       icpMatchScore,
       icpMatchBreakdown,
       enrichmentStatus: "complete",
@@ -604,7 +605,7 @@ Produce:
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
       ...(qeFilledDomain && effCompanyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
-    }).where(eq(prospectQueue.id, prospectId));
+    })).where(eq(prospectQueue.id, prospectId));
     if (resolvedEmail) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
         `Found email for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""} → ${resolvedEmail} (${resolvedStatus ?? "unknown"})`.trim());
@@ -2657,8 +2658,9 @@ export const prospectsRouter = router({
       // Campaign exclusivity: refuse loudly rather than silently creating the
       // workspace's second copy of a person — the message names where they
       // already live so the user can go act on THAT row.
-      const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
-      const claim = existingClaim(await workspaceQueueIdentityIndex(ctx.workspace.id), rest);
+      const { queueIdentityIndexFor, existingClaim, queueIdentityColumns } = await import("../../services/are/queueIdentity");
+      // An indexed lookup for this one person (A34), not the whole queue.
+      const claim = existingClaim(await queueIdentityIndexFor(ctx.workspace.id, [rest]), rest);
       if (claim) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -2672,6 +2674,7 @@ export const prospectsRouter = router({
         campaignId,
         sourceType: "ai_research",
         ...rest,
+        ...queueIdentityColumns(rest),
         icpMatchScore: 0,
         enrichmentStatus: "pending",
         // The no-email door (owner rule 2026-09-16): stage until an address
@@ -2726,8 +2729,13 @@ export const prospectsRouter = router({
       // Dedup against the WHOLE workspace queue, not just this campaign —
       // campaign exclusivity (2026-08-12) means a row claimed by a sibling
       // campaign is skipped too, and reported under its own counter.
-      const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
-      const index = await workspaceQueueIdentityIndex(ctx.workspace.id);
+      const { queueIdentityIndexFor, existingClaim, queueIdentityKeys, queueIdentityColumns } = await import("../../services/are/queueIdentity");
+      // Only the rows sharing a key with this import, by index (A34).
+      const index = await queueIdentityIndexFor(ctx.workspace.id, input.rows.map((r) => ({
+        firstName: clamp(r.firstName, 80), lastName: clamp(r.lastName, 80), email: emailOf(r.email),
+        linkedinUrl: r.linkedinUrl ? String(r.linkedinUrl).trim() : undefined,
+        companyName: clamp(r.companyName, 200), companyDomain: clamp(r.companyDomain, 200),
+      })));
 
       const rows: Array<typeof prospectQueue.$inferInsert> = [];
       let skippedDup = 0, skippedEmpty = 0, skippedOtherCampaign = 0;
@@ -2762,6 +2770,7 @@ export const prospectsRouter = router({
           linkedinUrl,
           industry: clamp(r.industry, 80),
           geography: clamp(r.geography, 120),
+          ...queueIdentityColumns(shape),
           icpMatchScore: 0,
           enrichmentStatus: "pending",
           // The no-email door (owner rule 2026-09-16): imported rows without

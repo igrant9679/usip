@@ -5218,6 +5218,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A34: each campaign prospect's identity keys, stored and indexed, so the
+  // duplicate check reads only the rows sharing a key instead of the whole
+  // queue. Every existing row starts at identityVersion 0 ("not keyed yet"),
+  // which every lookup still reads; the keys are made in code (the one
+  // definition, queueIdentityKeys), by the boot backfill and on read, never
+  // here, so this is additive and safe on a live table.
+  {
+    name: "0333_queue_identity_columns.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityEmail` varchar(320) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityLinkedin` varchar(255) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityNameOrg` varchar(400) NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `identityVersion` int NOT NULL DEFAULT 0",
+      "CREATE INDEX `ix_pq_id_email` ON `prospect_queue` (`workspaceId`, `identityEmail`)",
+      "CREATE INDEX `ix_pq_id_li` ON `prospect_queue` (`workspaceId`, `identityLinkedin`)",
+      "CREATE INDEX `ix_pq_id_nameorg` ON `prospect_queue` (`workspaceId`, `identityNameOrg`)",
+      "CREATE INDEX `ix_pq_id_version` ON `prospect_queue` (`workspaceId`, `identityVersion`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -345,6 +345,16 @@ async function startServer() {
       .catch((e) => console.error("[dealDates] backfill failed:", e));
   }, 45_000);
 
+  // Campaign prospects' identity keys, stored for the indexed duplicate check
+  // (audit 2026-10-20, A34): rows not keyed yet are keyed once per boot, a
+  // batch at a time. Idempotent; every lookup also keys what it reads.
+  setTimeout(() => {
+    import("../services/are/queueIdentity")
+      .then((m) => m.backfillQueueIdentity())
+      .then((r) => { if (r.keyed > 0) console.log(`[queueIdentity] keyed=${r.keyed}`); })
+      .catch((e) => console.error("[queueIdentity] backfill failed:", e));
+  }, 60_000);
+
   // People lists' old contact-type members resolve to People once per boot
   // (audit 2026-10-20, A55). Idempotent: only rows still typed 'contact';
   // the ones that can't resolve are kept and logged.

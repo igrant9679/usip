@@ -25,7 +25,7 @@ import { getDb } from "../../db";
 import { isPlaceholderToken } from "@shared/fieldHygiene";
 import { canonicalText, canonicalTokens } from "@shared/canonicalText";
 import type { RejectionKind } from "@shared/rejectionKind";
-import { queueIdentityKeys } from "./queueIdentity";
+import { queueIdentityKeys, withIdentityRekey } from "./queueIdentity";
 import { linkUnlinkedQueueRows } from "../personLink";
 import { searchLinkedInProfiles } from "../linkedinLookup";
 
@@ -258,7 +258,7 @@ export async function reconcileQueueProspects(opts: {
     if (badLinkedin(r.linkedinUrl)) patch.linkedinUrl = null;
     if (badSource(r.sourceUrl)) patch.sourceUrl = null;
     if (Object.keys(patch).length > 0) {
-      await db.update(prospectQueue).set(patch as never).where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
+      await db.update(prospectQueue).set(withIdentityRekey(patch) as never).where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
       result.linksScrubbed++;
     }
   }
@@ -368,7 +368,7 @@ export async function reconcileQueueProspects(opts: {
           });
           if (hit?.linkedinUrl) {
             await db.update(prospectQueue)
-              .set({ linkedinUrl: hit.linkedinUrl, enrichmentStatus: "pending", enrichedAt: null } as never)
+              .set(withIdentityRekey({ linkedinUrl: hit.linkedinUrl, enrichmentStatus: "pending", enrichedAt: null }) as never)
               .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
             result.linkedinFound++;
           }
