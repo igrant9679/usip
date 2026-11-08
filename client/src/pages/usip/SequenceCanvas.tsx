@@ -32,6 +32,7 @@ import {
 } from "@xyflow/react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -676,7 +677,7 @@ export default function SequenceCanvas() {
             </Button>
           )}
           {(seq?.status === "draft" || seq?.status === "paused") && (
-            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => setStatus.mutate({ id: sequenceId, status: "archived" })}>
+            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => confirmAction({ title: `Archive "${seq?.name ?? "this sequence"}"?`, description: "Everyone still enrolled is taken out for good. The sequence can be put back to draft, but they are not re-enrolled.", confirmLabel: "Archive" }, () => setStatus.mutate({ id: sequenceId, status: "archived" }))}>
               Archive
             </Button>
           )}

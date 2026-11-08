@@ -454,7 +454,15 @@ export default function WorkflowsV2() {
               </div>
               <Select
                 value={areSettings.data?.areDefaultAutonomyMode === "full" ? "full" : "batch_approval"}
-                onValueChange={(v) => setAllEngineAutonomy.mutate({ mode: v as "full" | "batch_approval" })}
+                // Full autonomy approves and sends without a person, on every
+                // campaign: asked first (audit U5). Batch approval is the safe way.
+                onValueChange={(v) => (v === "full"
+                  ? confirmAction({
+                      title: "Give every campaign full autonomy?",
+                      description: "Each campaign approves and sends on its own above its threshold, and new campaigns start this way. The outbound pause and every send cap still apply.",
+                      confirmLabel: "Full autonomy",
+                    }, () => setAllEngineAutonomy.mutate({ mode: "full" }))
+                  : setAllEngineAutonomy.mutate({ mode: "batch_approval" }))}
               >
                 <SelectTrigger className="h-7 w-[150px] text-xs shrink-0"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -503,6 +511,7 @@ export default function WorkflowsV2() {
               action={
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={applyAllSuggestions.isPending || applySuggestion.isPending}
                   title={`Add all ${sugList.length} suggested workflow${sugList.length === 1 ? "" : "s"}?`}
+                  count={{ n: sugList.length, one: "suggested workflow" }}
                   description="Each suggestion becomes a workflow rule, switched off. Nothing fires until you turn a rule on in the list below."
                   confirmLabel="Add all" onConfirm={() => applyAllSuggestions.mutate()}>
                   <Check className="size-3.5" /> Add all ({sugList.length})

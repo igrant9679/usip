@@ -85,7 +85,18 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
   });
   const sending = send.isPending;
   function sendAll() {
-    send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });
+    const go = () => send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });
+    // One lead is the composer's own Send; several are a bulk send, said
+    // first with the number (audit U5, X1.8).
+    if (leadIds.length <= 1) { go(); return; }
+    confirmAction({
+      title: `Email ${leadIds.length} leads?`,
+      description: `"${subject}" goes to each of them separately.`,
+      count: { n: leadIds.length, one: "lead" },
+      consequence: { kind: "sends", channel: "email", n: leadIds.length },
+      confirmLabel: `Send ${leadIds.length}`,
+      destructive: false,
+    }, go);
   }
   function reset() { setSubject(""); setBody(""); setAiPrompt(""); setUseAi(false); setSent(false); }
   return (
@@ -253,13 +264,13 @@ export default function Leads() {
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
               onClick={() => {
                 if (matchingAll) {
-                  confirmAction({ title: `Delete all ${total.toLocaleString()} matching leads?`, description: `Every lead the search matches: ${total.toLocaleString()}. This cannot be undone.`, confirmLabel: `Delete ${total.toLocaleString()}` }, () => {
+                  confirmAction({ title: `Delete all ${total.toLocaleString()} matching leads?`, count: { n: total, one: "lead" }, description: `Every lead the search matches: ${total.toLocaleString()}. This cannot be undone.`, confirmLabel: `Delete ${total.toLocaleString()}` }, () => {
                     deleteMatching.mutate({ action: "delete", filter: { search: query || undefined }, expectedTotal: total });
                   });
                   return;
                 }
                 const ids = Array.from(selectedIds);
-                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, description: "This cannot be undone.", confirmLabel: "Delete" }, () => {
+                confirmAction({ title: `Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`, count: { n: ids.length, one: "lead" }, consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => {
                   bulkDeleteMut.mutate({ ids });
                 });
               }}

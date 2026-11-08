@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
-import { ConfirmButton, fmtDate, StatusPill } from "./Common";
+import { ConfirmButton, confirmAction, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { RichTextEditor } from "./RichTextEditor";
@@ -288,7 +288,7 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
           {(coOwners as any[]).map((m: any) => (
             <div key={m.userId} className="flex items-center justify-between rounded border bg-card px-3 py-2">
               <span className="text-sm">{m.name ?? m.email}</span>
-              <Button size="sm" variant="ghost" className="h-6 text-xs text-red-500" onClick={() => removeCoOwner.mutate({ opportunityId, userId: m.userId })}>Remove</Button>
+              <Button size="sm" variant="ghost" className="h-6 text-xs text-red-500" onClick={() => confirmAction({ title: `Remove ${m.name ?? m.email} as a co-owner?`, consequence: { kind: "reversible", undo: "add them again under Co-Owners" }, confirmLabel: "Remove" }, () => removeCoOwner.mutate({ opportunityId, userId: m.userId }))}>Remove</Button>
             </div>
           ))}
           {(members as any[]).filter((m: any) => !(coOwners as any[]).some((c: any) => c.userId === m.userId)).length > 0 && (
@@ -468,7 +468,13 @@ function ContactEnrichPanel({ contactId, onEnriched }: { contactId: number; onEn
           </div>
           <Button
             size="sm"
-            onClick={() => enrich.mutate({ id: contactId })}
+            onClick={() => confirmAction({
+              title: `Enrich ${contact?.firstName ?? "this contact"} with AI?`,
+              description: "It suggests missing title, phone, LinkedIn, city and seniority from what is on file, and fills them in.",
+              cost: { kind: "ai", calls: 1 },
+              confirmLabel: "Enrich",
+              destructive: false,
+            }, () => enrich.mutate({ id: contactId }))}
             disabled={enrich.isPending}
             className="bg-[#14B89A] hover:bg-[#12a589] text-white shrink-0"
           >

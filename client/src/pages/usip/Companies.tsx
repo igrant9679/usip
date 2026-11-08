@@ -499,7 +499,7 @@ export default function Companies() {
                 <span className="font-medium">{matchingAll ? `All ${total.toLocaleString()} matching` : checked.size} selected</span>
                 <Button variant="secondary" size="sm" className="h-7 gap-1" disabled={bulkEnrich.isPending || enrichMatching.isPending || matchingJob != null}
                   onClick={() => (matchingAll
-                    ? confirmAction({ title: `Enrich ${total.toLocaleString()} companies?`, description: `Everyone matching the filters: ${total.toLocaleString()} ${total === 1 ? "company" : "companies"}. Enrichment reads the evidence already on file and calls no paid source. It runs on the server in the background.`, confirmLabel: `Enrich ${total.toLocaleString()}` },
+                    ? confirmAction({ title: `Enrich ${total.toLocaleString()} companies?`, count: { n: total, one: "company", many: "companies" }, description: `Everyone matching the filters: ${total.toLocaleString()} ${total === 1 ? "company" : "companies"}. Enrichment reads the evidence already on file and calls no paid source. It runs on the server in the background.`, confirmLabel: `Enrich ${total.toLocaleString()}` },
                       () => enrichMatching.mutate({ action: "enrich", filters, expectedTotal: total }))
                     : bulkEnrich.mutate({ accountIds: [...checked] }))}>
                   {matchingJob != null ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Enrich

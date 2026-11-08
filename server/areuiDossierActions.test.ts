@@ -90,10 +90,12 @@ describe("the bar is wired into the dossier", () => {
     expect(bar).toContain("trpc.are.prospects.enrich.useMutation(");
     expect(bar).toContain("trpc.are.prospects.generateSequence.useMutation(");
     const enrich = block(bar, "const askEnrich = () => {", "};");
-    expect(enrich).toContain("description: areEnrichText(1, budgets.data)");
+    // 2026-11-08 (audit U5): the spend sentences are typed costs, worded by
+    // the same areEnrichText / areGenerateText in the confirm.
+    expect(enrich).toContain("cost: { kind: \"areEnrich\", people: 1, budgets: budgets.data }");
     expect(enrich).toContain("}, () => enrich.mutate({ prospectId: prospect.id }));");
     const gen = block(bar, "const askGenerate = () => {", "};");
-    expect(gen).toContain("description: areGenerateText(budgets.data?.ai)");
+    expect(gen).toContain("cost: { kind: \"areGenerate\", ai: budgets.data?.ai }");
     expect(gen).toContain("}, () => generate.mutate({ prospectId: prospect.id, campaignId }));");
     // No path spends without the confirm.
     expect(bar.match(/enrich\.mutate\(/g)?.length).toBe(1);

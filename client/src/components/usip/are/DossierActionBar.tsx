@@ -15,7 +15,6 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { confirmAction } from "@/components/usip/Common";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
-import { areEnrichText, areGenerateText } from "@shared/spendPreview";
 import type { RejectTarget } from "./RejectProspectDialog";
 
 export interface DossierProspect {
@@ -75,7 +74,7 @@ export function DossierActionBar({ prospect, campaignId, onReject, onOpenInSeque
   const askEnrich = () => {
     confirmAction({
       title: `Enrich ${name}?`,
-      description: areEnrichText(1, budgets.data),
+      cost: { kind: "areEnrich", people: 1, budgets: budgets.data },
       confirmLabel: "Spend and enrich",
       destructive: false,
     }, () => enrich.mutate({ prospectId: prospect.id }));
@@ -83,7 +82,7 @@ export function DossierActionBar({ prospect, campaignId, onReject, onOpenInSeque
   const askGenerate = () => {
     confirmAction({
       title: `Write ${name}'s sequence?`,
-      description: areGenerateText(budgets.data?.ai),
+      cost: { kind: "areGenerate", ai: budgets.data?.ai },
       confirmLabel: "Spend and generate",
       destructive: false,
     }, () => generate.mutate({ prospectId: prospect.id, campaignId }));

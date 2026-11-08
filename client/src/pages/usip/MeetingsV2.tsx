@@ -444,16 +444,23 @@ export default function MeetingsV2() {
                 <h2 className="text-sm font-semibold flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI meeting proposals ({proposals.length})</h2>
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAllProposed.isPending || approveSend.isPending}
                   title={`Approve and send all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
+                  count={{ n: proposals.length, one: "proposal" }}
+                  consequence={{ kind: "sends", channel: "email", n: proposals.length }}
                   description="Each prospect is emailed their proposal now, with every offered time that is still free on the owner's calendar as a link. Nothing goes on the calendar until they confirm a time. Proposals whose times have all passed or are all booked are skipped and kept for you to regenerate."
                   confirmLabel="Approve & send all" onConfirm={() => approveAllProposed.mutate()}>
                   <Send className="size-3.5" /> Approve & send all ({proposals.length})
                 </ConfirmButton>
-                <Button size="sm" variant="outline" className="h-7 gap-1.5"
+                {/* Each proposal is one AI call: the cost is said first (audit U5). */}
+                <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5"
                   disabled={regenerateAllOutdated.isPending}
-                  title="Fresh times and a fresh invite for every proposal whose offered times have all passed or fall outside 9:00–16:00 in the workspace time zone. Sends nothing. Up to 10 per click."
-                  onClick={() => regenerateAllOutdated.mutate()}>
+                  ariaLabel="Regenerate outdated proposals"
+                  title="Regenerate outdated proposals?"
+                  description="Fresh times and a fresh invite for every proposal whose offered times have all passed or fall outside 9:00–16:00 in the workspace time zone. Nothing is sent."
+                  count={{ n: 10, one: "proposal", upTo: true }}
+                  cost={{ kind: "ai", calls: 10, what: "at most, one per proposal" }}
+                  confirmLabel="Regenerate" onConfirm={() => regenerateAllOutdated.mutate()}>
                   <Sparkles className="size-3.5" /> {regenerateAllOutdated.isPending ? "Regenerating…" : "Regenerate outdated"}
-                </Button>
+                </ConfirmButton>
                 {regenPass ? (
                   <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={regenerateAll.isPending}
                     title="Carry on rewriting the proposals this pass has not reached yet. Sends nothing."
@@ -463,6 +470,8 @@ export default function MeetingsV2() {
                 ) : (
                   <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={regenerateAll.isPending}
                     title={`Rewrite all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
+                    count={{ n: proposals.length, one: "proposal" }}
+                    cost={{ kind: "ai", calls: proposals.length, what: "over the whole pass, one per proposal, 10 a click" }}
                     description="Fresh times and a freshly written invite for every open proposal, using the current brand profile, including proposals you have edited. Nothing is sent. Runs 10 at a time; click Continue until none are left."
                     confirmLabel="Rewrite all" onConfirm={() => regenerateAll.mutate({})}>
                     <Sparkles className="size-3.5" /> {regenerateAll.isPending ? "Rewriting…" : "Regenerate all"}
@@ -513,7 +522,12 @@ export default function MeetingsV2() {
               <div className="space-y-2">
                 {proposals.map((m) => (
                   <ProposalCard key={m.id} m={m}
-                    onApprove={(chosenTime) => approveSend.mutate({ id: m.id, chosenTime })}
+                    onApprove={(chosenTime) => confirmAction({
+                      title: `Send this proposal${m.contactName ? ` to ${m.contactName}` : ""}?`,
+                      consequence: { kind: "sends", channel: "email", n: 1 },
+                      confirmLabel: "Approve & send",
+                      destructive: false,
+                    }, () => approveSend.mutate({ id: m.id, chosenTime }))}
                     onDismiss={() => dismiss.mutate({ id: m.id })}
                     onRegenerate={() => regenerate.mutate({ id: m.id })}
                     onEdit={(patch) => updateProposal.mutate({ id: m.id, ...patch })}

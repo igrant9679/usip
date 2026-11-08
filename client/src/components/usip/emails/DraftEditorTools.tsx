@@ -26,6 +26,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { ConfirmFactList } from "@/components/usip/Common";
+import { AI_PIPELINE_CALLS_PER_CONTACT } from "@shared/spendPreview";
 import {
   AlertTriangle, BarChart2, CheckCircle, ChevronDown, ChevronRight, Eye, ExternalLink,
   Loader2, MousePointer, Pencil, RefreshCw, Star, XCircle, Zap,
@@ -498,6 +500,10 @@ export function AiComposeDialog({ open, onClose }: { open: boolean; onClose: () 
             )}
           </div>
         </div>
+        {/* What Generate spends, said before it runs (audit U5). */}
+        {selected.length > 0 && (
+          <ConfirmFactList cost={{ kind: "ai", calls: selected.length * AI_PIPELINE_CALLS_PER_CONTACT, what: `(${AI_PIPELINE_CALLS_PER_CONTACT} per contact: three research steps and three drafts)` }} />
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button disabled={selected.length === 0 || runBulk.isPending} className="gap-1.5"

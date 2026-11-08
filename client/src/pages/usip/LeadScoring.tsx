@@ -123,7 +123,9 @@ export default function LeadScoring() {
     if (p.running) { toast.info("Leads are already being re-scored."); return; }
     confirmAction({
       title: `Re-score ${p.leads.toLocaleString()} leads?`,
-      description: `Each lead is one AI call on this workspace's AI budget (${p.leads.toLocaleString()} calls). Leads that cross Sales Ready notify their owner, and can be enrolled into sequences that start on a score. It runs in the background; you can leave this page.`,
+      description: "Leads that cross Sales Ready notify their owner, and can be enrolled into sequences that start on a score. It runs in the background; you can leave this page.",
+      count: { n: p.leads, one: "lead" },
+      cost: { kind: "ai", calls: p.leads, what: "(one per lead)" },
       confirmLabel: "Re-score",
     }, () => recomputeAll.mutate());
   };
@@ -182,7 +184,7 @@ export default function LeadScoring() {
             <>
               <Loader2 className="size-3.5 animate-spin" />
               <span>Re-scoring leads: {job.done.toLocaleString()} of {job.total.toLocaleString()}{job.failed ? ` (${job.failed} failed)` : ""}</span>
-              {isAdmin && <Button size="sm" variant="ghost" className="h-6" disabled={cancelRecompute.isPending} onClick={() => cancelRecompute.mutate({ jobId: job.id })}>Cancel</Button>}
+              {isAdmin && <Button size="sm" variant="ghost" className="h-6" disabled={cancelRecompute.isPending} onClick={() => confirmAction({ title: "Stop re-scoring?", consequence: { kind: "stops", what: "Re-scoring", kept: "Leads scored so far keep their new scores; the rest keep their old ones" }, confirmLabel: "Stop" }, () => cancelRecompute.mutate({ jobId: job.id }))}>Cancel</Button>}
             </>
           ) : (
             <span>

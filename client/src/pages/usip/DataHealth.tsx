@@ -376,6 +376,7 @@ function SplitPeopleSection({ canLinkAll }: { canLinkAll: boolean }) {
                   destructive={false}
                   disabled={busy}
                   title={linkCursor ? "Link the next contacts?" : "Link unlinked contacts?"}
+                  count={{ n: 500, one: "contact", upTo: true }}
                   description="Checks the next 500 contacts with no People record. A contact is linked only where its address or LinkedIn profile matches a People record, and gets a new one where nothing does; its values are merged into that record. A contact that only a name matches is left alone, so one person's details never land on someone else's. It reads only what Velocity holds and spends no credits."
                   confirmLabel="Link"
                   onConfirm={() => linkAll.mutate({ afterId: linkCursor })}

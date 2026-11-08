@@ -130,11 +130,15 @@ describe("spend is said before it happens (F8, U16)", () => {
     // (n), and the confirmation also says it runs on the server; Confirm
     // still starts it, and only Confirm.
     const item = block(st, "<DropdownMenuItem disabled={busy || n > 5000} onClick={() => confirmAction({", "\"Enrich fully (all sources)\"}</DropdownMenuItem>");
-    expect(item).toContain("description: `${enrichFullyText(n, budgets.data)} It runs on the server in the background; you can leave this page.`,");
+    // 2026-11-08 (audit U5): the spend is a typed `cost` the confirm words
+    // through enrichFullyText, with the count beside it.
+    expect(item).toContain("cost: { kind: \"enrichFully\", people: n, budgets: budgets.data },");
+    expect(item).toContain("count: { n, one: \"person\", many: \"people\" },");
     expect(item).toContain("}, startFull)}");
     expect(st).not.toContain("onClick={startFull}");
     const people = read("client/src/pages/usip/People.tsx");
-    expect(people).toContain("description: enrichFullyText(1, enrichBudgets.data), confirmLabel: \"Spend and enrich\" }, () => enrichFull.mutate({ prospectId: p.id }))");
+    // 2026-11-08 (audit U5): the same sentence, as a typed cost.
+    expect(people).toContain("cost: { kind: \"enrichFully\", people: 1, budgets: enrichBudgets.data }, confirmLabel: \"Spend and enrich\" }, () => enrichFull.mutate({ prospectId: p.id }))");
     expect(people).not.toContain("onClick={() => enrichFull.mutate({ prospectId: p.id })}");
   });
 

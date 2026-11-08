@@ -382,7 +382,12 @@ function EventDialog({
         <DialogFooter className="gap-2">
           {event && (
             <Button variant="destructive" size="sm"
-              onClick={() => deleteEvent.mutate({ accountId, calendarId, externalId: event.externalId, dbId: event.id })}
+              onClick={() => confirmAction({
+                title: `Delete "${event.title || "this event"}"?`,
+                description: "It is deleted from the connected calendar too, which may send its attendees a cancellation.",
+                consequence: { kind: "permanent" },
+                confirmLabel: "Delete event",
+              }, () => deleteEvent.mutate({ accountId, calendarId, externalId: event.externalId, dbId: event.id }))}
               disabled={isLoading}
             >
               <Trash2 className="size-3.5 mr-1" /> Delete

@@ -13,6 +13,7 @@
  */
 import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -111,7 +112,12 @@ export function MicrosoftGraphCard() {
                 Sync calendar now
               </Button>
               <Button size="sm" variant="ghost" className="h-8 text-muted-foreground" disabled={disconnect.isPending}
-                onClick={() => disconnect.mutate()}>
+                onClick={() => confirmAction({
+                  title: "Disconnect Microsoft 365?",
+                  description: "Your Outlook calendar on My Calendar, the OneNote sync and attaching OneDrive files stop until you connect it again.",
+                  consequence: { kind: "access", who: "Velocity" },
+                  confirmLabel: "Disconnect",
+                }, () => disconnect.mutate())}>
                 Disconnect
               </Button>
             </>
@@ -301,7 +307,11 @@ export function RecordFiles({
             )}
             <button type="button" title="Unlink (keeps the file in OneDrive)"
               className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-              onClick={() => remove.mutate({ id: f.id })}>
+              onClick={() => confirmAction({
+                title: `Unlink "${f.name}"?`,
+                consequence: { kind: "reversible", undo: "the file stays in OneDrive, so it can be linked again" },
+                confirmLabel: "Unlink",
+              }, () => remove.mutate({ id: f.id }))}>
               <X className="size-3 text-muted-foreground" />
             </button>
           </li>

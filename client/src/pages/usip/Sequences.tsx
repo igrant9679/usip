@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { ConfirmButton, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
@@ -194,7 +194,7 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                     <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600" title="They replied: pause them and file a task to follow up" onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })} disabled={pauseOnReply.isPending}>Mark replied</Button>
                   )}
                   {(e.status === "active" || e.status === "paused") && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => exit.mutate({ id: e.id })} disabled={exit.isPending}>Exit</Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => confirmAction({ title: "Take them out of this sequence?", consequence: { kind: "stops", what: "Their remaining steps", kept: "Steps already sent stay in their history" }, confirmLabel: "Exit" }, () => exit.mutate({ id: e.id }))} disabled={exit.isPending}>Exit</Button>
                   )}
                 </div>
               </li>
@@ -879,7 +879,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                             </Button>
                           )}
                           <Button aria-label="Edit variant" size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
-                          <Button aria-label="Delete variant" size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
+                          <Button aria-label="Delete variant" size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => confirmAction({ title: "Delete this variant?", description: "Its results so far go with it.", consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => deleteVariant.mutate({ id: v.id }))}><Trash2 className="size-3" /></Button>
                         </div>
                       </td>
                     </tr>
@@ -1262,7 +1262,7 @@ export default function Sequences() {
                       {detail.data.status === "active" ? <><Pause className="size-3.5" /> Pause</> : <><Play className="size-3.5" /> Activate</>}
                     </Button>
                     <Button size="sm" variant="ghost"
-                      onClick={() => setStatus.mutate({ id: detail.data!.id, status: "archived" })}>
+                      onClick={() => confirmAction({ title: `Archive "${detail.data!.name}"?`, description: "Everyone still enrolled is taken out for good. The sequence can be put back to draft, but they are not re-enrolled.", confirmLabel: "Archive" }, () => setStatus.mutate({ id: detail.data!.id, status: "archived" }))}>
                       <Power className="size-3.5" /> Archive
                     </Button>
                   </div>

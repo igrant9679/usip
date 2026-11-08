@@ -51,7 +51,6 @@ import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
 import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
-import { enrichFullyText } from "@shared/spendPreview";
 import { formatPhone } from "@shared/phoneFormat";
 import { agentNumbers } from "@shared/voiceCapacity";
 import { tablistProps, tabProps } from "@/lib/tabs";
@@ -250,7 +249,13 @@ export function SequenceMenu({ selectedIds, trigger }: { selectedIds: number[]; 
                 key={s.id}
                 type="button"
                 disabled={bulkEnroll.isPending}
-                onClick={() => bulkEnroll.mutate({ sequenceId: s.id, prospectIds: selectedIds })}
+                onClick={() => confirmAction({
+                  title: `Enrol ${selectedIds.length} ${selectedIds.length === 1 ? "person" : "people"} in "${s.name}"?`,
+                  description: s.status === "active" ? "Each step sends the same message to everyone, on the sequence's schedule." : `It is ${s.status}: nothing is sent until it is active.`,
+                  count: { n: selectedIds.length, one: "person", many: "people" },
+                  confirmLabel: "Enrol",
+                  destructive: false,
+                }, () => bulkEnroll.mutate({ sequenceId: s.id, prospectIds: selectedIds }))}
                 className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60"
               >
                 <Activity className="size-3.5 shrink-0 text-muted-foreground" />
@@ -356,7 +361,7 @@ function CreateTasksMenu({ selectedIds, matching }: { selectedIds: number[]; mat
   });
   const submit = () => {
     if (matching) {
-      confirmAction({ title: `Create a task for each of ${n.toLocaleString()} people?`, description: `"${title.trim()}", due in ${dueInDays} day${dueInDays === 1 ? "" : "s"}, for everyone matching the filters: ${n.toLocaleString()} ${n === 1 ? "person" : "people"}.`, confirmLabel: `Create ${n.toLocaleString()} tasks` },
+      confirmAction({ title: `Create a task for each of ${n.toLocaleString()} people?`, count: { n, one: "person", many: "people" }, description: `"${title.trim()}", due in ${dueInDays} day${dueInDays === 1 ? "" : "s"}, for everyone matching the filters: ${n.toLocaleString()} ${n === 1 ? "person" : "people"}.`, confirmLabel: `Create ${n.toLocaleString()} tasks` },
         () => byFilter.mutate({ action: "tasks", filter: matching.filter as any, expectedTotal: matching.total, params: { title: title.trim(), type, priority: priority as any, dueInDays } }));
       return;
     }
@@ -424,6 +429,7 @@ export function AddToListMenu({ selectedIds, trigger, matching }: { selectedIds:
   });
   const addMatching = (listId: number, name: string) => confirmAction({
     title: `Add ${count.toLocaleString()} people to "${name}"?`,
+    count: { n: count, one: "person", many: "people" },
     description: `Everyone matching the filters: ${count.toLocaleString()} ${count === 1 ? "person" : "people"}. Anyone already on the list stays once.`,
     confirmLabel: `Add ${count.toLocaleString()}`,
   }, () => byFilter.mutate({ action: "addToList", filter: matching!.filter as any, expectedTotal: matching!.total, params: { listId } }));
@@ -666,7 +672,9 @@ function EnrichMenu({ selectedIds, matching, lookupIds }: { selectedIds: number[
         {/* Spends QuickEnrich, Reoon and LinkedIn: the most it can use is said first (audit 2026-10-20, F8). */}
         <DropdownMenuItem disabled={busy || n > 5000} onClick={() => confirmAction({
           title: `Enrich ${n.toLocaleString()} ${n === 1 ? "person" : "people"} fully?`,
-          description: `${enrichFullyText(n, budgets.data)} It runs on the server in the background; you can leave this page.`,
+          description: "It runs on the server in the background; you can leave this page.",
+          count: { n, one: "person", many: "people" },
+          cost: { kind: "enrichFully", people: n, budgets: budgets.data },
           confirmLabel: "Spend and enrich",
         }, startFull)}><Sparkles className="size-4 mr-2" /> {n > 5000 ? "Enrich fully (5,000 at a time)" : "Enrich fully (all sources)"}</DropdownMenuItem>
         <DropdownMenuItem disabled={busy || !lookupIds?.length} onClick={start}><Activity className="size-4 mr-2" /> {lookupIds ? "Refresh LinkedIn data" : "Refresh LinkedIn data (500 at a time)"}</DropdownMenuItem>
@@ -715,14 +723,14 @@ function MoreMenu({ selectedIds, onClear, matching }: { selectedIds: number[]; o
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem disabled={optOut.isPending || byFilter.isPending || job.running || (!!matching && n > 5000)} onClick={() => { confirmAction({ title: `Opt out ${n.toLocaleString()} ${matching ? "matching" : "selected"} ${n === 1 ? "person" : "people"}?`, description: matching ? `Everyone matching the filters: ${n.toLocaleString()}. They'll be suppressed from all outreach.` : "They'll be suppressed from all outreach.", confirmLabel: "Opt out", destructive: false }, () => { if (matching) byFilter.mutate({ action: "optOut", filter: matching.filter as any, expectedTotal: matching.total }); else optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
+        <DropdownMenuItem disabled={optOut.isPending || byFilter.isPending || job.running || (!!matching && n > 5000)} onClick={() => { confirmAction({ title: `Opt out ${n.toLocaleString()} ${matching ? "matching" : "selected"} ${n === 1 ? "person" : "people"}?`, count: { n, one: "person", many: "people" }, description: matching ? `Everyone matching the filters: ${n.toLocaleString()}. They'll be suppressed from all outreach.` : "They'll be suppressed from all outreach.", confirmLabel: "Opt out", destructive: false }, () => { if (matching) byFilter.mutate({ action: "optOut", filter: matching.filter as any, expectedTotal: matching.total }); else optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
           <UserX className="size-4 mr-2" /> Opt Out
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-rose-600 focus:text-rose-600"
           disabled={bulkDelete.isPending || byFilter.isPending || job.running || (!!matching && n > 5000)}
-          onClick={() => { confirmAction({ title: `Delete ${n.toLocaleString()} ${matching ? "matching" : "selected"} ${n === 1 ? "person" : "people"}?`, description: matching ? `Everyone matching the filters: ${n.toLocaleString()} ${n === 1 ? "person" : "people"}. This cannot be undone here; each deleted row is kept in the audit log.` : "This cannot be undone.", confirmLabel: matching ? `Delete ${n.toLocaleString()}` : "Delete" }, () => { if (matching) byFilter.mutate({ action: "delete", filter: matching.filter as any, expectedTotal: matching.total }); else bulkDelete.mutate({ prospectIds: selectedIds } as any); }); }}
+          onClick={() => { confirmAction({ title: `Delete ${n.toLocaleString()} ${matching ? "matching" : "selected"} ${n === 1 ? "person" : "people"}?`, count: { n, one: "person", many: "people" }, description: matching ? `Everyone matching the filters: ${n.toLocaleString()} ${n === 1 ? "person" : "people"}. This cannot be undone here; each deleted row is kept in the audit log.` : "This cannot be undone.", confirmLabel: matching ? `Delete ${n.toLocaleString()}` : "Delete" }, () => { if (matching) byFilter.mutate({ action: "delete", filter: matching.filter as any, expectedTotal: matching.total }); else bulkDelete.mutate({ prospectIds: selectedIds } as any); }); }}
         >
           <Trash2 className="size-4 mr-2" /> Delete
         </DropdownMenuItem>

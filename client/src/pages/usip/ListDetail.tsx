@@ -15,6 +15,7 @@ import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/LinkedInEnrichment";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { cn } from "@/lib/utils";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -380,7 +381,7 @@ export default function ListDetail() {
                   />
                 )}
                 <Button size="sm" variant="outline" className="h-7 gap-1.5 text-destructive" disabled={removeManyMut.isPending}
-                  onClick={() => removeManyMut.mutate({ listId: id, memberIds: Array.from(selected) })}>
+                  onClick={() => confirmAction({ title: `Remove ${selected.size} from this list?`, description: "Only the list changes; nobody is deleted.", count: { n: selected.size, one: "member" }, consequence: { kind: "reversible", undo: "add them to the list again" }, confirmLabel: "Remove" }, () => removeManyMut.mutate({ listId: id, memberIds: Array.from(selected) }))}>
                   {removeManyMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} Remove {selected.size} from list
                 </Button>
               </div>

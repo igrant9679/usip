@@ -15,6 +15,7 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { Shell, useAccentColor, EmptyState } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -472,7 +473,7 @@ export default function LinkedInLimits() {
                           saving={save.isPending}
                           onSave={(p) => save.mutate({ unipileAccountId: a.unipileAccountId, policy: p })}
                           onReset={a.policySource === "account"
-                            ? () => clear.mutate({ unipileAccountId: a.unipileAccountId })
+                            ? () => confirmAction({ title: "Use the workspace default for this account?", description: "This account's own limits are removed and the workspace default applies from now on.", consequence: { kind: "reversible", undo: "set this account's limits again here" }, confirmLabel: "Use the default", destructive: false }, () => clear.mutate({ unipileAccountId: a.unipileAccountId }))
                             : undefined}
                         />
                       </div>

@@ -291,12 +291,21 @@ const APPROVAL_POLL_MS = 15_000;
 const REJECT_TEMPLATES: string[] = [...PERSON_REJECT_PRESETS];
 
 /* ── Mass-action catalogues per tab (what each tab offers; the server owns what each does) ── */
+/** One ICP score per prospect (scoreIcpMatch: one AI call). */
+const RE_EVALUATE_CONFIRM: BulkActionDef["confirm"] = {
+  title: "Re-evaluate",
+  body: "{n} prospects are scored against the campaign's ICP again, and can move into or out of review.",
+  cta: "Re-evaluate",
+  facts: (n) => ({ cost: { kind: "ai", calls: n, what: "(one ICP score each)" } }),
+};
 const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [
-  { key: "approve", label: "Approve", icon: <CheckCircle2 className="size-3 text-emerald-600" /> },
+  // Approve, Enrich and Re-evaluate ask first (audit U5, X1.8): approval moves
+  // people toward outreach, and the other two spend.
+  { key: "approve", label: "Approve", icon: <CheckCircle2 className="size-3 text-emerald-600" />, confirm: { title: "Approve", body: "{n} prospects are approved for this campaign's outreach. If the campaign is active, the engine enrols them on a later cycle, within its daily send cap; nothing sends while it is paused.", cta: "Approve" } },
   { key: "reject", label: "Reject", icon: <XCircle className="size-3 text-destructive" />, params: "reason", presets: REJECT_TEMPLATES, confirm: { title: "Reject", body: "{n} prospects are marked rejected and leave the review queue.", cta: "Reject" } },
   { key: "skip", label: "Skip", title: "Skip without a reason (kept, not sequenced)" },
-  { key: "enrich", label: "Enrich", icon: <Sparkles className="size-3" />, title: "Run the enrich agent on each (may spend credits)" },
-  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, title: "Re-score ICP fit" },
+  { key: "enrich", label: "Enrich", icon: <Sparkles className="size-3" />, title: "Run the enrich agent on each (may spend credits)", confirm: { title: "Enrich", body: "The enrich agent runs on {n} prospects.", cta: "Spend and enrich", facts: (n) => ({ cost: { kind: "areEnrich", people: n } }) } },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, title: "Re-score ICP fit", confirm: RE_EVALUATE_CONFIRM },
   { key: "generateSequence", label: "Generate sequences", icon: <Sparkles className="size-3" />, params: "regenerate" },
   { key: "addToList", label: "Add to list", params: "list" },
   { key: "createTasks", label: "Create tasks", params: "task" },
@@ -305,7 +314,7 @@ const PROSPECT_TAB_ACTIONS: BulkActionDef[] = [
 ];
 const SEQUENCE_TAB_ACTIONS: BulkActionDef[] = [
   { key: "pauseSequence", label: "Pause", icon: <Pause className="size-3 text-amber-600" /> },
-  { key: "resumeSequence", label: "Resume", icon: <Play className="size-3 text-emerald-600" /> },
+  { key: "resumeSequence", label: "Resume", icon: <Play className="size-3 text-emerald-600" />, confirm: { title: "Resume sequences", body: "{n} sequences resume: their next steps go out on the campaign's cadence, within its daily send cap and send window.", cta: "Resume" } },
   { key: "cancelSequence", label: "Cancel sequence", variant: "destructive", icon: <X className="size-3" />, params: "reason", confirm: { title: "Cancel sequences", body: "{n} sequences stop; pending steps are dropped, sent steps stay in history.", cta: "Cancel sequences" } },
   { key: "generateSequence", label: "Regenerate", icon: <Sparkles className="size-3" />, params: "regenerate" },
   { key: "addToList", label: "Add to list", params: "list" },
@@ -351,7 +360,7 @@ function sequenceTabActions(filter: FilterKey): BulkActionDef[] {
 }
 const REJECTION_TAB_ACTIONS: BulkActionDef[] = [
   { key: "restore", label: "Restore to pending", icon: <RefreshCcw className="size-3" />, params: "reason", confirm: { title: "Restore", body: "{n} rejected prospects go back to pending and are screened again by the engine.", cta: "Restore" } },
-  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" /> },
+  { key: "reEvaluate", label: "Re-evaluate", icon: <RefreshCcw className="size-3" />, confirm: RE_EVALUATE_CONFIRM },
   { key: "addToList", label: "Add to list", params: "list" },
   { key: "createTasks", label: "Create tasks", params: "task" },
   { key: "suppress", label: "Suppress", variant: "destructive", params: "suppress", confirm: { title: "Suppress", body: "{n} prospects will never be emailed again, by any sender in Velocity.", cta: "Suppress" } },
@@ -631,14 +640,14 @@ function ProspectRow({
         {p.enrichmentStatus === "pending" && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-blue-500 hover:text-blue-600"
             title="Enrich"
-            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            onClick={() => confirmAction({ title: "Enrich this prospect?", cost: { kind: "areEnrich", people: 1 }, confirmLabel: "Spend and enrich", destructive: false }, () => enrich.mutate({ prospectId: p.id }))} disabled={enrich.isPending}>
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <FlaskConical className="size-3" />}
           </Button>
         )}
         {p.enrichmentStatus === "failed" && (
           <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-amber-600 hover:text-amber-700"
             title="Retry enrichment"
-            onClick={() => enrich.mutate({ prospectId: p.id })} disabled={enrich.isPending}>
+            onClick={() => confirmAction({ title: "Enrich this prospect?", cost: { kind: "areEnrich", people: 1 }, confirmLabel: "Spend and enrich", destructive: false }, () => enrich.mutate({ prospectId: p.id }))} disabled={enrich.isPending}>
             {enrich.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
           </Button>
         )}
@@ -3111,7 +3120,13 @@ function ARECampaignDetailPage() {
                 </Button>
                 <Button
                   size="sm" variant="outline" className="gap-1.5 text-xs"
-                  onClick={() => enrichBatch.mutate({ campaignId, limit: 20 })}
+                  onClick={() => confirmAction({
+                    title: `Enrich the next ${Math.min(20, pendingEnrich)} pending ${Math.min(20, pendingEnrich) === 1 ? "prospect" : "prospects"}?`,
+                    count: { n: Math.min(20, pendingEnrich), one: "prospect" },
+                    cost: { kind: "areEnrich", people: Math.min(20, pendingEnrich) },
+                    confirmLabel: "Spend and enrich",
+                    destructive: false,
+                  }, () => enrichBatch.mutate({ campaignId, limit: 20 }))}
                   disabled={enrichBatch.isPending || pendingEnrich === 0}
                 >
                   {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
@@ -3120,6 +3135,7 @@ function ARECampaignDetailPage() {
                 {(approvable.data?.count ?? 0) > 0 && (
                   <ConfirmButton size="sm" variant="default" destructive={false} className="gap-1.5 text-xs" disabled={approveAllPending.isPending}
                     title={`Approve all ${approvable.data?.count} enriched ${approvable.data?.count === 1 ? "person" : "people"} in this campaign?`}
+                    count={{ n: approvable.data?.count ?? 0, one: "person", many: "people" }}
                     description={campaign?.status === "active"
                       ? "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. The engine writes their sequences and starts sending on the campaign's cadence within its daily cap."
                       : "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. Nothing sends while the campaign is not active."}

@@ -268,7 +268,10 @@ describe("Recompute all lead scores is a confirmed, one-at-a-time background job
     const page = read("client/src/pages/usip/LeadScoring.tsx");
     expect(page).toContain("await utils.leadScoring.recomputeAllPreview.fetch()");
     expect(page).toMatch(/confirmAction\(\{\s*title: `Re-score \$\{p\.leads\.toLocaleString\(\)\} leads\?`/);
-    expect(page).toContain("one AI call on this workspace's AI budget");
+    // 2026-11-08 (audit U5): the cost is a typed fact the confirm words
+    // through aiCallText ("This makes N AI calls (one per lead), billed…").
+    expect(page).toContain("cost: { kind: \"ai\", calls: p.leads, what: \"(one per lead)\" },");
+    expect(page).toContain("count: { n: p.leads, one: \"lead\" },");
     expect(page).toContain("onClick={askRecompute}");
     expect(page).toContain("cancelRecompute.mutate({ jobId: job.id })");
   });

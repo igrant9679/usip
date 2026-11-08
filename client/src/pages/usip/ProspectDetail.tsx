@@ -208,7 +208,7 @@ export default function ProspectDetail() {
         </>}
         actions={<>
           <AddToMenu prospectIds={[id]} />
-          <Button variant="outline" size="sm" onClick={() => reEnrich.mutate({ id })} disabled={reEnrich.isPending} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => confirmAction({ title: `Re-enrich ${fullName}?`, cost: { kind: "discovery" }, confirmLabel: "Run", destructive: false }, () => reEnrich.mutate({ id }))} disabled={reEnrich.isPending} className="gap-1.5">
             {reEnrich.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
             Re-enrich
           </Button>

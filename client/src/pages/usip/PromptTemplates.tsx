@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -245,7 +246,7 @@ export default function PromptTemplatesPage() {
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7 hover:text-destructive"
-                            onClick={() => deleteMutation.mutate({ id: t.id })}
+                            onClick={() => confirmAction({ title: `Delete the template "${t.name}"?`, consequence: { kind: "permanent" }, confirmLabel: "Delete" }, () => deleteMutation.mutate({ id: t.id }))}
                             disabled={t.isActive}
                           >
                             <Trash2 size={12} />

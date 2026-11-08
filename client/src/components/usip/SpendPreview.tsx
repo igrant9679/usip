@@ -11,7 +11,7 @@
  */
 import { trpc } from "@/lib/trpc";
 import { confirmAction } from "@/components/usip/Common";
-import { launcherBudgetLine, paidLookupText, type Allowance } from "@shared/spendPreview";
+import { launcherBudgetLine, type Allowance } from "@shared/spendPreview";
 
 export function useSourceBudgets(enabled = true) {
   return trpc.spend.budgets.useQuery(undefined, { staleTime: 30_000, retry: false, enabled });
@@ -33,9 +33,11 @@ export function confirmPaidLookup(
   opts: { title: string; vendor: string; count: number; unit: string; perItem?: number; allowance?: Allowance; note?: string; confirmLabel?: string },
   onConfirm: () => void,
 ) {
+  const { title, confirmLabel, ...lookup } = opts;
+  // The cost is a typed fact (U5): the dialog words it through paidLookupText.
   confirmAction({
-    title: opts.title,
-    description: paidLookupText(opts),
-    confirmLabel: opts.confirmLabel ?? "Spend and run",
+    title,
+    cost: { kind: "paidLookup", ...lookup },
+    confirmLabel: confirmLabel ?? "Spend and run",
   }, onConfirm);
 }

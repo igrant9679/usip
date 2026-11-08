@@ -29,6 +29,8 @@ import { Loader2, X } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ROLE_RANK, rankOf } from "@shared/roleRank";
 import { bulkActionNeedsManager } from "@shared/areProspectViews";
+import type { ConfirmFacts } from "@shared/confirmFacts";
+import { ConfirmFactList } from "@/components/usip/Common";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
@@ -41,7 +43,13 @@ export interface BulkActionDef {
   label: string;
   icon?: ReactNode;
   variant?: "default" | "outline" | "secondary" | "ghost" | "destructive";
-  confirm?: { title: string; body: string; cta?: string };
+  /**
+   * `facts` adds the typed cost and consequence for n selected (audit U5); the
+   * count is always the selection. An action with neither `confirm` nor
+   * `params` runs on one click, so which ones may is pinned by a test
+   * (server/destructiveConfirm.test.ts).
+   */
+  confirm?: { title: string; body: string; cta?: string; facts?: (n: number) => Omit<ConfirmFacts, "count"> };
   params?: "reason" | "list" | "task" | "suppress" | "regenerate" | "timeline";
   /** Quick-pick chips for the reason prompt. */
   presets?: string[];
@@ -288,6 +296,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
           <AlertDialogHeader>
             <AlertDialogTitle>{pending?.confirm?.title}</AlertDialogTitle>
             <AlertDialogDescription>{pending?.confirm?.body.replace("{n}", String(n))}</AlertDialogDescription>
+            <ConfirmFactList count={{ n, one: "prospect" }} {...pending?.confirm?.facts?.(n)} />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Not now</AlertDialogCancel>
@@ -305,6 +314,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
             <DialogTitle>{pending?.label} — {n} prospect{n === 1 ? "" : "s"}</DialogTitle>
           </DialogHeader>
           {pending?.confirm && <p className="text-xs text-muted-foreground -mt-1">{pending.confirm.body.replace("{n}", String(n))}</p>}
+          {pending?.confirm?.facts && <ConfirmFactList {...pending.confirm.facts(n)} />}
           <div className="space-y-3 py-1">
             {pending?.params === "reason" && (
               <div className="space-y-1.5">

@@ -11,6 +11,7 @@
  */
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -125,7 +126,13 @@ export function AttentionPanel() {
                   <Button
                     size="sm" variant="outline" className="h-6 px-2 text-[10px] shrink-0"
                     disabled={approveMeeting.isPending}
-                    onClick={() => approveMeeting.mutate({ id: m.id })}
+                    // A meeting proposal goes to a prospect: asked first (audit U5, X1.8).
+                    onClick={() => confirmAction({
+                      title: `Send this meeting proposal${m.contactName ? ` to ${m.contactName}` : ""}?`,
+                      consequence: { kind: "sends", channel: "email", n: 1 },
+                      confirmLabel: "Approve & send",
+                      destructive: false,
+                    }, () => approveMeeting.mutate({ id: m.id }))}
                   >
                     {approveMeeting.isPending ? <Loader2 className="size-3 animate-spin" /> : "Approve & send"}
                   </Button>

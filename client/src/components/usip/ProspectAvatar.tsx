@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
 
 export type ProfileImageStatus =
@@ -279,7 +280,11 @@ export function ProfileImageUploader({
       {hasImage ? (
         <button
           type="button"
-          onClick={() => remove.mutate({ id: prospectId, status: "removed" })}
+          onClick={() => confirmAction({
+            title: "Remove this photo?",
+            consequence: { kind: "permanent", what: "The photo" },
+            confirmLabel: "Remove",
+          }, () => remove.mutate({ id: prospectId, status: "removed" }))}
           className="text-[10px] text-muted-foreground hover:text-destructive"
         >
           Remove

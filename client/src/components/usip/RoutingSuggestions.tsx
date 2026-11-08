@@ -45,6 +45,7 @@ export function RoutingSuggestions() {
           <span className="text-[11px] text-muted-foreground">{rows.length} suggested · <Link href="/v2/workflows" className="hover:underline">routing dial</Link></span>
           <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1 text-xs" disabled={acceptAll.isPending || decide.isPending}
             title={`Add all ${rows.length} suggested ${rows.length === 1 ? "person" : "people"} to their campaigns?`}
+            count={{ n: rows.length, one: "person", many: "people" }}
             description="Each person joins the campaign the engine picked for them and is enriched and written to as that campaign's next batch. People already in outreach are skipped. Nothing sends until that campaign's batch is approved."
             confirmLabel="Add all" onConfirm={() => acceptAll.mutate()}>
             <Check className="size-3" /> Add all ({rows.length})

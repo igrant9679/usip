@@ -571,7 +571,7 @@ export default function Team() {
                     key={r}
                     size="sm"
                     variant="ghost"
-                    onClick={() => bulkChange.mutate({ memberIds: Array.from(selected), role: r })}
+                    onClick={() => confirmAction({ title: `Make ${selected.size} ${selected.size === 1 ? "member" : "members"} ${r}?`, description: "Their access changes as soon as they next load a page.", count: { n: selected.size, one: "member" }, consequence: { kind: "reversible", undo: "change their role back here" }, confirmLabel: `Make ${r}`, destructive: false }, () => bulkChange.mutate({ memberIds: Array.from(selected), role: r }))}
                   >
                     {r}
                   </Button>
@@ -1100,7 +1100,7 @@ export default function Team() {
                               className="text-rose-600"
                               title="Revoke this link"
                               disabled={revokeLink.isPending}
-                              onClick={() => revokeLink.mutate({ id: lnk.id })}
+                              onClick={() => confirmAction({ title: "Revoke this invite link?", consequence: { kind: "access", who: "Anyone holding this link" }, confirmLabel: "Revoke" }, () => revokeLink.mutate({ id: lnk.id }))}
                             >
                               <Trash2 className="size-3.5" /> <span className="hidden sm:inline ml-1">Revoke</span>
                             </Button>

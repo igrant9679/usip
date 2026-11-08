@@ -1026,6 +1026,8 @@ export default function Proposals() {
               <div className="flex justify-end">
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" disabled={approveAllExtMutation.isPending || zoneLoading}
                   title={`Approve all ${extensionPending.length} extension request${extensionPending.length === 1 ? "" : "s"}?`}
+                  count={{ n: extensionPending.length, one: "extension request" }}
+                  consequence={{ kind: "sends", channel: "email", n: extensionPending.length }}
                   description="Each proposal's expiry moves 7 days past its current date and the client is emailed the new date, exactly as a single approval would."
                   confirmLabel="Approve all"
                   onConfirm={() => approveAllExtMutation.mutate({ items: extensionPending.map((req) => ({ proposalId: req.id, newExpiresAt: extendedExpiry(req.expiresAt, timezone) })) })}>

@@ -32,7 +32,6 @@ import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
-import { enrichFullyText } from "@shared/spendPreview";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -643,7 +642,12 @@ export default function People() {
   };
   const removeSavedSearch = (v: SavedView) => {
     if (v.system) return;
-    removeView.mutate({ id: Number(v.id) });
+    confirmAction({
+      title: `Delete the saved view "${v.name}"?`,
+      description: "The people in it are not affected.",
+      consequence: { kind: "permanent" },
+      confirmLabel: "Delete view",
+    }, () => removeView.mutate({ id: Number(v.id) }));
   };
 
   // One-shot restore: come back to the search you were last on. Derived from
@@ -1438,7 +1442,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           className="w-full gap-1.5"
           disabled={enrichFull.isPending}
           // What it can spend, said first (audit 2026-10-20, F8).
-          onClick={() => confirmAction({ title: `Enrich ${fullName || "this person"} fully?`, description: enrichFullyText(1, enrichBudgets.data), confirmLabel: "Spend and enrich" }, () => enrichFull.mutate({ prospectId: p.id }))}
+          onClick={() => confirmAction({ title: `Enrich ${fullName || "this person"} fully?`, cost: { kind: "enrichFully", people: 1, budgets: enrichBudgets.data }, confirmLabel: "Spend and enrich" }, () => enrichFull.mutate({ prospectId: p.id }))}
         >
           {enrichFull.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
           {enrichFull.isPending ? "Enriching…" : "Enrich fully (all sources)"}
