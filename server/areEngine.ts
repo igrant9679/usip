@@ -169,6 +169,14 @@ const LINKEDIN_HELD_MS = 60 * 60_000;
 const LINKEDIN_WAIT_MS = 6 * 60 * 60_000;
 /** A due step whose copy is held for an avoid rule: looked at again in an hour (A13/A40). */
 const COPY_HELD_MS = 60 * 60_000;
+/**
+ * How long a step put back for lack of sending capacity waits before it is
+ * asked again (F13): 15 minutes, doubling, at most 6 hours. Capacity returns
+ * within the hour or at the next day's reset.
+ */
+export function dispatchRetryMs(attempts: number): number {
+  return Math.min(15 * 60_000 * 2 ** Math.max(0, attempts - 1), 6 * 60 * 60_000);
+}
 /** Sends between fresh reads of the campaign and workspace pause (A29): every one. */
 export const DISPATCH_RECHECK_EVERY = 1;
 // Final checks can spend Reoon credits and seconds — bound them per tick so
@@ -457,14 +465,21 @@ export async function runAreEngine(scope?: { workspaceId: number }): Promise<Are
         .where(and(eq(areCampaigns.status, "active"), scope ? eq(areCampaigns.workspaceId, scope.workspaceId) : undefined));
 
       const archivedWs = await archivedWorkspaceIds();
-      for (const campaign of active) {
-        if (archivedWs.has(campaign.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+      // Fair turns (audit 2026-10-20, F13): workspaces in turn, each one's
+      // campaigns in turn, and a tick that runs past its budget leaves the rest
+      // to go first next time. In table order, one workspace with many busy
+      // campaigns went first every tick and everyone else waited behind it.
+      const live = active.filter((c) => !archivedWs.has(c.workspaceId)); // archived workspaces are frozen (2026-08-12)
+      const run = await runCampaignsFairly(live, async (campaign) => {
         try {
           await tickCampaign(campaign, result, step);
           result.campaignsProcessed++;
         } catch (e) {
           console.error(`[AreEngine] campaign ${campaign.id} tick failed:`, e);
         }
+      });
+      if (run.deferred.length > 0) {
+        console.log(`[AreEngine] tick budget spent after ${run.ran.length} campaign(s); ${run.deferred.length} go first next tick`);
       }
     });
   } finally {
@@ -614,6 +629,80 @@ export function enrichmentRetryable(now: Date) {
     isNotNull(prospectQueue.enrichRetryAt),
     lte(prospectQueue.enrichRetryAt, now),
   );
+}
+
+/**
+ * How long one engine tick may keep starting campaigns (F13). A campaign that
+ * has started finishes; the ones not reached go first next tick. The cron
+ * fires every 3 minutes and skips while a tick runs, so a tick far past this
+ * was already starving every campaign after it in the order.
+ */
+export const ENGINE_TICK_BUDGET_MS = 8 * 60_000;
+
+/** Where the fair order resumes: the turn it is on, and who was left over. */
+const fairCursor = { turn: 0, deferred: [] as number[] };
+export function __resetFairCursorForTests(): void { fairCursor.turn = 0; fairCursor.deferred = []; }
+
+/**
+ * The order campaigns tick in (audit 2026-10-20, F13: "round-robin per
+ * workspace and campaign"). One workspace at a time in turn, each workspace's
+ * campaigns in turn, so every workspace's first campaign is among the first
+ * few of every tick however many campaigns another has. Both turns rotate by
+ * `turn`. Campaigns a tick ran out of budget for go first in their own
+ * workspace's turn, and their workspaces first, so nobody waits more than a
+ * tick past a cut. Pure.
+ */
+export function fairCampaignOrder<T extends { id: number; workspaceId: number }>(campaigns: T[], turn: number, deferredFirst: number[] = []): T[] {
+  const rotate = <U>(xs: U[], by: number) => (xs.length ? xs.slice(by % xs.length).concat(xs.slice(0, by % xs.length)) : xs);
+  const byId = new Map(campaigns.map((c) => [c.id, c]));
+  const deferred = deferredFirst.map((id) => byId.get(id)).filter((c): c is T => !!c);
+  const deferredIds = new Set(deferred.map((c) => c.id));
+  const rest = new Map<number, T[]>();
+  for (const c of campaigns.slice().sort((a, b) => a.id - b.id)) {
+    if (deferredIds.has(c.id)) continue;
+    const g = rest.get(c.workspaceId);
+    if (g) g.push(c); else rest.set(c.workspaceId, [c]);
+  }
+  const allWs = Array.from(new Set(campaigns.map((c) => c.workspaceId))).sort((a, b) => a - b);
+  const cutWs = Array.from(new Set(deferred.map((c) => c.workspaceId)));
+  const wsOrder = [...cutWs, ...rotate(allWs.filter((w) => !cutWs.includes(w)), turn)];
+  const queues = wsOrder.map((ws) => [...deferred.filter((c) => c.workspaceId === ws), ...rotate(rest.get(ws) ?? [], turn)]);
+  const out: T[] = [];
+  for (let more = true; more;) {
+    more = false;
+    for (const q of queues) {
+      const c = q.shift();
+      if (!c) continue;
+      out.push(c);
+      more = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Tick campaigns in fair order until the budget is spent (F13). Returns which
+ * ran and which were left for next time; the cursor remembers both.
+ */
+export async function runCampaignsFairly<T extends { id: number; workspaceId: number }>(
+  campaigns: T[],
+  tick: (c: T) => Promise<void>,
+  opts: { budgetMs?: number; now?: () => number } = {},
+): Promise<{ ran: number[]; deferred: number[] }> {
+  const now = opts.now ?? Date.now;
+  const until = now() + (opts.budgetMs ?? ENGINE_TICK_BUDGET_MS);
+  const order = fairCampaignOrder(campaigns, fairCursor.turn, fairCursor.deferred);
+  fairCursor.turn++;
+  const ran: number[] = [];
+  let i = 0;
+  for (; i < order.length; i++) {
+    // The first always runs, so a tick never does nothing.
+    if (i > 0 && now() >= until) break;
+    await tick(order[i]);
+    ran.push(order[i].id);
+  }
+  fairCursor.deferred = order.slice(i).map((c) => c.id);
+  return { ran, deferred: fairCursor.deferred.slice() };
 }
 
 /**
@@ -1871,6 +1960,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(areExecutionQueue.workspaceId, wsId),
           eq(areExecutionQueue.status, "scheduled"),
           lte(areExecutionQueue.scheduledAt, new Date()),
+          // A step put back for lack of capacity waits its turn (F13) instead
+          // of heading the page again on the next tick.
+          or(isNull(areExecutionQueue.nextAttemptAt), lte(areExecutionQueue.nextAttemptAt, new Date())),
           email ? eq(areExecutionQueue.channel, "email") : ne(areExecutionQueue.channel, "email"),
         ))
         .orderBy(areExecutionQueue.scheduledAt)
@@ -2333,9 +2425,16 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
            * prospect's cadence simply stopped the first day the mailboxes ran
            * out. Capacity comes back tomorrow, or within the hour.
            */
+          // Back on the calendar at the same due time, but not asked again
+          // until its wait ends, longer each time (F13): it headed the page
+          // on every tick while capacity was gone. Nothing was sent.
           await db
             .update(areExecutionQueue)
-            .set({ status: "scheduled", failureReason: null, executedAt: null })
+            .set({
+              status: "scheduled", failureReason: null, executedAt: null,
+              attempts: sql`${areExecutionQueue.attempts} + 1`,
+              nextAttemptAt: new Date(Date.now() + dispatchRetryMs(Number(step.attempts ?? 0) + 1)),
+            })
             .where(eq(areExecutionQueue.id, step.id));
           poolHeld = sendRes.reason ?? "sending capacity exhausted";
           stepsThisTick.delete(step.prospectQueueId);

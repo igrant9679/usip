@@ -4372,6 +4372,9 @@ export const areExecutionQueue = mysqlTable(
     sendingAccountId: int("sendingAccountId"),
     fromEmail: varchar("fromEmail", { length: 320 }),
     failureReason: text("failureReason"),
+    /** Times this step was put back unsent (no sending capacity), and when it may be asked again (migration 0334, audit F13). */
+    attempts: int("attempts").default(0).notNull(),
+    nextAttemptAt: timestamp("nextAttemptAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

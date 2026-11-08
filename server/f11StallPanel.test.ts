@@ -116,7 +116,9 @@ describe("the sender pool's only trace stays pinned to the engine's own wording"
     expect(engine).toContain(marker!);
     // And the engine still resets the rows rather than recording a reason,
     // which is WHY a log line is all there is to read.
-    expect(engine).toContain('.set({ status: "scheduled", failureReason: null, executedAt: null })');
+    // 2026-11-07 (audit F13, batch ARES): the reset also counts a try and
+    // sets a wait (attempts, nextAttemptAt); it still records no reason.
+    expect(engine).toContain('status: "scheduled", failureReason: null, executedAt: null,\n              attempts: sql`${areExecutionQueue.attempts} + 1`,');
   });
 
   it("is read from the log, and the reason text is taken from after the marker", () => {

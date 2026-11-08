@@ -5238,6 +5238,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // F13: a campaign step put back unsent for lack of sending capacity counts
+  // its tries and waits before it is asked again. Defaulted and nullable:
+  // every existing step reads as never put back.
+  {
+    name: "0334_execution_queue_attempts.sql",
+    statements: [
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `attempts` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `are_execution_queue` ADD COLUMN `nextAttemptAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
