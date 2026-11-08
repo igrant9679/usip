@@ -18,6 +18,7 @@ import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
 import { buildStageIndex } from "@shared/stageSemantics";
 import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
+import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -185,6 +186,10 @@ export default function DealsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // A move to a lost stage asks why first; Skip still moves it (F28).
+  const lostPrompt = useLostReasonPrompt((v: { id: number; stage: string }) => setStage.mutate(v));
+  const requestMove = (o: Opp, st: Stage) =>
+    lostPrompt.ask({ id: o.id, stage: st.key }, { isLost: stageIdx.isLost(st.key), dealName: o.name, stageLabel: st.label });
 
   const mode = autopilot.data?.mode ?? "off";
   // This pipeline's deals; the server put the pipeline-less ones on the default board.
@@ -246,7 +251,7 @@ export default function DealsV2() {
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">Move to stage</DropdownMenuLabel>
             {stages.filter((st) => st.key !== o.stage).map((st) => (
-              <DropdownMenuItem key={st.key} onClick={() => setStage.mutate({ id: o.id, stage: st.key })}>
+              <DropdownMenuItem key={st.key} onClick={() => requestMove(o, st)}>
                 <ArrowRight className="size-3.5 mr-2" /> {st.label}
               </DropdownMenuItem>
             ))}
@@ -395,6 +400,7 @@ export default function DealsV2() {
       </div>
       {celebrate > 0 && <WonConfetti />}
       <NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={dialogStages} pipelineId={pipelineId} />
+      {lostPrompt.dialog}
     </Shell>
   );
 }

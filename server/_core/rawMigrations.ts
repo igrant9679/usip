@@ -5325,6 +5325,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, U25: pipeline alerts as a work queue — snooze until a
+  // date, and say why an alert left the queue (an alert resolved by new
+  // activity on its deal is held like a snooze). Additive and nullable:
+  // every existing alert reads as live and not snoozed, as it was.
+  {
+    name: "0400_pipeline_alert_snooze.sql",
+    statements: [
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `snoozedUntil` timestamp NULL",
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `snoozedByUserId` int NULL",
+      "ALTER TABLE `pipeline_alerts` ADD COLUMN `resolvedReason` varchar(16) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

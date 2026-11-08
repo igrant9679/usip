@@ -2225,9 +2225,14 @@ export const opportunitiesRouter = router({
    * (audit 2026-10-20, R21): history, owner notice, closed-won → Customer,
    * closed-lost → win-back, audit, workflow rules, and the won/lost dates
    * quota counts from. A drop back on the same column changes nothing (R13);
-   * a stage from another pipeline is refused (R20).
+   * a stage from another pipeline is refused (R20). A move to a lost stage
+   * carries the reason the mover was asked for, or none when they skipped
+   * it (F28): the service records "Not given" and the move still lands.
    */
-  setStage: repProcedure.input(z.object({ id: z.number(), stage: z.string().min(1).max(60) })).mutation(async ({ ctx, input }) => {
+  setStage: repProcedure.input(z.object({
+    id: z.number(), stage: z.string().min(1).max(60),
+    lostReason: z.string().max(500).nullable().optional(),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const r = await changeOpportunityStage(db, {
@@ -2237,6 +2242,7 @@ export const opportunitiesRouter = router({
       actorUserId: ctx.user.id,
       actorName: ctx.user.name ?? null,
       source: "board",
+      lostReason: input.lostReason ?? null,
     });
     return { ok: true, changed: r.changed, customerCreated: r.customerCreated };
   }),

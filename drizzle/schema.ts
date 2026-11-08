@@ -3279,6 +3279,16 @@ export const pipelineAlerts = mysqlTable(
     details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
     dismissedAt: timestamp("dismissedAt"),
     dismissedByUserId: int("dismissedByUserId"),
+    /**
+     * Migration 0400 (audit 2026-10-20, U25): alerts as a work queue. A
+     * snoozed alert stays live but is off the queue until this instant; an
+     * alert resolved because the deal had new activity is held until then
+     * too, so it does not come straight back. NULL = not snoozed.
+     */
+    snoozedUntil: timestamp("snoozedUntil"),
+    snoozedByUserId: int("snoozedByUserId"),
+    /** Why it left the queue: dismissed | cleared | closed | activity. NULL while live. */
+    resolvedReason: varchar("resolvedReason", { length: 16 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

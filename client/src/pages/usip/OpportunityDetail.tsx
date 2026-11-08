@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2, Plus } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
+import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
 import { toast } from "sonner";
 import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
@@ -197,6 +198,21 @@ export default function OpportunityDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // The deal's own pipeline's stages, so the page can move it (F28): it
+  // could not, and a loss reason could only be typed after a board move.
+  const pipelineIdOf = data?.opportunity?.pipelineId ?? undefined;
+  const { data: pipe } = trpc.crmPipelines.get.useQuery(
+    pipelineIdOf ? { pipelineId: pipelineIdOf } : (undefined as any),
+    { enabled: !!data, staleTime: 60_000 },
+  );
+  const stageOptions = (pipe?.stages ?? []) as Array<{ key: string; label: string; isLost?: boolean | number | null }>;
+  const setStage = trpc.opportunities.setStage.useMutation({
+    onSuccess: (r) => { invalidateDealReads(utils); toast.success(r.customerCreated ? "Closed won — customer created" : "Stage changed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // A move to a lost stage asks why first; Skip still moves it (F28).
+  const lostPrompt = useLostReasonPrompt((v: { id: number; stage: string }) => setStage.mutate(v));
+
   // Delete was previously reachable ONLY from the pipeline board's record
   // drawer — this page had no way to remove the record you were looking at.
   const del = trpc.opportunities.delete.useMutation({
@@ -233,7 +249,18 @@ export default function OpportunityDetail() {
       <DetailSection title="Deal" className="md:col-span-2">
         <div className="space-y-2 text-sm">
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant="outline">{o.stage}</Badge>
+          {stageOptions.length > 0 ? (
+            <select aria-label="Stage" className="h-7 text-xs rounded-md border bg-background px-2" disabled={setStage.isPending}
+              value={o.stage}
+              onChange={(e) => {
+                const st = stageOptions.find((s) => s.key === e.target.value);
+                if (!st || st.key === o.stage) return;
+                lostPrompt.ask({ id: o.id, stage: st.key }, { isLost: !!st.isLost, dealName: o.name, stageLabel: st.label });
+              }}>
+              {stageOptions.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {!stageOptions.some((s) => s.key === o.stage) && <option value={o.stage}>{o.stage}</option>}
+            </select>
+          ) : <Badge variant="outline">{o.stage}</Badge>}
           <Badge variant="secondary">{fmt$(o.value)}</Badge>
           <Badge>{o.winProb}%</Badge>
           {o.daysInStage > 0 && <span className="text-xs text-muted-foreground">{o.daysInStage}d in stage</span>}
@@ -401,6 +428,7 @@ export default function OpportunityDetail() {
           extraTabs={stageTab ? [stageTab] : undefined}
         />
       </DetailBody>
+      {lostPrompt.dialog}
       </div>
     </Shell>
   );

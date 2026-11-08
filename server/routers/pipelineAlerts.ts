@@ -13,10 +13,10 @@ import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { escapeHtml } from "@shared/escapeHtml";
 import { storedToCalendarDate } from "@shared/calendarDate";
-import { zonedYmd } from "../services/dealMetrics";
+import { zonedMidnight, zonedYmd } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { TRPCError } from "@trpc/server";
-import { eq, and, count, inArray, isNull, isNotNull, desc, gte, notInArray, or } from "drizzle-orm";
+import { eq, and, count, inArray, isNull, isNotNull, desc, gt, gte, lte, notInArray, or } from "drizzle-orm";
 import {
   pipelineAlerts,
   opportunities,
@@ -78,6 +78,12 @@ const dayNumber = (ymd: string) => Math.round(Date.parse(`${ymd}T00:00:00Z`) / D
  *     dismissedByUserId, so they do not snooze anything.
  * And for R38: a close date that has passed is past_close_date, not "closing
  * soon"; closing soon means within closingSoonDays from today.
+ *
+ * And for U25 (alerts as a work queue): an alert whose deal has had new
+ * activity since the alert was raised resolves — someone is working the deal
+ * — and is held for snoozeDays like a snooze, so it comes back only if its
+ * cause is still there after that. A snoozed alert stays live (it still
+ * resolves when its cause clears) and is off the queue until its date.
  */
 export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number; resolved: number }> {
   const db = await getDb();
@@ -103,13 +109,14 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
   const activeIds = new Set(activeOpps.map((o) => o.id));
   let created = 0;
-  const toResolve: number[] = [];
+  // Each resolved alert says why it left the queue (U25).
+  const toResolve: Array<{ id: number; reason: "cleared" | "closed" | "activity" }> = [];
 
   // Live alerts on a deal that has closed, or no longer exists, are resolved.
   const live = await db.select({ id: pipelineAlerts.id, opportunityId: pipelineAlerts.opportunityId })
     .from(pipelineAlerts)
     .where(and(eq(pipelineAlerts.workspaceId, wsId), isNull(pipelineAlerts.dismissedAt)));
-  for (const a of live) if (!activeIds.has(a.opportunityId)) toResolve.push(a.id);
+  for (const a of live) if (!activeIds.has(a.opportunityId)) toResolve.push({ id: a.id, reason: "closed" });
 
   for (let i = 0; i < activeOpps.length; i += ALERT_CHUNK) {
     const chunk = activeOpps.slice(i, i + ALERT_CHUNK);
@@ -122,8 +129,12 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
           inArray(activities.relatedId, ids),
           gte(activities.createdAt, noActivityCutoff),
         )).groupBy(activities.relatedId),
-      // Live alerts, and those a person dismissed within the snooze.
-      db.select({ id: pipelineAlerts.id, opp: pipelineAlerts.opportunityId, type: pipelineAlerts.alertType, dismissedAt: pipelineAlerts.dismissedAt })
+      // Live alerts (snoozed ones included), those a person dismissed within
+      // the snooze, and those resolved by activity that are still held (U25).
+      db.select({
+        id: pipelineAlerts.id, opp: pipelineAlerts.opportunityId, type: pipelineAlerts.alertType,
+        dismissedAt: pipelineAlerts.dismissedAt, createdAt: pipelineAlerts.createdAt,
+      })
         .from(pipelineAlerts)
         .where(and(
           eq(pipelineAlerts.workspaceId, wsId),
@@ -131,11 +142,31 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
           or(
             isNull(pipelineAlerts.dismissedAt),
             and(isNotNull(pipelineAlerts.dismissedByUserId), gte(pipelineAlerts.dismissedAt, snoozeCutoff)),
+            gt(pipelineAlerts.snoozedUntil, now),
           ),
         )),
       db.select({ id: opportunityContactRoles.opportunityId }).from(opportunityContactRoles)
         .where(inArray(opportunityContactRoles.opportunityId, ids)).groupBy(opportunityContactRoles.opportunityId),
     ]);
+    // The newest activity on each deal since its oldest live alert was raised:
+    // an alert older than its deal's newest activity has been acted on (U25).
+    const liveHeld = held.filter((r) => r.dismissedAt == null && r.createdAt != null);
+    const latestActivity = new Map<number, number>();
+    if (liveHeld.length > 0) {
+      const oldest = new Date(Math.min(...liveHeld.map((r) => new Date(r.createdAt as Date).getTime())));
+      const acts = await db.select({ id: activities.relatedId, at: activities.createdAt }).from(activities)
+        .where(and(
+          eq(activities.workspaceId, wsId),
+          eq(activities.relatedType, "opportunity"),
+          inArray(activities.relatedId, Array.from(new Set(liveHeld.map((r) => r.opp)))),
+          gt(activities.createdAt, oldest),
+        ));
+      for (const a of acts) {
+        if (a.id == null || a.at == null) continue;
+        const t = new Date(a.at).getTime();
+        if (t > (latestActivity.get(a.id) ?? 0)) latestActivity.set(a.id, t);
+      }
+    }
     const active = new Set(recent.map((r) => r.id));
     const blocked = new Set(held.map((r) => `${r.opp}:${r.type}`));
     const championed = new Set(roles.map((r) => r.id));
@@ -161,10 +192,14 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
           fresh.push({ workspaceId: wsId, opportunityId: opp.id, alertType: type, details });
         }
       }
-      // A live alert whose cause has cleared resolves.
       for (const r of held) {
-        if (r.opp === opp.id && r.dismissedAt == null && (SCANNED_TYPES as readonly string[]).includes(r.type) && !due[r.type as ScannedType]) {
-          toResolve.push(r.id);
+        if (r.opp !== opp.id || r.dismissedAt != null) continue;
+        // A live alert whose cause has cleared resolves.
+        if ((SCANNED_TYPES as readonly string[]).includes(r.type) && !due[r.type as ScannedType]) {
+          toResolve.push({ id: r.id, reason: "cleared" });
+        } else if (r.createdAt != null && (latestActivity.get(opp.id) ?? 0) > new Date(r.createdAt).getTime()) {
+          // New activity on the deal since the alert: someone is on it (U25).
+          toResolve.push({ id: r.id, reason: "activity" });
         }
       }
     }
@@ -172,12 +207,65 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
     created += fresh.length;
   }
 
-  for (let i = 0; i < toResolve.length; i += ALERT_CHUNK) {
-    await db.update(pipelineAlerts).set({ dismissedAt: now, dismissedByUserId: null })
-      .where(and(eq(pipelineAlerts.workspaceId, wsId), inArray(pipelineAlerts.id, toResolve.slice(i, i + ALERT_CHUNK))));
-  }
-
+  await resolveAlerts(db, wsId, toResolve, now);
   return { scanned: activeOpps.length, created, resolved: toResolve.length };
+}
+
+/**
+ * Take alerts off the queue, saying why. Resolved alerts carry no
+ * dismissedByUserId, so a cleared or closed one snoozes nothing; one resolved
+ * by activity is held until snoozedUntil, so a cause that is still there
+ * (no champion yet) comes back after snoozeDays rather than at the next scan.
+ */
+async function resolveAlerts(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  items: Array<{ id: number; reason: "cleared" | "closed" | "activity" }>,
+  now: Date,
+): Promise<void> {
+  const holdUntil = new Date(now.getTime() + ALERT_THRESHOLDS.snoozeDays * DAY_MS);
+  for (const reason of ["cleared", "closed", "activity"] as const) {
+    const ids = items.filter((x) => x.reason === reason).map((x) => x.id);
+    for (let i = 0; i < ids.length; i += ALERT_CHUNK) {
+      await db.update(pipelineAlerts).set({
+        dismissedAt: now, dismissedByUserId: null, resolvedReason: reason,
+        ...(reason === "activity" ? { snoozedUntil: holdUntil } : {}),
+      }).where(and(eq(pipelineAlerts.workspaceId, wsId), inArray(pipelineAlerts.id, ids.slice(i, i + ALERT_CHUNK))));
+    }
+  }
+}
+
+/**
+ * A note was just logged on these deals: their live alerts leave the queue
+ * now, as the next scan would take them (U25). Best-effort: an alert must
+ * never fail the write that caused it.
+ */
+export async function resolveAlertsOnActivity(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  opportunityIds: number[],
+  now: Date = new Date(),
+): Promise<number> {
+  if (opportunityIds.length === 0) return 0;
+  try {
+    const live = await db.select({ id: pipelineAlerts.id }).from(pipelineAlerts).where(and(
+      eq(pipelineAlerts.workspaceId, wsId),
+      inArray(pipelineAlerts.opportunityId, opportunityIds),
+      isNull(pipelineAlerts.dismissedAt),
+    ));
+    await resolveAlerts(db, wsId, live.map((a) => ({ id: a.id, reason: "activity" as const })), now);
+    return live.length;
+  } catch (e) {
+    console.error("[PipelineAlerts] resolve on activity failed:", (e as Error).message);
+    return 0;
+  }
+}
+
+/** The first instant of a calendar day ("YYYY-MM-DD") in the workspace's zone. */
+function snoozeInstant(tz: string, day: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return null;
+  return zonedMidnight(tz, Number(m[1]), Number(m[2]), Number(m[3]));
 }
 
 /**
@@ -305,10 +393,12 @@ export const pipelineAlertsRouter = router({
     // .optional(): DealsV2 calls this with NO input, and a required object
     // made the whole Deals batch return 207 — the alerts strip 400'd on
     // every page load (found live, 2026-09-20).
-    .input(z.object({ limit: z.number().default(50) }).optional())
+    // `snoozed`: the alerts snoozed past now, instead of the queue (U25).
+    .input(z.object({ limit: z.number().default(50), snoozed: z.boolean().optional() }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const now = new Date();
 
       /**
        * An alert about an opportunity that no longer exists is not an alert,
@@ -341,6 +431,10 @@ export const pipelineAlertsRouter = router({
             eq(opportunities.workspaceId, ctx.workspace.id),
             isNull(pipelineAlerts.dismissedAt),
             closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+            // A snoozed alert is off the queue until its date (U25).
+            input?.snoozed
+              ? gt(pipelineAlerts.snoozedUntil, now)
+              : or(isNull(pipelineAlerts.snoozedUntil), lte(pipelineAlerts.snoozedUntil, now)),
           )
         )
         .orderBy(desc(pipelineAlerts.createdAt))
@@ -364,13 +458,54 @@ export const pipelineAlertsRouter = router({
       await assertMayClearForDeal(db, ctx, alert.opportunityId);
       await db
         .update(pipelineAlerts)
-        .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
+        .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id, resolvedReason: "dismissed" })
         .where(
           and(
             eq(pipelineAlerts.id, input.alertId),
             eq(pipelineAlerts.workspaceId, ctx.workspace.id)
           )
         );
+      return { ok: true };
+    }),
+
+  /**
+   * Snooze an alert until a day (audit 2026-10-20, U25): it stays live — it
+   * still resolves if its cause clears — but is off the queue until that day
+   * begins in the workspace's zone. For whoever may clear it (R37).
+   */
+  snooze: workspaceProcedure
+    .input(z.object({ alertId: z.number(), until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a day") }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [alert] = await db.select({ opportunityId: pipelineAlerts.opportunityId, dismissedAt: pipelineAlerts.dismissedAt }).from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.id, input.alertId), eq(pipelineAlerts.workspaceId, ctx.workspace.id)));
+      if (!alert) throw new TRPCError({ code: "NOT_FOUND", message: "Alert not found" });
+      if (alert.dismissedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "This alert is already off the queue." });
+      await assertMayClearForDeal(db, ctx, alert.opportunityId);
+      const until = snoozeInstant(await getWorkspaceTimezone(ctx.workspace.id), input.until);
+      const now = Date.now();
+      if (!until || until.getTime() <= now) throw new TRPCError({ code: "BAD_REQUEST", message: "Snooze until a day after today." });
+      if (until.getTime() > now + 366 * DAY_MS) throw new TRPCError({ code: "BAD_REQUEST", message: "Snooze for a year at most." });
+      await db.update(pipelineAlerts)
+        .set({ snoozedUntil: until, snoozedByUserId: ctx.user.id })
+        .where(and(eq(pipelineAlerts.id, input.alertId), eq(pipelineAlerts.workspaceId, ctx.workspace.id), isNull(pipelineAlerts.dismissedAt)));
+      return { ok: true, snoozedUntil: until };
+    }),
+
+  /** Bring a snoozed alert back onto the queue now (U25). */
+  unsnooze: workspaceProcedure
+    .input(z.object({ alertId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [alert] = await db.select({ opportunityId: pipelineAlerts.opportunityId }).from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.id, input.alertId), eq(pipelineAlerts.workspaceId, ctx.workspace.id)));
+      if (!alert) throw new TRPCError({ code: "NOT_FOUND", message: "Alert not found" });
+      await assertMayClearForDeal(db, ctx, alert.opportunityId);
+      await db.update(pipelineAlerts)
+        .set({ snoozedUntil: null, snoozedByUserId: null })
+        .where(and(eq(pipelineAlerts.id, input.alertId), eq(pipelineAlerts.workspaceId, ctx.workspace.id), isNull(pipelineAlerts.dismissedAt)));
       return { ok: true };
     }),
 
@@ -383,7 +518,7 @@ export const pipelineAlertsRouter = router({
       await assertMayClearForDeal(db, ctx, input.opportunityId);
       await db
         .update(pipelineAlerts)
-        .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
+        .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id, resolvedReason: "dismissed" })
         .where(
           and(
             eq(pipelineAlerts.opportunityId, input.opportunityId),
@@ -394,24 +529,35 @@ export const pipelineAlertsRouter = router({
       return { ok: true };
     }),
 
-  /** Live alerts by type — the same alerts the list shows, counted in SQL. */
+  /**
+   * Live alerts by type — the same alerts the list shows, counted in SQL.
+   * Snoozed ones are off the queue, so they are counted apart (U25).
+   */
   summary: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const closed = await closedStageKeys(db, ctx.workspace.id);
+    const now = new Date();
+    const liveWhere = (snoozed: boolean) => and(
+      eq(pipelineAlerts.workspaceId, ctx.workspace.id),
+      eq(opportunities.workspaceId, ctx.workspace.id),
+      isNull(pipelineAlerts.dismissedAt),
+      closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+      snoozed
+        ? gt(pipelineAlerts.snoozedUntil, now)
+        : or(isNull(pipelineAlerts.snoozedUntil), lte(pipelineAlerts.snoozedUntil, now)),
+    );
     const rows = await db
       .select({ type: pipelineAlerts.alertType, n: count() })
       .from(pipelineAlerts)
       .innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))
-      .where(
-        and(
-          eq(pipelineAlerts.workspaceId, ctx.workspace.id),
-          eq(opportunities.workspaceId, ctx.workspace.id),
-          isNull(pipelineAlerts.dismissedAt),
-          closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
-        )
-      )
+      .where(liveWhere(false))
       .groupBy(pipelineAlerts.alertType);
+    const [snoozedRow] = await db
+      .select({ n: count() })
+      .from(pipelineAlerts)
+      .innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))
+      .where(liveWhere(true));
     const counts: Record<string, number> = {
       no_activity: 0,
       closing_soon_regression: 0,
@@ -424,7 +570,7 @@ export const pipelineAlertsRouter = router({
       counts[r.type] = (counts[r.type] ?? 0) + Number(r.n);
       total += Number(r.n);
     }
-    return { total, byType: counts };
+    return { total, byType: counts, snoozed: Number(snoozedRow?.n ?? 0) };
   }),
 
   /**
@@ -483,18 +629,22 @@ export const pipelineAlertsRouter = router({
         body: input.note,
         actorUserId: ctx.user.id,
       });
-      return { ok: true };
+      // The deal is being worked: its alerts leave the queue now (U25).
+      const resolved = await resolveAlertsOnActivity(db, ctx.workspace.id, [input.opportunityId]);
+      return { ok: true, resolved };
     }),
 
   /**
    * Move a deal to a new stage from the alerts page — through the one
    * stage-change service (audit 2026-10-20, R21). This path skipped the win %,
-   * the history, the audit and the owner's notice.
+   * the history, the audit and the owner's notice. A move to Lost carries the
+   * reason the mover gave, or none, recorded as "Not given" (F28).
    */
   moveDealStage: workspaceProcedure
     .input(z.object({
       opportunityId: z.number(),
       newStage: z.string().min(1),
+      lostReason: z.string().max(500).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -506,6 +656,7 @@ export const pipelineAlertsRouter = router({
         actorUserId: ctx.user.id,
         actorName: ctx.user.name ?? null,
         source: "alerts",
+        lostReason: input.lostReason ?? null,
       });
       return { ok: true, changed: r.changed, customerCreated: r.customerCreated };
     }),
