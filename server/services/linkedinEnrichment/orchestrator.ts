@@ -30,6 +30,7 @@ import { applyEnrichment, markUnavailable, enrichmentBlockReason } from "./enric
 import { checkLinkedInEnrichmentHealth } from "./health";
 import { LOOKUP_WAIT_MS, type LookupTurn } from "./lookupQueue";
 import { isAdminRole } from "../../_core/workspace";
+import { affectedRowsOf } from "../../_core/claim";
 
 export type TriggerType =
   | "people_bulk_action" | "people_row_action" | "open_profile_action" | "full_profile_action"
@@ -183,7 +184,7 @@ async function claimJob(ws: number, jobId: number): Promise<boolean> {
       eq(linkedinEnrichmentJobs.status, job.status),
       job.heartbeatAt ? eq(linkedinEnrichmentJobs.heartbeatAt, job.heartbeatAt) : isNull(linkedinEnrichmentJobs.heartbeatAt),
     ));
-  return Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1;
+  return affectedRowsOf(res) === 1;
 }
 
 /** Hand the job back to the queue: held by the account limits (`holdReason`), or out of time. */

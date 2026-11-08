@@ -34,6 +34,7 @@ import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 import { noteLeadEngagement } from "./services/leadRescoreQueue";
 import { isSignedClick } from "./services/trackedLinks";
+import { mayFileAutoTask } from "./services/autoTaskCap";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -669,12 +670,15 @@ export function registerEmailTrackingRoutes(app: Express) {
             .limit(1);
 
           if (existingTask.length > 0) continue; // already has an open follow-up
+          // The workspace's daily cap for these (audit L15): skipped, and recorded.
+          if (!(await mayFileAutoTask(db, proposal.workspaceId, "proposal_followup"))) continue;
 
           const dueAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // due in 24h
 
           // Create follow-up task
           await db.insert(tasks).values({
             workspaceId: proposal.workspaceId,
+            autoSource: "proposal_followup",
             title: `Follow up: "${proposal.title}" — client hasn't opened the email`,
             description: `Proposal sent to ${proposal.clientEmail ?? proposal.clientName} on ${proposal.sentAt?.toLocaleDateString() ?? "unknown date"}. No email open detected after 48 hours. Consider reaching out directly.`,
             type: "follow_up",
@@ -1020,6 +1024,7 @@ export function registerEmailTrackingRoutes(app: Express) {
               ),
             );
           if (existingEscalation.length > 0) continue;
+          if (!(await mayFileAutoTask(db, act72.workspaceId, "proposal_escalation"))) continue; // daily cap (L15)
           const ownerUserId72 = await workspaceNotifyUserId(act72.workspaceId);
           if (!ownerUserId72) continue;
           // Get proposal title
@@ -1032,6 +1037,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           // Create escalation task
           await db.insert(tasks).values({
             workspaceId: act72.workspaceId,
+            autoSource: "proposal_escalation",
             ownerUserId: ownerUserId72,
             relatedType: "proposal",
             relatedId: act72.relatedId!,

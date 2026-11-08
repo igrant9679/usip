@@ -24,6 +24,7 @@ import {
   rawFinds,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { claimRow } from "../../_core/claim";
 import type { ProspectSourceSlug, SearchCriteria } from "@shared/prospectSources";
 import { narrowingFilters } from "@shared/prospectSources";
 import type { ProspectRecord } from "./types";
@@ -33,6 +34,7 @@ import { workspaceDeduper } from "./dedupe";
 import { recordToQueueRow } from "./bridge";
 import { loadCredentials, recordValidation, workspacesWithCredentials } from "./credentials";
 import { commit, ensurePeriodRows, releaseStaleHolds, remainingUnits, reserve } from "./ledger";
+import { affectedRowsOf } from "../../_core/claim";
 
 export const MAX_BATCH_TARGET = 200;
 
@@ -100,8 +102,11 @@ export async function executeRun(
   const [run] = await db.select().from(prospectSearchRuns)
     .where(and(eq(prospectSearchRuns.id, runId), eq(prospectSearchRuns.workspaceId, workspaceId))).limit(1);
   if (!run || run.status !== "queued") return;
-  await db.update(prospectSearchRuns).set({ status: "running", startedAt: new Date() } as never)
-    .where(and(eq(prospectSearchRuns.id, runId), eq(prospectSearchRuns.workspaceId, workspaceId)));
+  // The run is claimed (audit X1.5): two executions of one queued run both
+  // read "queued" and both searched, spending every source twice.
+  const won = await claimRow(db.update(prospectSearchRuns).set({ status: "running", startedAt: new Date() } as never)
+    .where(and(eq(prospectSearchRuns.id, runId), eq(prospectSearchRuns.workspaceId, workspaceId), eq(prospectSearchRuns.status, "queued"))));
+  if (!won) return;
   try {
     const criteria = run.criteria as SearchCriteria;
     // The selection goes through `only`, the same door the engine uses for a
@@ -414,7 +419,7 @@ export async function markInterruptedRuns(): Promise<number> {
   const res = await db.update(prospectSearchRuns)
     .set({ status: "interrupted", completedAt: new Date(), error: "Server restarted while this run was in progress — run it again." } as never)
     .where(inArray(prospectSearchRuns.status, ["queued", "running"]));
-  return Number((res as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0);
+  return affectedRowsOf(res);
 }
 
 /**

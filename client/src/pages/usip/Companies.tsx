@@ -294,8 +294,10 @@ export default function Companies() {
   const me = trpc.profile.getMe.useQuery();
   const isAdmin = isAdminRole(me.data?.role);
 
-  const bulkEnrich = trpc.companies.bulkEnrich.useMutation({
-    onSuccess: (r) => { toast.success(`Enriched ${r.ok}/${r.processed} companies`); utils.companies.search.invalidate(); },
+  // A selection is enriched by the same background job as "all matching"
+  // (audit X4.4): up to 500 were enriched inside one request.
+  const bulkEnrich = trpc.companies.enrichSelection.useMutation({
+    onSuccess: (r) => { setMatchingJob(r.jobId); toast.info(`Enriching ${r.total.toLocaleString()} compan${r.total === 1 ? "y" : "ies"} in the background.`); },
     onError: (e) => toast.error(e.message),
   });
   const merge = trpc.companies.merge.useMutation({

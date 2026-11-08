@@ -144,25 +144,6 @@ Keep each section to 2-3 sentences. Be specific, actionable, and sales-focused.`
       return brief ?? null;
     }),
 
-  /** List all briefs for an account */
-  list: workspaceProcedure
-    .input(z.object({ accountId: z.number() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return db
-        .select()
-        .from(accountBriefs)
-        .where(
-          and(
-            eq(accountBriefs.accountId, input.accountId),
-            eq(accountBriefs.workspaceId, ctx.workspace.id)
-          )
-        )
-        .orderBy(desc(accountBriefs.generatedAt))
-        .limit(10);
-    }),
-
   /** Export brief as PDF and return URL */
   exportPdf: workspaceProcedure
     .input(z.object({ briefId: z.number() }))

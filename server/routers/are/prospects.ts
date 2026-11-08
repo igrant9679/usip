@@ -186,6 +186,7 @@ Score each dimension 0-20 and provide a total score 0-100.
 // campaign router needs the same merge for every campaign at once.
 import { buildEffectiveIcp, scoringTargetsOf } from "../../services/are/effectiveIcp";
 import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/placeFit";
+import { affectedRowsOf } from "../../_core/claim";
 
 /** Reads and tries of one step edit before it gives up on a sequence that keeps changing (A75). */
 export const SEQUENCE_EDIT_ATTEMPTS = 3;
@@ -267,7 +268,7 @@ export async function runEnrichAgent(
       eq(prospectQueue.workspaceId, workspaceId),
       or(ne(prospectQueue.enrichmentStatus, "enriching"), lt(prospectQueue.updatedAt, new Date(Date.now() - ENRICH_STALE_MS))),
     ));
-  if (Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0) !== 1) return false;
+  if (affectedRowsOf(claim) !== 1) return false;
 
   try {
     // Get active ICP
@@ -1561,7 +1562,7 @@ async function takeOutOfCampaign(
     // Only from the state just read: a reply landing in between wins.
     eq(prospectQueue.sequenceStatus, row.status),
   ));
-  if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+  if (affectedRowsOf(res) !== 1) {
     throw new TRPCError({ code: "CONFLICT", message: "This prospect changed while you were looking at it. Refresh and try again." });
   }
   const stepsStopped = await stopProspectSteps(db, ws, prospectId, `${opts.reject ? "Rejected" : "Skipped"}${reason ? ` — ${reason}` : ""}`);
@@ -1974,7 +1975,7 @@ export const prospectsRouter = router({
         eq(prospectQueue.workspaceId, ctx.workspace.id),
         inArray(prospectQueue.sequenceStatus, ["pending", "sourcing", "paused", "canceled"]),
       ));
-      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(res) !== 1) {
         const [cur] = await db.select({ status: prospectQueue.sequenceStatus }).from(prospectQueue)
           .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id))).limit(1);
         if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
@@ -2347,7 +2348,7 @@ export const prospectsRouter = router({
             eq(prospectIntelligence.workspaceId, ctx.workspace.id),
             eq(prospectIntelligence.sequenceVersion, Number(intel.sequenceVersion ?? 0)),
           ));
-        if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1) saved = { updatedStep, resolvedStepIndex };
+        if (affectedRowsOf(res) === 1) saved = { updatedStep, resolvedStepIndex };
       }
       if (!saved) {
         throw new TRPCError({ code: "CONFLICT", message: "This sequence kept changing while you saved. Reload it and make your edit again." });
@@ -2883,7 +2884,7 @@ export const prospectsRouter = router({
           eq(areExecutionQueue.prospectQueueId, id),
           eq(areExecutionQueue.status, "scheduled"),
         ));
-        stepsSkipped += Number((skipRes[0] as any)?.affectedRows ?? 0);
+        stepsSkipped += affectedRowsOf(skipRes);
         await db.update(prospectQueue).set({
           sequenceStatus: "pending",
           approvedAt: null,
@@ -2977,7 +2978,7 @@ export const prospectsRouter = router({
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "pending"),
         ));
-        if ((result[0] as any).affectedRows > 0) approved++;
+        if (affectedRowsOf(result) > 0) approved++;
       }
       // Companies for the newly-approved people — same hook as approve above.
       void promoteApprovedProspects(ctx.workspace.id, { queueIds: input.prospectIds });

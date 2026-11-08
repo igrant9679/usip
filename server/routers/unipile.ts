@@ -22,7 +22,6 @@ import {
   deleteUnipileAccount,
   generateHostedAuthLink,
   getChatMessages,
-  getLinkedInProfile,
   listChats,
   listRelations,
   listSentInvitations,
@@ -43,6 +42,7 @@ import { stripNameCredentials } from "../services/enrichment/personName";
 import { genuineSocialReplyScope } from "../services/replyScope";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { extractLinkedInIdentifier } from "../services/linkedinLookup";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * Who a hand-sent LinkedIn action is for: the slug of a profile URL, or an id
@@ -568,35 +568,6 @@ export const unipileRouter = router({
     }),
 
   /**
-   * Look up a LinkedIn profile by provider ID.
-   */
-  getLinkedInProfile: workspaceProcedure
-    .input(
-      z.object({
-        unipileAccountId: z.string(),
-        providerId: z.string(),
-      }),
-    )
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-      // Verify account ownership
-      const [account] = await db
-        .select()
-        .from(unipileAccounts)
-        .where(
-          and(
-            eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
-            eq(unipileAccounts.userId, ctx.user.id),
-          ),
-        )
-        .limit(1);
-      if (!account) throw new TRPCError({ code: "NOT_FOUND" });
-
-      return getLinkedInProfile(input.unipileAccountId, input.providerId);
-    }),
-
-  /**
    * Get stored messages for a contact/lead/opportunity (from DB, not Unipile API).
    */
   getStoredMessages: workspaceProcedure
@@ -973,7 +944,7 @@ export const unipileRouter = router({
           eq(unipileInvites.status, "pending"),
           inArray(unipileInvites.recipientProviderId, input.recipient),
         ));
-        withdrawn = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+        withdrawn = affectedRowsOf(res);
       }
       return { ok: true, withdrawn };
     }),

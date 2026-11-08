@@ -82,6 +82,7 @@ import { noteAmountChange } from "./pipelineAlerts";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { addVisitorIdsToEmail } from "../services/visitorLinks";
 import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
+import { affectedRowsOf } from "../_core/claim";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -1584,7 +1585,7 @@ export const leadsRouter = router({
         // Claim the lead before creating anything: of two converts, one lands.
         const claim = await tx.update(leads).set({ status: "converted" })
           .where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ws), ne(leads.status, "converted")));
-        if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        if (affectedRowsOf(claim) !== 1) {
           throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
         }
 

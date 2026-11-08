@@ -55,6 +55,7 @@ import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { isValidTimezone } from "@shared/availability";
 import { addVisitorIdsToEmail } from "../services/visitorLinks";
+import { affectedRowsOf } from "../_core/claim";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -2682,7 +2683,7 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
       const statuses = src === "sequence" ? ["pending_review"] : src === "ai_draft" ? ["ai_pending_review"] : ["pending_review", "ai_pending_review"];
       const r = await db.update(emailDrafts).set({ status: "approved", reviewedByUserId: ctx.user.id })
         .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status as any, statuses as never)));
-      const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+      const approved = affectedRowsOf(r);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "email_draft", entityId: 0, after: { approveAll: src, approved } });
       return { ok: true, approved };
     }),
@@ -2723,17 +2724,6 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
     const res = await db.update(emailDrafts).set({ subject: input.subject, body: input.body })
       .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, EDITABLE_DRAFT_STATUSES)));
     if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be edited." });
-    return { ok: true };
-  }),
-
-  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    // A sent draft is the record of what went out (and what its unsubscribe
-    // link points at); one being sent is someone else's.
-    const res = await db.delete(emailDrafts)
-      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, EDITABLE_DRAFT_STATUSES)));
-    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be deleted." });
     return { ok: true };
   }),
 });

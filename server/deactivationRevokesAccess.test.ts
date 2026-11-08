@@ -43,10 +43,11 @@ const AUTH_PATHS = [
   "server/unipileWebhook.ts",
   /**
    * `db.ts` was MISSED by the first pass of this fix. getUserWorkspaces is the
-   * workspace SWITCHER list — and `workspace.switch` uses it as its
+   * workspace SWITCHER list — and `workspace.switch` used it as its
    * authorization check ("Not a member of that workspace"), so an unfiltered
    * list authorised on a stale answer while the leaver went on seeing the
-   * workspace they had been removed from.
+   * workspace they had been removed from. (workspace.switch is deleted,
+   * 2026-11-07 (audit X6.2/G67); the switcher list still must not show a leaver's workspace.)
    */
   "server/db.ts",
 ];

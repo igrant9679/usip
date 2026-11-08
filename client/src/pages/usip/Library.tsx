@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, QueryError } from "@/components/usip/Shell";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { Search, Command } from "lucide-react";
@@ -30,6 +30,10 @@ export default function Library() {
           title="Library"
           description="Everything the product can do, in one place. The sidebar shows only your daily loop — the rest lives here."
         />
+        {/* Admin tools are listed from the profile's role; a failed load hid them without a word (audit X1.6). */}
+        {me.error && !me.data && (
+          <QueryError compact what="your role" message="Admin tools are hidden until it loads." onRetry={() => { void me.refetch(); }} />
+        )}
 
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />

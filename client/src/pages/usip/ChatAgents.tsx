@@ -28,6 +28,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isAdminRole } from "@shared/roleRank";
 import { renderChatInline } from "@/components/usip/ChatMarkdown";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const MODES = [
   { value: "off", label: "Off", blurb: "The widget refuses to serve." },
@@ -147,6 +148,8 @@ export default function ChatAgents() {
 
   return (
     <Shell title="Chat">
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="flex h-full min-h-0">
         {/* List */}
         {/* A phone shows the list or the open one, not both side by side (X5.5). */}

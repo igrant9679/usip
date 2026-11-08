@@ -18,7 +18,8 @@ import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { tablistProps, tabProps } from "@/lib/tabs";
-import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState, QueryError } from "@/components/usip/Shell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, Target, BarChart3, AlertTriangle } from "lucide-react";
@@ -47,7 +48,7 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 export default function Forecast() {
   const { user } = useAuth();
   const [period, setPeriod] = useState<PeriodId>("quarter");
-  const { data, isLoading } = trpc.opportunities.forecastCall.useQuery({ period });
+  const { data, isLoading, error, refetch } = trpc.opportunities.forecastCall.useQuery({ period });
   const { data: members } = trpc.team.list.useQuery();
   const seesTeam = !!data?.seesTeam;
   // Pacing: the team's for a manager (quota.teamSummary), a rep's own otherwise.
@@ -82,6 +83,8 @@ export default function Forecast() {
         </div>
       </PageHeader>
       <div className="p-4 md:p-5 space-y-4">
+        {/* The totals read the same query: when it fails they are not zeros (audit X1.6). */}
+        <FailedLoadsBanner />
         {data && <div className="text-sm text-muted-foreground">{data.period.label} · amounts in {data.currency}</div>}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
           <StatCard label="Closed" value={money(t?.closed ?? 0)} hint="won in the period" tone="success" />
@@ -131,6 +134,8 @@ export default function Forecast() {
 
         <Card><CardContent className="pt-4">
           {isLoading ? <div className="text-sm text-muted-foreground">Loading…</div> :
+            // A failed read is not "nothing in this period" (audit X1.6, kept at the merge with CRMD).
+            error && !data ? <QueryError what="the forecast" message={error.message} onRetry={() => { void refetch(); }} /> :
             !data || data.reps.length === 0 ? <EmptyState icon={BarChart3} title="Nothing in this period yet" /> :
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

@@ -51,6 +51,7 @@ import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
 import { normaliseAreSuppression, suppressionPersonId } from "../../services/suppression";
+import { affectedRowsOf } from "../../_core/claim";
 
 /* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
 
@@ -769,7 +770,7 @@ export const executionRouter = router({
       // any row back to scheduled — a SENT one included, which then went again.
       const res = await db.update(areExecutionQueue).set({ status: "scheduled", failureReason: null })
         .where(and(eq(areExecutionQueue.id, input.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "paused")));
-      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+      if (affectedRowsOf(res) !== 1) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only a paused step can be resumed." });
       }
       return { success: true };

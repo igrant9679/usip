@@ -48,6 +48,7 @@ import { formatAmount } from "@shared/money";
 import { pressable } from "@/lib/pressable";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const ALERT_CONFIG: Record<
   string,
@@ -469,7 +470,7 @@ export default function PipelineAlerts() {
     <Shell title="Pipeline Alerts">
       <PageHeader
         title="Pipeline Health Alerts" pageKey="pipeline-alerts"
-        description="Real-time alerts for stalled deals, at-risk accounts, and pipeline anomalies detected by AI. Configure thresholds and notification rules so your team acts before opportunities go cold."
+        description="Alerts for deals with no activity in 14 days, a close date that passed or slipped, no champion, or a large change in amount. Deals that changed are checked every 15 minutes and every open deal at least every few hours; deal-stuck workflow rules set per-stage thresholds."
       
         icon={<AlertTriangle className="size-5" />}
       >
@@ -520,6 +521,8 @@ export default function PipelineAlerts() {
           Run Health Scan
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 space-y-6">
 
       {/* Summary KPI row */}

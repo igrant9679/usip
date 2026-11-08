@@ -359,8 +359,9 @@ describe("people searches pass the gate too", () => {
   });
 
   it("every caller of the shared search names itself in the ledger", () => {
+    // 2026-11-07 (audit X6.2/G67): linkedinFinder.search had no caller and is
+    // deleted, so the finder no longer calls the shared search.
     const callers: Array<[string, string]> = [
-      ["server/routers/linkedinFinder.ts", "finder"],
       ["server/routers/are/scraper.ts", "scraper"],
       ["server/services/discovery/index.ts", "discovery"],
       ["server/services/are/prospectReconcile.ts", "reconcile"],

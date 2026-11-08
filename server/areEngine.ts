@@ -131,6 +131,7 @@ import { recountCampaignCounters } from "./services/are/campaignCounters";
 import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
+import { affectedRowsOf } from "./_core/claim";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
 
@@ -403,7 +404,7 @@ export async function purgeOldEngineLogs(now: Date = new Date()): Promise<number
     for (let i = 0; i < 200; i++) {
       const [res] = await db.execute(sql`DELETE FROM ${table} WHERE ${createdAt} < ${cutoff} LIMIT 5000`);
       batches++;
-      if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+      if (affectedRowsOf(res) < 5000) break;
     }
   }
   return batches;
@@ -1452,7 +1453,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`enrichmentStatus\` IN ('pending', 'enriching')
         AND \`icpMatchScore\` > 0
         AND \`icpMatchScore\` < ${gate}`);
-    const gateRejected = (gateReject as { affectedRows?: number })?.affectedRows ?? 0;
+    const gateRejected = affectedRowsOf(gateReject);
     if (gateRejected > 0) {
       result.rejected += gateRejected;
       await emitLog(wsId, campId, "screen", "info",
@@ -1477,7 +1478,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`workspaceId\` = ${wsId}
         AND \`sequenceStatus\` = 'sourcing'
         AND \`email\` IS NOT NULL AND \`email\` <> ''`);
-    const admitted = (admit as { affectedRows?: number })?.affectedRows ?? 0;
+    const admitted = affectedRowsOf(admit);
     if (admitted > 0) {
       await emitLog(wsId, campId, "screen", "info",
         `${admitted} prospect${admitted === 1 ? "" : "s"} admitted to the queue — an email address was found.`);
@@ -1497,7 +1498,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND (\`email\` IS NULL OR \`email\` = '')
         AND \`enrichmentStatus\` IN ('complete', 'failed')
         AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS} OR \`enrichRetryAt\` IS NULL)`);
-    const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
+    const gaveUp = affectedRowsOf(giveUp);
     if (gaveUp > 0) {
       result.rejected += gaveUp;
       await emitLog(wsId, campId, "screen", "info",
@@ -1607,7 +1608,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         if (score < AUTO_REJECT_FLOOR) rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`);
       }
     }
-    const affected = (res: unknown) => Number((res as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+    const affected = affectedRowsOf;
     if (approveIds.length > 0) {
       const [res] = await db
         .update(prospectQueue)
@@ -1691,7 +1692,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND pq.\`sequenceStatus\` = 'approved'
         AND pq.\`enrichmentStatus\` = 'complete'
         AND pi.\`id\` IS NULL`);
-    const reQueued = (reQueue as { affectedRows?: number })?.affectedRows ?? 0;
+    const reQueued = affectedRowsOf(reQueue);
     if (reQueued > 0) {
       await emitLog(wsId, campId, "sequence", "warn",
         `${reQueued} approved prospect${reQueued === 1 ? "" : "s"} said enrichment was complete but had no stored intelligence — re-queued for enrichment so sequence generation can proceed`);

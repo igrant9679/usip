@@ -16,6 +16,7 @@ import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertOwnerInWorkspace, assertRecordInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
 import { activeMemberIds } from "../_core/activeMembers";
 import { deadlineFrom } from "../services/calendarDeadline";
+import { affectedRowsOf } from "../_core/claim";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
 
@@ -320,45 +321,6 @@ export const tasksRouter = router({
       return { ok: true };
     }),
 
-  /** Bulk create — one task per target (no dedupe). Returns { created }. */
-  bulk: repProcedure
-    .input(z.object({
-      targets: z.array(z.object({ relatedType: z.string(), relatedId: z.number() })).min(1).max(500),
-      template: z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        type: z.enum(TASK_TYPES).default("todo"),
-        priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
-        dueAt: z.string().optional(),
-        ownerUserId: z.number().optional(),
-      }),
-    }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Every target and the owner are this workspace's (audit 2026-10-20,
-      // X1.1): the single create checked them; the bulk one stored any.
-      for (const t of input.targets) await assertRelatedInWorkspace(db, t.relatedType, t.relatedId, ctx.workspace.id);
-      await assertOwnerInWorkspace(ctx.workspace.id, input.template.ownerUserId);
-      const due = deadlineFrom(input.template.dueAt, await getWorkspaceTimezone(ctx.workspace.id));
-      const values = input.targets.map((t) => ({
-        workspaceId: ctx.workspace.id,
-        title: input.template.title,
-        description: input.template.description ?? null,
-        type: input.template.type,
-        priority: input.template.priority,
-        status: "open" as const,
-        dueAt: due,
-        ownerUserId: input.template.ownerUserId ?? ctx.user.id,
-        relatedType: t.relatedType,
-        relatedId: t.relatedId,
-        source: "manual" as const,
-      }));
-      await db.insert(tasks).values(values as never);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "task", entityId: 0, after: { op: "bulk_create", created: values.length } });
-      return { created: values.length };
-    }),
-
   /** Queue stats for the Tasks page header. */
   stats: workspaceProcedure.input(z.object({
     mine: z.boolean().optional(),
@@ -430,7 +392,7 @@ export const tasksRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const r = await db.update(tasks).set({ status: "open" } as never)
       .where(and(eq(tasks.workspaceId, ctx.workspace.id), eq(tasks.status, "draft")));
-    const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+    const approved = affectedRowsOf(r);
     return { approved };
   }),
 
@@ -446,23 +408,33 @@ export const tasksRouter = router({
   /** Read the workspace's Task Autopilot config. */
   getAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
-    if (!db) return { mode: "off" as const, dailyCap: 25, lastRunAt: null as Date | null };
+    if (!db) return { mode: "off" as const, dailyCap: 25, autoTaskDailyCap: 25, lastRunAt: null as Date | null };
     const [row] = await db.select({
       mode: workspaceSettings.taskAutopilotMode,
       dailyCap: workspaceSettings.taskAutopilotDailyCap,
+      // Each other auto-task source's daily cap (audit L15).
+      autoTaskDailyCap: workspaceSettings.autoTaskDailyCap,
       lastRunAt: workspaceSettings.taskAutopilotLastRunAt,
     }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    return row ?? { mode: "off" as const, dailyCap: 25, lastRunAt: null };
+    return row ?? { mode: "off" as const, dailyCap: 25, autoTaskDailyCap: 25, lastRunAt: null };
   }),
 
   /** Set the workspace's Task Autopilot mode / daily cap (admin only). */
   setAutopilotSettings: adminWsProcedure
-    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(500).optional() }))
+    .input(z.object({
+      mode: z.enum(["off", "approval", "auto"]).optional(),
+      dailyCap: z.number().int().min(1).max(500).optional(),
+      /** The other auto-task sources' cap a day each (L15); 0 stops them filing. */
+      autoTaskDailyCap: z.number().int().min(0).max(500).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const set: any = { taskAutopilotMode: input.mode };
+      const set: any = {};
+      if (input.mode !== undefined) set.taskAutopilotMode = input.mode;
       if (input.dailyCap !== undefined) set.taskAutopilotDailyCap = input.dailyCap;
+      if (input.autoTaskDailyCap !== undefined) set.autoTaskDailyCap = input.autoTaskDailyCap;
+      if (Object.keys(set).length === 0) return { ok: true };
       await db.insert(workspaceSettings)
         .values({ workspaceId: ctx.workspace.id, ...set } as never)
         .onDuplicateKeyUpdate({ set });

@@ -27,6 +27,42 @@
 
 import { mergeRequestContext } from "./requestContext";
 
+/**
+ * What each guarded engine did since this process started (audit 2026-10-20,
+ * F49): the admin engine status page reads it. Every engine scheduled through
+ * guardOverlap is listed from the moment it is wired, so one that has never
+ * ticked shows as never run rather than not at all.
+ */
+export interface EngineRunStatus {
+  name: string;
+  running: boolean;
+  runs: number;
+  failures: number;
+  consecutiveFailures: number;
+  skipped: number;
+  lastStartedAt: Date | null;
+  lastFinishedAt: Date | null;
+  lastDurationMs: number | null;
+  lastOkAt: Date | null;
+  /** The last failure's message, cut at 300 characters. */
+  lastError: string | null;
+}
+
+const ENGINE_STATUS = new Map<string, EngineRunStatus>();
+
+export function engineRunStatuses(): EngineRunStatus[] {
+  return Array.from(ENGINE_STATUS.values()).map((s) => ({ ...s }));
+}
+
+function statusFor(name: string): EngineRunStatus {
+  let s = ENGINE_STATUS.get(name);
+  if (!s) {
+    s = { name, running: false, runs: 0, failures: 0, consecutiveFailures: 0, skipped: 0, lastStartedAt: null, lastFinishedAt: null, lastDurationMs: null, lastOkAt: null, lastError: null };
+    ENGINE_STATUS.set(name, s);
+  }
+  return s;
+}
+
 export interface GuardedRunner {
   (): void;
   /** True while a run is in flight. Exposed for tests and diagnostics. */
@@ -43,10 +79,12 @@ export interface GuardedRunner {
 export function guardOverlap(name: string, task: () => Promise<unknown>): GuardedRunner {
   let running = false;
   let skippedCount = 0;
+  const status = statusFor(name);
 
   const run = (() => {
     if (running) {
       skippedCount++;
+      status.skipped++;
       console.warn(
         `[Cron] ${name}: previous run still in flight — skipping this tick ` +
         `(${skippedCount} skipped so far). If this repeats, the interval is shorter than the work.`,
@@ -54,6 +92,9 @@ export function guardOverlap(name: string, task: () => Promise<unknown>): Guarde
       return;
     }
     running = true;
+    const started = Date.now();
+    status.running = true;
+    status.lastStartedAt = new Date(started);
     // `finally` rather than clearing in both branches: if the task throws
     // synchronously or rejects, the flag MUST still clear or the engine is
     // wedged off until the next deploy — a far worse failure than an overlap.
@@ -61,9 +102,23 @@ export function guardOverlap(name: string, task: () => Promise<unknown>): Guarde
     // without naming itself is recorded as `cron <name>`, not "background".
     Promise.resolve()
       .then(() => mergeRequestContext({ feature: `cron ${name}` }, task))
-      .catch((e) => console.error(`[Cron] ${name} failed:`, e))
+      .then(() => {
+        status.runs++;
+        status.consecutiveFailures = 0;
+        status.lastOkAt = new Date();
+      })
+      .catch((e) => {
+        status.runs++;
+        status.failures++;
+        status.consecutiveFailures++;
+        status.lastError = String((e as Error)?.message ?? e).slice(0, 300);
+        console.error(`[Cron] ${name} failed:`, e);
+      })
       .finally(() => {
         running = false;
+        status.running = false;
+        status.lastFinishedAt = new Date();
+        status.lastDurationMs = Date.now() - started;
       });
   }) as GuardedRunner;
 

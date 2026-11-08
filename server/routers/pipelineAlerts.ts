@@ -14,7 +14,7 @@ import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { escapeHtml } from "@shared/escapeHtml";
 import { storedToCalendarDate } from "@shared/calendarDate";
 import { zonedMidnight, zonedYmd } from "../services/dealMetrics";
-import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { getWorkspaceTimezone, workspaceDayKeyOf } from "../services/workspaceTimezone";
 import { TRPCError } from "@trpc/server";
 import { eq, and, count, inArray, isNull, isNotNull, desc, gt, gte, lte, notInArray, or } from "drizzle-orm";
 import {
@@ -26,6 +26,7 @@ import {
   users,
   crmPipelineStages,
 } from "../../drizzle/schema";
+import { affectedRowsOf } from "../_core/claim";
 
 /**
  * Clearing an alert hides it from everyone (audit 2026-10-20, R37), so it is
@@ -85,13 +86,18 @@ const dayNumber = (ymd: string) => Math.round(Date.parse(`${ymd}T00:00:00Z`) / D
  * cause is still there after that. A snoozed alert stays live (it still
  * resolves when its cause clears) and is off the queue until its date.
  */
-export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number; resolved: number }> {
+export async function scanPipelineAlertsForWorkspace(
+  wsId: number,
+  opts: { changedSince?: Date | null; now?: Date } = {},
+): Promise<{ scanned: number; created: number; resolved: number; full: boolean }> {
   const db = await getDb();
-  if (!db) return { scanned: 0, created: 0, resolved: 0 };
-  const now = new Date();
+  const changedSince = opts.changedSince ?? null;
+  if (!db) return { scanned: 0, created: 0, resolved: 0, full: !changedSince };
+  const now = opts.now ?? new Date();
   // Days in stage, counted from when the deal entered it (R14) — before
-  // anything below, or the stuck-deal rules read yesterday's number.
-  await refreshDaysInStage(db, wsId, now);
+  // anything below, or the stuck-deal rules read yesterday's number. Day
+  // granular, so the full pass keeps it (at least once a workspace day).
+  if (!changedSince) await refreshDaysInStage(db, wsId, now);
   const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * DAY_MS);
   const snoozeCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.snoozeDays * DAY_MS);
   // Close dates are calendar dates; "today" is the workspace's.
@@ -101,10 +107,20 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   // The deals' facts in three reads per ALERT_CHUNK deals, not three or four
   // reads per deal (audit 2026-10-20, R66, X4.4): this runs every 15 minutes
   // for every workspace. Same checks, same alerts.
+  // Incremental (audit X4.4): every 15 minutes only the deals that changed
+  // since the last sweep are read, with those carrying a live no_champion
+  // alert (a contact role has no timestamp of its own); the full pass reads
+  // every open deal. What only time changes (no activity in 14 days, a close
+  // date reached) is day granular, and the full pass runs at least once a
+  // workspace day.
+  const changedIds = changedSince ? await dealsChangedSince(db, wsId, changedSince) : null;
+  if (changedIds && changedIds.length === 0) return { scanned: 0, created: 0, resolved: 0, full: false };
   const opps = await db.select({
     id: opportunities.id, name: opportunities.name, stage: opportunities.stage,
     closeDate: opportunities.closeDate, winProb: opportunities.winProb,
-  }).from(opportunities).where(eq(opportunities.workspaceId, wsId));
+  }).from(opportunities).where(changedIds
+    ? and(eq(opportunities.workspaceId, wsId), inArray(opportunities.id, changedIds))
+    : eq(opportunities.workspaceId, wsId));
   const stages = await stageIndexFor(db, wsId);
   const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
   const activeIds = new Set(activeOpps.map((o) => o.id));
@@ -113,9 +129,12 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   const toResolve: Array<{ id: number; reason: "cleared" | "closed" | "activity" }> = [];
 
   // Live alerts on a deal that has closed, or no longer exists, are resolved.
+  // Incrementally, only the changed deals' (a deleted deal waits for the full pass).
   const live = await db.select({ id: pipelineAlerts.id, opportunityId: pipelineAlerts.opportunityId })
     .from(pipelineAlerts)
-    .where(and(eq(pipelineAlerts.workspaceId, wsId), isNull(pipelineAlerts.dismissedAt)));
+    .where(changedIds
+      ? and(eq(pipelineAlerts.workspaceId, wsId), isNull(pipelineAlerts.dismissedAt), inArray(pipelineAlerts.opportunityId, changedIds))
+      : and(eq(pipelineAlerts.workspaceId, wsId), isNull(pipelineAlerts.dismissedAt)));
   for (const a of live) if (!activeIds.has(a.opportunityId)) toResolve.push({ id: a.id, reason: "closed" });
 
   for (let i = 0; i < activeOpps.length; i += ALERT_CHUNK) {
@@ -208,8 +227,45 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   }
 
   await resolveAlerts(db, wsId, toResolve, now);
-  return { scanned: activeOpps.length, created, resolved: toResolve.length };
+  return { scanned: activeOpps.length, created, resolved: toResolve.length, full: !changedIds };
 }
+
+/**
+ * Deals whose facts may have moved since `since`: the deal row was written
+ * (stage, close date, win probability, amount), an activity was logged on it,
+ * or it carries a live no_champion alert (contact roles have no timestamp).
+ */
+export async function dealsChangedSince(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, wsId: number, since: Date): Promise<number[]> {
+  const [edited, logged, unchampioned] = await Promise.all([
+    db.select({ id: opportunities.id }).from(opportunities)
+      .where(and(eq(opportunities.workspaceId, wsId), gte(opportunities.updatedAt, since))),
+    db.select({ id: activities.relatedId }).from(activities)
+      .where(and(eq(activities.workspaceId, wsId), eq(activities.relatedType, "opportunity"), gte(activities.createdAt, since)))
+      .groupBy(activities.relatedId),
+    db.select({ id: pipelineAlerts.opportunityId }).from(pipelineAlerts)
+      .where(and(eq(pipelineAlerts.workspaceId, wsId), eq(pipelineAlerts.alertType, "no_champion"), isNull(pipelineAlerts.dismissedAt))),
+  ]);
+  const ids = new Set<number>();
+  for (const r of [...edited, ...logged, ...unchampioned]) if (r.id != null) ids.add(Number(r.id));
+  return Array.from(ids);
+}
+
+/** The full pass runs at least this often, and at the first sweep of each workspace day. */
+export const ALERT_FULL_PASS_MS = 6 * 3_600_000;
+/** An incremental sweep reaches back this much further than the last one began, for clock skew. */
+const ALERT_SWEEP_OVERLAP_MS = 60_000;
+
+/** Per workspace: when the last sweep began, the last full pass, and the workspace day of that pass. */
+const sweepState = new Map<number, { lastSweepAt: number; lastFullAt: number; fullDay: string }>();
+
+/** Full when never run in this process, older than ALERT_FULL_PASS_MS, or from an earlier workspace day. */
+export function alertSweepPlan(state: { lastSweepAt: number; lastFullAt: number; fullDay: string } | undefined, now: number, today: string): { full: boolean; since: Date | null } {
+  if (!state || now - state.lastFullAt >= ALERT_FULL_PASS_MS || state.fullDay !== today) return { full: true, since: null };
+  return { full: false, since: new Date(state.lastSweepAt - ALERT_SWEEP_OVERLAP_MS) };
+}
+
+/** For tests. */
+export function resetAlertSweepState(): void { sweepState.clear(); }
 
 /**
  * Take alerts off the queue, saying why. Resolved alerts carry no
@@ -371,7 +427,14 @@ export async function runPipelineAlertsCron(): Promise<void> {
   const { workspaces } = await import("../../drizzle/schema");
   const wsRows = await db.select({ id: workspaces.id }).from(workspaces);
   for (const ws of wsRows) {
-    try { await scanPipelineAlertsForWorkspace(ws.id); }
+    try {
+      const now = Date.now();
+      const today = workspaceDayKeyOf(await getWorkspaceTimezone(ws.id), now);
+      const plan = alertSweepPlan(sweepState.get(ws.id), now, today);
+      await scanPipelineAlertsForWorkspace(ws.id, { changedSince: plan.since, now: new Date(now) });
+      const prev = sweepState.get(ws.id);
+      sweepState.set(ws.id, plan.full ? { lastSweepAt: now, lastFullAt: now, fullDay: today } : { ...prev!, lastSweepAt: now });
+    }
     catch (e) { console.error(`[PipelineAlertsCron] workspace ${ws.id} scan failed:`, e); }
   }
 }
@@ -735,7 +798,7 @@ export const pipelineAlertsRouter = router({
         ),
       );
     const dismissed = Number(
-      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+      affectedRowsOf(res),
     );
     return { ok: true, dismissed };
   }),
@@ -748,7 +811,7 @@ export const pipelineAlertsRouter = router({
       .delete(pipelineAlerts)
       .where(eq(pipelineAlerts.workspaceId, ctx.workspace.id));
     const deleted = Number(
-      (res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0,
+      affectedRowsOf(res),
     );
     return { ok: true, deleted };
   }),

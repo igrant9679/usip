@@ -110,6 +110,7 @@ import {
   type MailWebhookPayload,
 } from "./lib/unipile";
 import { sql } from "drizzle-orm";
+import { affectedRowsOf } from "./_core/claim";
 
 // Statuses that mean the account needs re-authentication
 const EXPIRED_STATUSES = new Set(["CREDENTIALS", "ERROR", "STOPPED"]);
@@ -1083,7 +1084,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
                     \`lastOpenedAt\` = ${eventDate}
                 WHERE \`trackingToken\` = ${payload.tracking_id}`,
           );
-          const affected = (result as { affectedRows?: number })?.affectedRows ?? 0;
+          const affected = affectedRowsOf(result);
           console.log(
             `[UnipileTrackingWebhook] open tracking_id=${payload.tracking_id} → updated ${affected} draft(s)${payload.ip ? ` ip=${payload.ip}` : ""}`,
           );
@@ -1101,7 +1102,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
                     \`lastClickedAt\` = ${eventDate}
                 WHERE \`trackingToken\` = ${payload.tracking_id}`,
           );
-          const affected = (result as { affectedRows?: number })?.affectedRows ?? 0;
+          const affected = affectedRowsOf(result);
           console.log(
             `[UnipileTrackingWebhook] click tracking_id=${payload.tracking_id} url=${payload.url ?? "?"} → updated ${affected} draft(s)`,
           );

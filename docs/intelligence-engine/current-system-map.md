@@ -46,7 +46,7 @@ across three tables. LinkedIn URL is the de-facto person key in several places
 - No test coverage.
 
 ### 2C. Search-hit / scrape-derived creation (`services/prospectFromSource.ts`)
-- Shared builder used by `linkedinFinder.saveSearchHits/saveAsProspect`, `placesSearch`, `urlScraper`, `linkedinEnrichment/batchService`.
+- Shared builder used by `linkedinFinder.saveSearchHits/saveAsProspect`, `placesSearch`, `linkedinEnrichment/batchService` (the URL scraper router was deleted on 2026-11-07, audit G67).
 - Drops non-LinkedIn URLs from `linkedinUrl` so they can't poison 2B's dedup key.
 - **Dedup: none — all four call sites insert unconditionally.**
 - 🚩 `batchService.ts:298` passes `source:"linkedin_enrichment"` which is **not in the `ScrapedProspectSource` union** — type violation producing an off-vocabulary audit entityType.

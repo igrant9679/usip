@@ -21,6 +21,7 @@ import { revokedSessions, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { COOKIE_NAME } from "@shared/const";
 import { parse as parseCookieHeader } from "cookie";
+import { affectedRowsOf } from "./claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -82,6 +83,6 @@ export async function useTotpStep(db: Db, userId: number, step: number): Promise
     .update(users)
     .set({ mfaLastStep: step } as never)
     .where(and(eq(users.id, userId), or(isNull(users.mfaLastStep), lt(users.mfaLastStep, step))));
-  const affected = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+  const affected = affectedRowsOf(res);
   return affected > 0;
 }

@@ -46,6 +46,8 @@ import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { rankOf } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
 import { liveMeetingStatuses, remindableMeetingStatuses } from "@shared/meetingStatus";
+import { affectedRowsOf } from "../_core/claim";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
 
 // Every offerable time derives from the workspace's configured zone rather than
 // the host's clock — the container runs on UTC, which is a deployment detail, not
@@ -879,8 +881,6 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
   return { sent: false, scheduledAt: null, reason: acc ? "provider_error" : "no_calendar_connected" };
 }
 
-const affectedRows = (r: unknown): number =>
-  Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
 
 /**
  * Email an un-agreed proposal with its free times as links (see the comment
@@ -903,7 +903,7 @@ async function emailProposal(
     eq(meetings.id, m.id), eq(meetings.workspaceId, workspaceId),
     eq(meetings.status, "proposed"), isNull(meetings.proposalToken),
   ));
-  if (affectedRows(claimed) !== 1) return { sent: false, scheduledAt: null, reason: "already_sent" };
+  if (affectedRowsOf(claimed) !== 1) return { sent: false, scheduledAt: null, reason: "already_sent" };
   const res = await sendProposalEmail({
     workspaceId,
     meeting: {
@@ -1072,7 +1072,7 @@ export async function confirmProposalPick(token: string, timeIso: string, nowMs 
   const claimed = await db.update(meetings).set({ scheduledAt: new Date(want) } as never).where(and(
     eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt),
   ));
-  if (affectedRows(claimed) !== 1) return { ok: false, reason: "closed" };
+  if (affectedRowsOf(claimed) !== 1) return { ok: false, reason: "closed" };
   const res = await sendMeetingInvite(m.workspaceId, m.id);
   if (!res.sent) {
     // Nothing reached the calendar: release the claim so they can try again.
@@ -1143,7 +1143,7 @@ export async function declineProposalPick(token: string, note?: string | null, n
   } as never).where(and(
     eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt),
   ));
-  if (affectedRows(claimed) !== 1) return { ok: false, reason: "closed" };
+  if (affectedRowsOf(claimed) !== 1) return { ok: false, reason: "closed" };
   const who = m.contactName || m.contactEmail || "The prospect";
   const said = String(note ?? "").trim().slice(0, 500);
   const saidLine = said ? ` Their note: "${said}"` : "";
@@ -1193,16 +1193,11 @@ export async function expireUnpickedProposals(nowMs = Date.now()): Promise<numbe
     if (times.some((t) => Date.parse(t) > nowMs)) continue;
     const res = await db.update(meetings).set({ status: "cancelled", disposition: "no_time_picked" } as never)
       .where(and(eq(meetings.id, r.id), eq(meetings.workspaceId, r.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt)));
-    if (affectedRows(res) === 1) closed++;
+    if (affectedRowsOf(res) === 1) closed++;
   }
   return closed;
 }
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 /**
  * Pick the highest-privilege ACTIVE member of a workspace to own
@@ -1387,12 +1382,13 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
   if (!db) return { workspaces: 0, proposed: 0 };
 
   const rows = await db.select().from(workspaceSettings).where(ne(workspaceSettings.meetingAutopilotMode, "off"));
-  const dayStart = startOfUtcDay();
   let workspaces = 0, proposed = 0;
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const cap = ws.meetingAutopilotDailyCap ?? 10;
     try {
       // Regenerate outdated proposals FIRST (owner ask 2026-09-20): a proposal

@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { Copy, KeyRound, Plus, Trash2, Shield } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 export default function SCIM() {
   const utils = trpc.useUtils();
@@ -27,6 +28,8 @@ export default function SCIM() {
       >
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New provider</Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="space-y-3">
           <Section title="SCIM endpoints">

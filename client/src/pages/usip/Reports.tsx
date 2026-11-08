@@ -33,6 +33,8 @@ import {
 import { reportHref, scheduleStatus } from "@/lib/reportLinks";
 import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { formatCalendarDate } from "@shared/calendarDate";
 
 type Filter = { field: string; op: string; value?: string };
 type Spec = {
@@ -87,11 +89,18 @@ const OPS: Array<{ value: string; label: string; needsValue: boolean }> = [
   { value: "is_open", label: "is open", needsValue: false },
 ];
 
-function fmtCell(v: unknown, kind: string): string {
+/**
+ * A cell as text. Dates are read on the workspace's calendar (audit X1.4): in
+ * the viewer's own zone a row logged at 9 PM in New York showed tomorrow's
+ * date to a colleague in London. A close date is a calendar date and shows as
+ * that day, whatever the zone.
+ */
+export function fmtCell(v: unknown, kind: string, opts: { timeZone?: string; calendar?: boolean } = {}): string {
   if (v == null || v === "") return "—";
   if (kind === "date") {
+    if (opts.calendar) return formatCalendarDate(v as Date | string) || String(v);
     const d = new Date(v as string);
-    return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: opts.timeZone });
   }
   if (kind === "number") {
     const n = Number(v);
@@ -102,8 +111,12 @@ function fmtCell(v: unknown, kind: string): string {
 
 const selectCls = "h-8 rounded-md border border-border bg-background px-2 text-[12.5px]";
 
+/** Columns that hold a calendar date, not an instant (server/routers/reports.ts). */
+const CALENDAR_DATE_KEYS = new Set(["closeDate"]);
+
 export default function Reports() {
   const accent = useAccentColor();
+  const { timezone } = useWorkspaceTimezone();
   // The one export the SERVER can refuse (reports.exportCsv gates export_data).
   // Hiding the button keeps that refusal from arriving as a mystery toast.
   const { can } = usePermissions();
@@ -560,7 +573,7 @@ export default function Reports() {
                       <tr key={i} className="bg-background hover:bg-muted/40">
                         {(result.data?.columns ?? []).map((c) => (
                           <td key={c.key} className={cn("border-b border-border/60 px-3 py-2 align-middle", c.kind === "number" && "tabular-nums")}>
-                            {fmtCell(r[c.key], c.kind)}
+                            {fmtCell(r[c.key], c.kind, { timeZone: timezone, calendar: CALENDAR_DATE_KEYS.has(c.key) })}
                           </td>
                         ))}
                       </tr>

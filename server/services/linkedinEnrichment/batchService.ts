@@ -25,6 +25,7 @@ import { applyEnrichment, enrichmentBlockReason } from "./enrichmentService";
 import { buildScrapedProspectValues } from "../prospectFromSource";
 import { LOOKUP_WAIT_MS, type LookupTurn } from "./lookupQueue";
 import { isAdminRole } from "../../_core/workspace";
+import { affectedRowsOf } from "../../_core/claim";
 
 export interface ImportRow {
   linkedinUrl: string;
@@ -189,7 +190,7 @@ async function claimBatch(ws: number, batchId: number): Promise<boolean> {
       eq(linkedinEnrichmentBatches.status, b.status),
       b.heartbeatAt ? eq(linkedinEnrichmentBatches.heartbeatAt, b.heartbeatAt) : isNull(linkedinEnrichmentBatches.heartbeatAt),
     ));
-  return Number((res as { affectedRows?: number })?.affectedRows ?? 0) === 1;
+  return affectedRowsOf(res) === 1;
 }
 
 /**

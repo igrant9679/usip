@@ -32,6 +32,7 @@ import { ConversationsPanel } from "@/pages/usip/ConversationsV2";
 import { MailboxPanel } from "@/pages/usip/Mailbox";
 import { SocialChatsPanel } from "@/pages/usip/UnifiedInbox";
 import { NotificationsPanel } from "@/pages/usip/Inbox";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 export default function InboxWorkspace() {
   const accent = useAccentColor();
@@ -51,6 +52,8 @@ export default function InboxWorkspace() {
   return (
     <Shell title="Inbox">
       <div className="flex flex-col h-full min-h-0">
+        {/* A failed load says so, on any tab (audit X1.6): the tab badges read nothing on a failure. */}
+        <div className="shrink-0 px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
         {/* What is holding sends right now, if anything (audit 2026-10-20, U1): the mailbox's holds, or LinkedIn's on the Social tab. */}
         {tab === "social" ? <SendingStatusBar surface="social" className="shrink-0" /> : <SendingStatusBar surface="mailbox" className="shrink-0" />}
         <div data-tour-id="page-inbox" className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">

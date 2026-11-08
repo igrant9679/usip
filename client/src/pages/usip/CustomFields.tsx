@@ -14,6 +14,7 @@ import { toast } from "sonner";
 // The delete button used this without importing it, so the page threw the
 // moment one field existed (audit 2026-10-20, R1).
 import { ConfirmButton } from "@/components/usip/Common";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const ENTITY_TYPES = ["lead", "contact", "account", "opportunity"] as const;
 type EntityType = (typeof ENTITY_TYPES)[number];
@@ -119,6 +120,8 @@ export default function CustomFields() {
           <Plus className="h-4 w-4 mr-1" /> Add Field
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="p-4 md:p-5 max-w-4xl mx-auto space-y-6">
 
         {/* Entity tabs */}

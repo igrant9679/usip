@@ -14,7 +14,7 @@
  * which also exports RelatedTasks) is still live; both read their overdue,
  * scope and "recently closed" rules from @shared/taskRules (R72).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
@@ -130,6 +130,22 @@ const MODE_META: Record<string, { label: string; blurb: string }> = {
   approval: { label: "Autopilot: Approve", blurb: "AI proposes next-best-action tasks for your review before they go live." },
   auto: { label: "Autopilot: Autonomous", blurb: "AI creates and assigns live tasks automatically — no approval needed." },
 };
+
+/** "At most N a day from each" for website visits, Deal Autopilot, proposal follow-ups and sequence task steps. */
+function AutoTaskCapLine({ cap, saving, onSave }: { cap: number; saving: boolean; onSave: (n: number) => void }) {
+  const [value, setValue] = useState(String(cap));
+  useEffect(() => { setValue(String(cap)); }, [cap]);
+  const n = Number(value);
+  const valid = Number.isInteger(n) && n >= 0 && n <= 500;
+  return (
+    <div className="rounded-lg border bg-card px-4 py-2 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+      <span>Website visits, Deal Autopilot, proposal follow-ups and sequence task steps each file at most</span>
+      <Input aria-label="Automatic tasks a day from each source" type="number" min={0} max={500} value={value} onChange={(e) => setValue(e.target.value)} className="h-7 w-20 text-xs" />
+      <span>tasks a day; more wait for tomorrow.</span>
+      <Button size="sm" variant="outline" className="h-7" disabled={!valid || saving || n === cap} onClick={() => onSave(n)}>Save</Button>
+    </div>
+  );
+}
 
 export default function TasksV2() {
   const accent = useAccentColor();
@@ -422,6 +438,12 @@ export default function TasksV2() {
               <div className="shrink-0 text-[11px] text-muted-foreground hidden sm:block">Last run {fmtDue(autopilot.data.lastRunAt)}</div>
             )}
           </div>
+          {/* The other sources that file tasks by themselves keep to a daily cap each (audit L15). */}
+          <AutoTaskCapLine
+            cap={autopilot.data?.autoTaskDailyCap ?? 25}
+            saving={setMode.isPending}
+            onSave={(n) => setMode.mutate({ autoTaskDailyCap: n })}
+          />
 
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">

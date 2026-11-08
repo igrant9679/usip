@@ -11,7 +11,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { fmtDate } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
@@ -73,7 +73,7 @@ export default function Inbox() {
 export function NotificationsPanel() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<FilterKind>("all");
-  const { data, isLoading, isError, error } = trpc.notifications.list.useQuery();
+  const { data, isLoading, isError, error, refetch } = trpc.notifications.list.useQuery();
   // Read-state only. The invalidate on success is what corrects the badge, so a
   // failure self-heals on the next load and is not worth a toast.
   const markAll = trpc.notifications.markAllRead.useMutation({ onSuccess: () => utils.notifications.invalidate(), meta: { silentError: true } });
@@ -114,7 +114,7 @@ export function NotificationsPanel() {
         {isLoading ? (
           <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">Loading notifications…</div>
         ) : isError ? (
-          <div className="rounded-lg border bg-card p-4 text-sm text-destructive">Notifications could not be loaded{error?.message ? `: ${error.message}` : "."}</div>
+          <QueryError what="notifications" message={error?.message} onRetry={() => { void refetch(); }} />
         ) : filtered.length === 0 ? (
           <EmptyState icon={filter === "email_reply" ? MailOpen : filter === "mention" ? AtSign : InboxIcon}
             title={filter === "email_reply" ? "No email replies" : filter === "mention" ? "No mentions" : "Inbox zero"}

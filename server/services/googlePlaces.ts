@@ -36,6 +36,7 @@ import {
   workspaces,
 } from "../../drizzle/schema";
 import { sendSystemEmail } from "../emailDelivery";
+import { affectedRowsOf } from "../_core/claim";
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
 
@@ -230,7 +231,7 @@ async function reserveBudget(
           AND \`enabled\` = 1
           AND \`usage_cents\` + ${cost} <= \`monthly_budget_cents\``,
   );
-  const affected = (res as { affectedRows?: number })?.affectedRows ?? 0;
+  const affected = affectedRowsOf(res);
   if (affected > 0) return { ok: true };
   const [row] = await db
     .select({ enabled: placesBudget.enabled })
@@ -298,7 +299,7 @@ async function fireBudgetSideEffects(workspaceId: number): Promise<void> {
           WHERE \`workspaceId\` = ${workspaceId}
             AND \`threshold_alert_sent_at\` IS NULL`,
     );
-    if (((r as { affectedRows?: number })?.affectedRows ?? 0) > 0) {
+    if (affectedRowsOf(r) > 0) {
       await emitThresholdNotification(workspaceId, state);
     }
   }

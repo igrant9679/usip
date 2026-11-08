@@ -49,6 +49,7 @@ import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { useSourceBudgets } from "@/components/usip/SpendPreview";
 import { aiCallText } from "@shared/spendPreview";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 // ICP lists are stored as weighted objects ({title, weight, …}); read them
@@ -644,6 +645,8 @@ export default function AREIcpAgent() {
           </>
         )}
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <ResearchSubNav />
 
       <div className="p-4 md:p-6 space-y-8 max-w-6xl mx-auto">

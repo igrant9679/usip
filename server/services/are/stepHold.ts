@@ -17,6 +17,7 @@
  */
 import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import { areExecutionQueue, prospectQueue } from "../../../drizzle/schema";
+import { affectedRowsOf } from "../../_core/claim";
 
 type Db = any;
 
@@ -199,5 +200,5 @@ export async function resumeAreProspectAfterAutoReply(db: Db, workspaceId: numbe
 
 function affectedOf(res: unknown): number {
   const r = res as any;
-  return Number(r?.[0]?.affectedRows ?? r?.affectedRows ?? 0);
+  return affectedRowsOf(r);
 }

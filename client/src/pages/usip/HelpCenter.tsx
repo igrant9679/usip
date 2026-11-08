@@ -44,6 +44,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { CitedArticles, type CitedArticle } from "@/components/usip/CitedArticles";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -787,6 +788,8 @@ export default function HelpCenterPage() {
         description="Search articles, ask the AI assistant, or take a guided tour to learn the platform."
         pageKey="help"
       />
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {/* Tab bar */}
       <div {...tablistProps("Help Center sections")} className="flex shrink-0 gap-1 border-b border-border mb-6 px-6">

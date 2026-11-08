@@ -46,6 +46,7 @@ import { isAdminRole } from "@shared/roleRank";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -217,6 +218,8 @@ export default function SequencesV2() {
 
   return (
     <Shell title="Sequences">
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="flex flex-col h-full min-h-0" style={{ ["--seq-accent" as any]: accent }}>
         {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
         <SendingStatusBar surface="sequences" className="shrink-0" />

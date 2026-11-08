@@ -13,6 +13,7 @@ import { listMemberCounts, listMemberPage } from "../services/listMembers";
 import { getDb } from "../db";
 import { recordLists, recordListMembers, prospects, accounts } from "../../drizzle/schema";
 import { eq, and, inArray, desc, isNull } from "drizzle-orm";
+import { affectedRowsOf } from "../_core/claim";
 
 export const recordListsRouter = router({
   /** All lists in the workspace, each with a live member count: the members its page shows (P46). */
@@ -73,7 +74,7 @@ export const recordListsRouter = router({
       if (input.description !== undefined) patch.description = input.description || null;
       const [res] = await db.update(recordLists).set(patch)
         .where(and(eq(recordLists.id, input.id), eq(recordLists.workspaceId, ctx.workspace.id)));
-      if (Number((res as { affectedRows?: number })?.affectedRows ?? 1) === 0) {
+      if (affectedRowsOf(res) === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
       }
       return { ok: true };

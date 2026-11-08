@@ -61,12 +61,8 @@ describe("articles", () => {
     expect(article(A.slug)).toMatchObject({ title: "Our own title", status: "draft" });
   });
 
-  it("an edit through upsertArticle counts too", async () => {
-    const a = article(A.slug);
-    await caller().helpCenter.upsertArticle({ id: a.id, slug: a.slug, title: "Rewritten", status: "published" });
-    await seed();
-    expect(article(A.slug).title).toBe("Rewritten");
-  });
+  // 2026-11-07 (audit X6.2/G67): helpCenter.upsertArticle had no caller (the editor uses
+  // createArticle and updateArticle) and is deleted.
 
   it("an article the admin deleted stays deleted", async () => {
     await caller().helpCenter.deleteArticle({ id: article(A.slug).id });

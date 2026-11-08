@@ -67,6 +67,20 @@ export const conversationsRouter = router({
       return rows.map((r) => ({ ...r, sequenceId: r.draftId != null ? seqByDraft.get(r.draftId) ?? null : null }));
     }),
 
+  /**
+   * One reply, for the reply workspace's ?reply=<id> link (F25, batch CONA).
+   * Deleted with the uncalled procedures on 2026-11-07 (X6.2) and restored at
+   * the merge, now that it has a caller; it reads the same population as the
+   * list (genuine replies), so a link cannot open private mail the list hides.
+   */
+  get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return null;
+    const [row] = await db.select().from(emailReplies)
+      .where(and(eq(emailReplies.id, input.id), eq(emailReplies.workspaceId, ctx.workspace.id), genuineReplyScope()));
+    return row ?? null;
+  }),
+
   stats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { total: 0, unhandled: 0, needsClassify: 0, willingToMeet: 0, meetingsProposed: 0 };
@@ -75,14 +89,6 @@ export const conversationsRouter = router({
     // counted the owner's entire synced mailbox — 70,484 "unhandled replies" in
     // LSI on 2026-08-16 against a true 0 (services/replyScope.ts).
     return replySummary(db, ctx.workspace.id);
-  }),
-
-  get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return null;
-    const [row] = await db.select().from(emailReplies)
-      .where(and(eq(emailReplies.id, input.id), eq(emailReplies.workspaceId, ctx.workspace.id)));
-    return row ?? null;
   }),
 
   /** Classify a single reply with AI. */

@@ -618,17 +618,4 @@ export const researchPipelineRouter = router({
       startSoon();
       return { pipelineId, jobId: job.id };
     }),
-
-  /** Get prompt version history for a draft */
-  getVersionHistory: workspaceProcedure
-    .input(z.object({ emailDraftId: z.number() }))
-    .query(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) return [];
-      return db
-        .select()
-        .from(promptVersions)
-        .where(and(eq(promptVersions.entityId, input.emailDraftId), eq(promptVersions.workspaceId, ctx.workspace.id), eq(promptVersions.entityType, "email_draft")))
-        .orderBy(desc(promptVersions.version));
-    }),
 });

@@ -32,6 +32,7 @@ import {
   Workflow, ListTodo, CalendarClock, MessageSquare, KanbanSquare, Bot, Zap, Sparkles, Rocket,
   ExternalLink, Play, Pause, Check, X, Activity, GitBranch, Users, Mail, Share2, UserRoundCog, Database, Loader2,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 function fmtWhen(d?: string | Date | null): string {
   if (!d) return "never";
@@ -294,6 +295,8 @@ export default function WorkflowsV2() {
 
   return (
     <Shell title="Workflows">
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="flex flex-col h-full min-h-0">
         <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />

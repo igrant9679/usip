@@ -36,6 +36,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
 import { storedAttendees } from "@shared/calendarAttendees";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -560,6 +561,8 @@ export default function CalendarPage() {
       <PageHeader title="My Calendar" description="Schedule and manage meetings, calls, and follow-ups across your entire pipeline. Connect Microsoft 365 / Outlook on Connected Accounts, or an Apple or CalDAV calendar here, to see and create calendar events." pageKey="calendar" 
         icon={<CalendarDays className="size-5" />}
       />
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
         {/* Left panel */}
         <div className="w-56 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">

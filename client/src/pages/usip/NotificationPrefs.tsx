@@ -7,6 +7,7 @@ import { Bell, BellRing, Mail } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { NOTIFY_EVENTS } from "@shared/notifyPolicy";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /**
  * The SAME five events the workspace policy uses (@shared/notifyPolicy).
@@ -75,6 +76,8 @@ export default function NotificationPrefs() {
           {update.isPending ? "Saving…" : "Save preferences"}
         </Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       <div className="p-4 md:p-5 max-w-2xl space-y-6">
         <Section title="Notification email">

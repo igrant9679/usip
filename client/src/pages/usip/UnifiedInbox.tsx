@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 // ─── Provider color map ───────────────────────────────────────────────────────
 
@@ -212,6 +213,8 @@ export default function UnifiedInbox() {
           </Button>
         </Link>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <SocialChatsPanel className="h-[calc(100vh-140px)]" />
     </Shell>
   );

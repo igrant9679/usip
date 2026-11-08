@@ -266,7 +266,9 @@ describe("Sequence Execution Engine", () => {
 
       mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
 
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      // 2026-11-07 (audit X1.5): the pause is a claim, so the update resolves
+      // as mysql2 does, with the rows it changed; a lost claim files no task.
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([{ affectedRows: 1 }, []]) });
       mockUpdate.mockReturnValue({ set: updateSet });
 
       const insertValues = vi.fn().mockResolvedValue(undefined);

@@ -75,6 +75,7 @@ import {
   type MarketContent,
   type SectorContent,
 } from "@shared/researchShape";
+import { affectedRowsOf } from "../_core/claim";
 
 /* ── AI research runs: limits ───────────────────────────────────────────── */
 
@@ -1222,7 +1223,3 @@ export const researchRouter = router({
       }),
   }),
 });
-
-function affectedRowsOf(r: unknown): number {
-  return Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
-}

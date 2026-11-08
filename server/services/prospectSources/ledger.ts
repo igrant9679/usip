@@ -25,6 +25,7 @@ import { prospectSourceBudgetLedger } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import type { BudgetBucket, ProspectSourceSlug } from "@shared/prospectSources";
 import type { BudgetPeriod } from "./types";
+import { affectedRowsOf } from "../../_core/claim";
 
 export interface Reservation {
   slug: ProspectSourceSlug;
@@ -129,7 +130,7 @@ async function tryHold(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, works
         WHERE \`id\` = ${rowId} AND \`workspaceId\` = ${workspaceId}
           AND (\`unitsLimit\` IS NULL OR \`unitsConsumed\` + \`unitsReserved\` + ${n} <= \`unitsLimit\`)`,
   );
-  return ((res as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+  return affectedRowsOf(res) > 0;
 }
 
 async function unhold(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, rowIds: number[], n: number): Promise<void> {
@@ -289,5 +290,5 @@ export async function releaseStaleHolds(): Promise<number> {
           AND (\`heldAt\` < (NOW() - INTERVAL 2 HOUR)
                OR (\`heldAt\` IS NULL AND \`updatedAt\` < (NOW() - INTERVAL 2 HOUR)))`,
   );
-  return (res as { affectedRows?: number })?.affectedRows ?? 0;
+  return affectedRowsOf(res);
 }

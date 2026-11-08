@@ -20,6 +20,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { describeUserAgent } from "@shared/userAgent";
 import { clientIpOf } from "./clientIp";
 import type { getDb } from "../db";
+import { affectedRowsOf } from "./claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -92,7 +93,7 @@ export async function recordReissuedSession(
         .update(loginHistory)
         .set({ sessionJti: meta.jti, sessionExpiresAt: meta.expiresAt, sessionVersion: opts.sessionVersion })
         .where(and(eq(loginHistory.userId, opts.userId), eq(loginHistory.sessionJti, oldJti)));
-      const affected = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+      const affected = affectedRowsOf(res);
       if (affected > 0) return;
     }
     await recordSignIn(db, req, { userId: opts.userId, workspaceId: null, token: opts.newToken, sessionVersion: opts.sessionVersion });

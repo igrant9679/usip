@@ -349,11 +349,9 @@ describe("tour steps (G6)", () => {
     rows("tour_steps").push({ id: 20, tourId: 2, sortOrder: 0, title: "Their step" });
   });
 
-  it("upsert can't add or rewrite steps on another workspace's tour", async () => {
-    expect(await code(caller(ADMIN).tours.upsert({ id: 2, name: "X", steps: [step, { ...step, id: 20, title: "Rewritten" }] } as any))).toBe("NOT_FOUND");
-    expect(rows("tour_steps").filter((s) => s.tourId === 2).map((s) => s.title)).toEqual(["Their step"]);
-  });
-  it("update can't either", async () => {
+  // 2026-11-07 (audit X6.2/G67): tours.upsert had no caller (TourBuilder saves through create and
+  // update) and is deleted; update, the path that remains, is pinned here.
+  it("update can't add or rewrite steps on another workspace's tour", async () => {
     expect(await code(caller(ADMIN).tours.update({ id: 2, steps: [step, { ...step, id: 20, title: "Rewritten" }] } as any))).toBe("NOT_FOUND");
     expect(rows("tour_steps").filter((s) => s.tourId === 2).map((s) => s.title)).toEqual(["Their step"]);
   });
@@ -380,46 +378,10 @@ describe("tour steps (G6)", () => {
 
 /* ── P4 ──────────────────────────────────────────────────────────────────── */
 
-describe("a campaign's linked records (P4)", () => {
-  beforeEach(() => {
-    rows("campaigns").push({ id: 1, workspaceId: LSI, name: "Ours", status: "draft" }, { id: 2, workspaceId: LSI, name: "Legacy", status: "draft", audienceSegmentId: 90, sequenceId: 91, sendingAccountId: 92, senderPoolId: 93 });
-    rows("audience_segments").push({ id: 80, workspaceId: LSI, name: "Our segment" }, { id: 90, workspaceId: FOREIGN, name: "Their segment" });
-    rows("sequences").push({ id: 81, workspaceId: LSI, name: "Our sequence", status: "draft" }, { id: 91, workspaceId: FOREIGN, name: "Their sequence", status: "active" });
-    rows("sending_accounts").push({ id: 82, workspaceId: LSI, fromEmail: "ours@lsi.example" }, { id: 92, workspaceId: FOREIGN, fromEmail: "secret@other.example" });
-    rows("sender_pools").push({ id: 83, workspaceId: LSI, name: "Our pool" }, { id: 93, workspaceId: FOREIGN, name: "Their pool" });
-    rows("contacts").push({ id: 84, workspaceId: LSI, firstName: "A", lastName: "B" }, { id: 94, workspaceId: FOREIGN, firstName: "C", lastName: "D" });
-  });
-
-  it.each([
-    ["segment", { audienceSegmentId: 90 }], ["sequence", { sequenceId: 91 }], ["sending account", { sendingAccountId: 92 }], ["sender pool", { senderPoolId: 93 }], ["contacts", { audienceIds: [84, 94] }],
-  ])("refuses another workspace's %s", async (_n, patch) => {
-    expect(await code(caller(OWNER).campaigns.updateOutreach({ id: 1, ...patch } as any))).toBe("BAD_REQUEST");
-    const c = find("campaigns", 1);
-    for (const k of Object.keys(patch)) expect(c[k]).toBeUndefined();
-  });
-
-  it("takes this workspace's, and clearing a link is always allowed", async () => {
-    expect(await code(caller(OWNER).campaigns.updateOutreach({ id: 1, audienceSegmentId: 80, sequenceId: 81, sendingAccountId: 82, senderPoolId: 83, audienceIds: [84] }))).toBe("OK");
-    expect(find("campaigns", 1)).toMatchObject({ audienceSegmentId: 80, sequenceId: 81, sendingAccountId: 82, senderPoolId: 83 });
-    expect(await code(caller(OWNER).campaigns.updateOutreach({ id: 1, audienceSegmentId: null, sequenceId: null, sendingAccountId: null, senderPoolId: null }))).toBe("OK");
-    expect(find("campaigns", 1).sequenceId).toBeNull();
-  });
-
-  it("a stored foreign id reads nothing back: not a name, not a from-address", async () => {
-    const d = await caller(OWNER).campaigns.getWithDetails({ id: 2 });
-    expect(d).toMatchObject({ sequence: null, sendingAccount: null, senderPool: null, audienceSegment: null });
-    expect(JSON.stringify(d)).not.toContain("secret@other.example");
-  });
-
-  it("this workspace's read back as before", async () => {
-    await caller(OWNER).campaigns.updateOutreach({ id: 1, audienceSegmentId: 80, sequenceId: 81, sendingAccountId: 82, senderPoolId: 83 });
-    const d = await caller(OWNER).campaigns.getWithDetails({ id: 1 });
-    expect(d.sequence?.name).toBe("Our sequence");
-    expect(d.sendingAccount?.fromEmail).toBe("ours@lsi.example");
-    expect(d.senderPool?.name).toBe("Our pool");
-    expect(d.audienceSegment?.name).toBe("Our segment");
-  });
-});
+// 2026-11-07 (audit X6.2/G67): campaigns.updateOutreach and campaigns.getWithDetails served the
+// legacy Broadcasts page, retired on 2026-10-27, and had no caller; they are
+// deleted, so nothing can link a record to a legacy campaign or read one back.
+// server/deadCode.test.ts pins that the legacy campaigns router keeps only list.
 
 /* ── R11 ─────────────────────────────────────────────────────────────────── */
 

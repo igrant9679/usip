@@ -66,6 +66,7 @@ import { Link, useParams } from "wouter";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { QueryError } from "@/components/usip/Shell";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -471,6 +472,17 @@ export default function MindmapCanvas() {
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // A failed load is not an empty map (audit X1.6): the editor would open
+  // blank and its next save would put that over the real one.
+  if (canvasQuery.error && !canvasData) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3">
+        <QueryError what="this mind map" message={canvasQuery.error.message} onRetry={() => { void canvasQuery.refetch(); }} />
+        <Link href="/mindmaps" className="text-sm underline text-muted-foreground">Back to mind maps</Link>
       </div>
     );
   }

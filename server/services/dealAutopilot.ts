@@ -21,6 +21,8 @@ import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
 import { invokeLLM, contentText } from "../_core/llm";
+import { startOfWorkspaceDay } from "./workspaceTimezone";
+import { mayFileAutoTask } from "./autoTaskCap";
 
 function daysSince(d: Date | string | null | undefined): number | null {
   if (!d) return null;
@@ -140,7 +142,9 @@ Return: {
       // Auto: an open task. Approval: the same recommendation as a DRAFT task
       // (the review queue), carrying the numbers the deal record no longer
       // gets — approving it is what makes the suggestion actionable.
-      if (nextStep && !busy.has(o.id)) {
+      // Its tasks keep to the workspace's daily cap (audit L15); the analysis
+      // above still updates the deal, only the task is skipped.
+      if (nextStep && !busy.has(o.id) && (await mayFileAutoTask(db, workspaceId, "deal_autopilot"))) {
         const suggestion = mode === "auto"
           ? (risk ? `Deal at risk: ${risk}` : `Advance deal: ${o.name}`)
           : [
@@ -150,6 +154,7 @@ Return: {
             ].filter(Boolean).join(" ");
         await db.insert(tasks).values({
           workspaceId,
+          autoSource: "deal_autopilot",
           title: nextStep,
           description: suggestion,
           type: "follow_up",
@@ -171,24 +176,19 @@ Return: {
   return { analyzed, tasksCreated };
 }
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
-
 /** Cron entry: run the deal autopilot for every workspace with mode != 'off'. */
 export async function runDealAutopilotAllWorkspaces(): Promise<{ workspaces: number; analyzed: number }> {
   const db = await getDb();
   if (!db) return { workspaces: 0, analyzed: 0 };
 
   const rows = await db.select().from(workspaceSettings).where(sql`${workspaceSettings.dealAutopilotMode} <> 'off'`);
-  const dayStart = startOfUtcDay();
   let workspaces = 0, analyzed = 0;
 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace's day, not UTC's (audit X1.4): the cap restarts at its midnight.
+    const dayStart = await startOfWorkspaceDay(ws.workspaceId);
     const mode = ws.dealAutopilotMode as "approval" | "auto";
     const cap = ws.dealAutopilotDailyCap ?? 50;
     try {

@@ -46,6 +46,7 @@ type Payload = {
 };
 
 /** Ids per call, within each procedure's own input limit. */
+// enrich: companies.bulkEnrich takes at most 25 (audit X4.4); keep the two equal.
 const CHUNK: Record<BulkAction, number> = { delete: 500, optOut: 500, addToList: 500, tasks: 500, enrichFull: 1, enrich: 25 };
 
 /** The actions each entity offers on "all matching". */

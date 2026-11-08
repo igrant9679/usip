@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Link, useLocation, useSearch } from "wouter";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { csvCell } from "@shared/csvCell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean; defaultWinProb?: number | null };
 
@@ -641,6 +642,8 @@ export default function Pipeline() {
         )}
         <Button onClick={() => setAddOpen(true)} data-tour-id="pipeline-new-button"><Plus className="size-4" /> New opportunity</Button>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
 
       {view === "forecast" ? (
         <ForecastView scope={boardInput} scopeLabel={scopeLabel} />

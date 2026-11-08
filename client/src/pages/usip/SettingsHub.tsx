@@ -29,6 +29,7 @@ import { Building2 as WsIcon, Check as WsCheck, ChevronsUpDown as WsChevrons } f
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { QueryError } from "@/components/usip/Shell";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -435,6 +436,12 @@ function ProfileSection() {
 
   const [pwOpen, setPwOpen] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
+
+  // Without the profile the form is blank, and Save would write the blanks
+  // (audit X1.6): say it failed instead of offering an empty form.
+  if (me.error && !me.data) {
+    return <div className="px-4 sm:px-6 pt-4"><QueryError what="your profile" message={me.error.message} onRetry={() => { void me.refetch(); }} /></div>;
+  }
 
   return (
     <>

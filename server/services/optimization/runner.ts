@@ -26,6 +26,7 @@ import { sourceAnalyzer } from "./sourceAnalyzer";
 import { voiceAnalyzer } from "./voiceAnalyzer";
 import { chatAnalyzer } from "./chatAnalyzer";
 import type { Analyzer, Proposal } from "./types";
+import { startOfWorkspaceDay } from "../workspaceTimezone";
 
 /** Registered analyzers. Adding a module = adding it to this list. */
 export const ANALYZERS: Analyzer[] = [
@@ -58,11 +59,6 @@ export interface RunResult {
  */
 const AUTO_MIN_CONFIDENCE = ["medium", "high"];
 
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
-}
 
 /** True when an equivalent recommendation already exists in a blocking state. */
 async function alreadyExists(db: any, workspaceId: number, p: Proposal): Promise<boolean> {
@@ -112,7 +108,7 @@ async function autoBudget(db: any, workspaceId: number): Promise<{ mode: string;
     .where(and(
       eq(optimizationRecommendations.workspaceId, workspaceId),
       eq(optimizationRecommendations.status, "applied" as never),
-      gte(optimizationRecommendations.appliedAt, startOfUtcDay()),
+      gte(optimizationRecommendations.appliedAt, await startOfWorkspaceDay(workspaceId)), // the workspace's day (X1.4)
     ));
   return { mode, remaining: Math.max(0, cap - todaysApplies.length) };
 }

@@ -21,7 +21,8 @@
  *   • **The quotes.delete shape, twice more.** `tours.deleteTour` and
  *     `tours.delete` (two near-identical procedures) each deleted `tourSteps` by
  *     caller-supplied `tourId` with no filter and no ownership check, before a
- *     correctly-scoped parent delete that no-oped.
+ *     correctly-scoped parent delete that no-oped. (2026-11-07 (audit X6.2/G67): deleteTour
+ *     and deleteStep had no caller and are deleted; tours.delete remains.)
  *
  * 10 of the 14 flagged sites were false positives — a workspace-scoped ownership
  * select preceded them. Every one was read before being believed, and the four
@@ -143,8 +144,6 @@ const ALLOWED: Record<string, string> = {
     "Same cascade, same verified parent id. No workspaceId column.",
   "server/routers/proposals.ts::proposalFeedback::eq(proposalFeedback.proposalId, input.id)":
     "Same cascade, same verified parent id. No workspaceId column.",
-  "server/routers/tours.ts::tourSteps::and(eq(tourSteps.id, input.stepId), eq(tourSteps.tourId, input.tourId))":
-    "deleteStep — the tour is verified against the workspace immediately above and the step is tied to it. tour_steps has no workspaceId column.",
 };
 
 describe("no destructive statement can be aimed at another tenant", () => {

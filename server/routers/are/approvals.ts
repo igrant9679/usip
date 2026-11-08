@@ -28,6 +28,7 @@ import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { recountCampaignCounters } from "../../services/are/campaignCounters";
+import { affectedRowsOf } from "../../_core/claim";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { searchWords } from "@shared/areProspectViews";
 
@@ -89,7 +90,8 @@ async function approveRows(db: Awaited<ReturnType<typeof requireDb>>, workspaceI
     inArray(prospectQueue.sequenceStatus, ["pending", "canceled"]),
     eq(prospectQueue.enrichmentStatus, "complete"),
   ));
-  const approved = Number((r as any)?.[0]?.affectedRows ?? 0);
+  // Rows changed, read the one way (X1.5, at the merge with PLAT 2026-11-07).
+  const approved = affectedRowsOf(r);
   const campaigns = Array.from(new Set(touched.map((t) => Number(t.campaignId))));
   for (const c of campaigns) await recountCampaignCounters(db, workspaceId, c);
   // Companies for the approved people, as after any approval; never blocks it.

@@ -8,7 +8,8 @@
  */
 import { useMemo, useState } from "react";
 import { useRoute, useLocation } from "wouter";
-import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { QueryError, Shell, useAccentColor } from "@/components/usip/Shell";
+import { isNotFoundError } from "@/components/usip/QueryState";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 // AccountDetail (the legacy second company page over the same row) retired
 // in phase 5: its opportunities, custom fields, tasks, activities, notes and
@@ -58,7 +59,7 @@ export default function CompanyProfile() {
   const id = Number(params?.id);
   const utils = trpc.useUtils();
 
-  const { data: c, isLoading } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
+  const { data: c, isLoading, error, refetch } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   // This company's deals, asked of the server; it loaded every deal in the
   // workspace and filtered here (audit 2026-10-20, R66).
@@ -85,6 +86,8 @@ export default function CompanyProfile() {
 
   const hq = useMemo(() => c ? [c.hqCity, c.hqState, c.hqCountry].filter(Boolean).join(", ") || c.region || null : null, [c]);
 
+  // A failed load and a missing company are different facts (audit X1.6).
+  if (error && !c && !isNotFoundError(error)) return <Shell title="Company"><QueryError what="this company" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
   if (isLoading) return <Shell title="Company"><div className="p-6 space-y-3">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-16 rounded-lg bg-muted/50 animate-pulse" />)}</div></Shell>;
   if (!c) return <Shell title="Company"><div className="p-10 text-center text-sm text-muted-foreground">Company not found. <button className="text-blue-600 hover:underline" onClick={() => setLocation("/v2/companies")}>Back to companies</button></div></Shell>;
 

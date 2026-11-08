@@ -45,6 +45,7 @@ import {
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
 import { AUTONOMY_DIALS, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
+import { affectedRowsOf } from "../_core/claim";
 
 // 8 rounds: a conversational plan (look up → preview → propose) plus the
 // catalog round-trip (list_actions → run_action) fits; 5 cut the second leg.
@@ -570,7 +571,7 @@ export const assistantRouter = router({
       const res = await db.update(aiAssistantProposals)
         .set({ consumedAt: new Date(), outcome: "confirmed" } as never)
         .where(and(eq(aiAssistantProposals.id, proposal.id), isNull(aiAssistantProposals.consumedAt)));
-      const affected = Number((res as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0);
+      const affected = affectedRowsOf(res);
       if (affected !== 1) throw new TRPCError({ code: "BAD_REQUEST", message: "That proposal was already answered." });
 
       // Hallucinated-id guard: every prospect the action names must be a real

@@ -22,6 +22,7 @@ import { activeTaskStatuses } from "@shared/taskStatus";
 import { getDb } from "../../db";
 import { activities, prospects, prospectLinkedinFieldChanges, tasks, workspaceSettings } from "../../../drizzle/schema";
 import type { DetectedChange } from "./snapshot";
+import { startOfWorkspaceDay } from "../workspaceTimezone";
 
 /** All job-change tasks share this title prefix — used as the dedupe key. */
 const REENGAGE_PREFIX = "Re-engage:";
@@ -78,12 +79,6 @@ export interface JobChangeReengageResult {
     /** The person is marked rejected; nobody re-engages them. */
     | "prospect_rejected";
   taskStatus?: "draft" | "open";
-}
-
-function startOfUtcDay(): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  return d;
 }
 
 /**
@@ -245,7 +240,7 @@ export async function maybeCreateJobChangeReengagement(
       .limit(1);
     if (existing.length > 0) return { created: false, reason: "already_active" };
 
-    // Daily cap — count job-change tasks created this workspace since UTC midnight.
+    // Daily cap — job-change tasks created since the workspace's midnight (audit X1.4).
     const cap = settings?.cap ?? 25;
     const [capRow] = await db
       .select({ n: sql<number>`count(*)` })
@@ -254,7 +249,7 @@ export async function maybeCreateJobChangeReengagement(
         eq(tasks.workspaceId, workspaceId),
         eq(tasks.source, "ai"),
         like(tasks.title, `${REENGAGE_PREFIX}%`),
-        gte(tasks.createdAt, startOfUtcDay()),
+        gte(tasks.createdAt, await startOfWorkspaceDay(workspaceId)),
       ));
     if (Number(capRow?.n ?? 0) >= cap) return { created: false, reason: "cap_reached" };
 

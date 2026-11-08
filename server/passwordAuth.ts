@@ -43,6 +43,7 @@ import {
   newResetToken,
   resetTokenExpiry,
 } from "./services/passwordReset";
+import { affectedRowsOf } from "./_core/claim";
 
 /**
  * What an unknown email is compared against, so its answer takes as long as a
@@ -807,7 +808,7 @@ export function registerPasswordAuthRoutes(app: Express) {
           .update(workspaceInviteLinks)
           .set({ usedAt: now, usedByUserId: userId })
           .where(and(eq(workspaceInviteLinks.id, inviteLink.id), isNull(workspaceInviteLinks.usedAt)));
-        const ok = Number((consumed as any)?.[0]?.affectedRows ?? (consumed as any)?.affectedRows ?? 0) > 0;
+        const ok = affectedRowsOf(consumed) > 0;
         if (ok) {
           // Don't double-add if they somehow already belong to this workspace.
           const [member] = await db

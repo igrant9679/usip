@@ -53,20 +53,24 @@ beforeEach(() => {
     { id: 2, workspaceId: WS, userId: 2, role: "rep", deactivatedAt: null, inviteToken: null },
   );
   rows("campaigns").push({ id: 7, workspaceId: WS, name: "Spring", status: "planning", checklist: [] });
+  // 2026-11-07 (audit X6.2/G67): the example mutation was campaigns.update, deleted with the legacy
+  // Broadcasts procedures; dashboards.updateWidget records nothing itself either.
+  rows("dashboards").push({ id: 5, workspaceId: WS, ownerUserId: 1, name: "Board" });
+  rows("dashboard_widgets").push({ id: 7, workspaceId: WS, dashboardId: 5, type: "kpi", title: "Spring", config: {} });
   rows("accounts").push({ id: 9, workspaceId: WS, name: "Acme", archivedAt: null });
   rows("notifications").push({ id: 3, workspaceId: WS, userId: 1, kind: "mention", title: "x", readAt: null });
 });
 
 describe("a mutation that records nothing itself now leaves an entry", () => {
   it("names the procedure, the person and the ids, and nothing else", async () => {
-    await caller().campaigns.update({ id: 7, patch: { name: "Summer launch", ownerUserId: 2 } });
+    await caller().dashboards.updateWidget({ id: 7, patch: { title: "Summer launch" } });
     const a = auto();
     expect(a).toHaveLength(1);
     expect(a[0]).toMatchObject({
-      workspaceId: WS, actorUserId: 1, action: "update", entityType: "campaigns", entityId: 7,
-      after: { procedure: "campaigns.update", auto: true, ids: { id: 7, "patch.ownerUserId": 2 } },
+      workspaceId: WS, actorUserId: 1, action: "update", entityType: "dashboards", entityId: 7,
+      after: { procedure: "dashboards.updateWidget", auto: true, ids: { id: 7 } },
     });
-    // The new name is not an id, so it is not in the entry.
+    // The new title is not an id, so it is not in the entry.
     expect(JSON.stringify(a[0])).not.toContain("Summer launch");
   });
 
@@ -98,7 +102,7 @@ describe("nothing is doubled, refused, read-only or skipped", () => {
 
   it("a refused call records nothing", async () => {
     await expect(caller(2).companies.archive({ accountId: 9 })).rejects.toBeTruthy();
-    await expect(caller().campaigns.update({ id: 7, patch: { ownerUserId: 999 } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller(2).dashboards.updateWidget({ id: 7, patch: { title: "Theirs now" } })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(audits()).toHaveLength(0);
   });
 
@@ -135,7 +139,7 @@ describe("the pieces", () => {
     expect(autoAuditAction("segments.addContacts")).toBe("create");
     expect(autoAuditAction("tasks.delete")).toBe("delete");
     expect(autoAuditAction("senderPools.removeMember")).toBe("delete");
-    expect(autoAuditAction("campaigns.update")).toBe("update");
+    expect(autoAuditAction("dashboards.updateWidget")).toBe("update");
   });
 
   it("recordAudit marks the request, and workspaceProcedure writes only when nothing did", () => {

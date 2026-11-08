@@ -16,7 +16,8 @@
  */
 import { useMemo } from "react";
 import { useLocation } from "wouter";
-import { Shell, useAccentColor, StatCard } from "@/components/usip/Shell";
+import { Shell, useAccentColor, StatCard, QueryError } from "@/components/usip/Shell";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -152,6 +153,8 @@ export default function Deliverability() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-6">
+          {/* A failed load says so (audit X1.6): the cards showed 0 and the table "none connected". */}
+          <FailedLoadsBanner />
           {/* stat cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <StatCard label="Sending accounts" value={stats.n} hint={`${stats.warming} warming up`} />
@@ -169,6 +172,8 @@ export default function Deliverability() {
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
               {isLoading ? (
                 <div className="p-3 space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>
+              ) : accountsQ.error && !accountsQ.data ? (
+                <QueryError what="sending accounts" message={accountsQ.error.message} onRetry={() => { void accountsQ.refetch(); }} />
               ) : accounts.length === 0 ? (
                 <div className="text-center py-12 px-4">
                   <Mail className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />

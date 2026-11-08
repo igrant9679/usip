@@ -52,6 +52,7 @@ import { useState } from "react";
 import { groupHubCampaigns, refreshHub } from "./areHubModel";
 import { ProspectQualityCard } from "@/components/usip/are/ProspectQualityCard";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 function pct(num: number, den: number) {
@@ -344,6 +345,8 @@ export default function AREHub() {
           </Button>
         </Link>
       </PageHeader>
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <AreSubNav />
       {/* What is holding sends right now, if anything (audit 2026-10-20, U1). */}
       <SendingStatusBar surface="are" />

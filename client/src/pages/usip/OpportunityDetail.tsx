@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
-import { Shell, EmptyState } from "@/components/usip/Shell";
+import { Shell, EmptyState, QueryError } from "@/components/usip/Shell";
 import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
 import { FORECAST_CATEGORIES, FORECAST_CATEGORY_LABEL, type ForecastCategory } from "@shared/forecastCategory";
+import { FailedLoadsBanner, NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 import { formatAmount, getDisplayCurrency } from "@shared/money";
 
 function fmt$(n: any) {
@@ -189,7 +190,7 @@ export default function OpportunityDetail() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
 
-  const { data, isLoading } = trpc.opportunities.getWithRelated.useQuery({ id }, { enabled: !Number.isNaN(id) });
+  const { data, isLoading, error, refetch } = trpc.opportunities.getWithRelated.useQuery({ id }, { enabled: !Number.isNaN(id) });
   const { data: lineItems } = trpc.opportunities.listLineItems.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
   const { data: intel } = trpc.oppIntelligence.getIntelligence.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
   const { data: stageHistory } = trpc.opportunities.stageHistory.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
@@ -239,8 +240,10 @@ export default function OpportunityDetail() {
     setReason((meta?.isWon ? op.winReason : meta?.isLost ? op.lostReason : "") ?? "");
   }, [data]);
 
+  // A failed load and a missing deal are different facts (audit X1.6).
+  if (error && !data && !isNotFoundError(error)) return <Shell title="Opportunity"><QueryError what="this deal" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
   if (isLoading) return <Shell title="Opportunity"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
-  if (!data) return <Shell title="Opportunity"><EmptyState title="Opportunity not found" /></Shell>;
+  if (!data) return <Shell title="Opportunity"><NotFoundState what="deal" backHref="/v2/deals" backLabel="Back to deals" /></Shell>;
 
   const { opportunity: o, account, contactRoles } = data;
   // Flags, not the key — see crm.getWithRelated.
@@ -404,6 +407,8 @@ export default function OpportunityDetail() {
   return (
     <Shell title={o.name}>
       <div className="flex flex-col h-full min-h-0">
+      {/* The side panels each have their own read; one that fails says so (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <DetailHeader
         back={{ href: "/v2/deals", label: "Deals" }}
         icon={<KanbanSquare />}

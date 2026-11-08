@@ -11,6 +11,7 @@ import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { reservedCustomFieldKey, undefinedCustomFieldKeys } from "@shared/customFieldKeys";
+import { affectedRowsOf } from "../_core/claim";
 
 const ENTITY_TYPES = ["lead", "contact", "account", "opportunity"] as const;
 
@@ -175,7 +176,7 @@ export const customFieldsRouter = router({
               sql`JSON_CONTAINS_PATH(${table.customFields}, 'one', ${path})`,
             ),
           );
-        valuesCleared = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+        valuesCleared = affectedRowsOf(res);
       }
 
       await db

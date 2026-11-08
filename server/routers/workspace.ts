@@ -254,14 +254,4 @@ export const workspaceRouter = router({
     ]);
     return { activities, meetings, replies };
   }),
-
-  switch: protectedProcedure
-    .input(z.object({ workspaceId: z.number().int() }))
-    .mutation(async ({ input, ctx }) => {
-      const mine = await getUserWorkspaces(ctx.user.id);
-      const ok = mine.find((w) => w.id === input.workspaceId);
-      if (!ok) throw new Error("Not a member of that workspace");
-      // Frontend persists the current workspace id and sends it via header on each call.
-      return { ok: true, workspaceId: input.workspaceId };
-    }),
 });

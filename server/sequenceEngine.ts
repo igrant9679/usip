@@ -37,6 +37,7 @@ import {
 } from "../drizzle/schema";
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
+import { claimRow } from "./_core/claim";
 import { invokeLLM } from "./_core/llm";
 import type { ResearchUse } from "./services/research/context";
 import { researchUseFor } from "./services/research/recipient";
@@ -52,6 +53,8 @@ import { isFirstDegree, pickLinkedInAccount, toInviteNote } from "./services/are
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "./mergeVars";
 import { extractLinkedInIdentifier } from "./services/linkedinLookup";
 import { checkLinkedInAction, recordLinkedInAction } from "./services/linkedin/activityGate";
+import { mayFileAutoTask } from "./services/autoTaskCap";
+import { startOfNextWorkspaceDay } from "./services/workspaceTimezone";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -777,6 +780,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
       }
 
       if (step.type === "task") {
+        // At the workspace's daily cap for sequence tasks (audit L15) the step
+        // waits for tomorrow instead of filing another: held, not skipped, so
+        // no step is lost, and the hold is recorded by the cap.
+        if (!(await mayFileAutoTask(db, enrollment.workspaceId, "sequence_step", now))) {
+          await hold(await startOfNextWorkspaceDay(enrollment.workspaceId, now));
+          continue;
+        }
         if (!(await claimNow())) continue;
         processed++;
         await db.insert(tasks).values({
@@ -784,6 +794,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // title is varchar(240) — normalizeStep already clamps the derived
           // title, but clamp again here so a legacy taskTitle can't overflow.
           title: (step.taskTitle ?? "Follow up").slice(0, 240),
+          autoSource: "sequence_step",
           description: step.taskBody ?? null,
           dueAt: new Date(now.getTime() + (step.taskDueOffsetDays ?? 1) * 86_400_000),
           relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",
@@ -1121,10 +1132,14 @@ export async function pauseOnReply(
   // Pause enrollment. resumeAt: null because this pause is a human saying the
   // conversation is live — it must override any OOO snooze already stamped on
   // the row, not queue behind it (0181).
-  await db
+  // Claimed (audit X1.5): two replies handled at once both read "active" and
+  // each paused the enrolment and filed its own review task. Only the one
+  // whose update still found it active files the task.
+  const won = await claimRow(db
     .update(enrollments)
     .set({ status: "paused", resumeAt: null })
-    .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.workspaceId, workspaceId)));
+    .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.workspaceId, workspaceId), eq(enrollments.status, "active"))));
+  if (!won) return;
 
   // Create review task, on the record the enrolment is for. A prospect
   // enrolment's task was filed as a lead with no id, so it belonged to

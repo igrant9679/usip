@@ -19,7 +19,7 @@
 import { eq } from "drizzle-orm";
 import { workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { safeTimezone } from "@shared/availability";
+import { safeTimezone, localDateOf, wallTimeToUtcMs } from "@shared/availability";
 
 /**
  * Per-request-ish cache. These call sites run inside loops over rows, and the
@@ -62,17 +62,40 @@ export async function getWorkspaceTimezone(workspaceId: number, nowMs = Date.now
  */
 export function startOfLocalDay(tz: string, now: Date = new Date()): Date {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz || "UTC", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit",
-    }).formatToParts(now);
-    const n = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-    const sinceMidnight = ((n("hour") * 60 + n("minute")) * 60 + n("second")) * 1000 + now.getUTCMilliseconds();
-    return new Date(now.getTime() - sinceMidnight);
+    // From the calendar day, not "now minus the time on the clock": on the
+    // day a clock change happens the two differ by the hour that was skipped
+    // or repeated (audit X1.4, fake-clock test in server/x14WorkspaceDays.test.ts).
+    const zone = tz || "UTC";
+    const { y, m, d } = localDateOf(zone, now.getTime());
+    return new Date(wallTimeToUtcMs(zone, y, m, d, 0));
   } catch {
     const d = new Date(now);
     d.setUTCHours(0, 0, 0, 0);
     return d;
   }
+}
+
+/**
+ * The instant the workspace's current day began, in its own zone (audit
+ * X1.4): daily caps and "today" counts restart at the customer's midnight,
+ * not at UTC's (7 or 8 PM for an Eastern workspace).
+ */
+export async function startOfWorkspaceDay(workspaceId: number, now: Date = new Date()): Promise<Date> {
+  return startOfLocalDay(await getWorkspaceTimezone(workspaceId, now.getTime()), now);
+}
+
+/** The instant the workspace's next day begins (a hold until tomorrow, audit L15). */
+export async function startOfNextWorkspaceDay(workspaceId: number, now: Date = new Date()): Promise<Date> {
+  const zone = await getWorkspaceTimezone(workspaceId, now.getTime());
+  const { y, m, d } = localDateOf(zone, now.getTime());
+  const t = new Date(Date.UTC(y, m - 1, d + 1));
+  return new Date(wallTimeToUtcMs(zone, t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate(), 0));
+}
+
+/** YYYY-MM-DD of an instant on the workspace's calendar. */
+export function workspaceDayKeyOf(tz: string, at: Date | number): string {
+  const { y, m, d } = localDateOf(tz || "UTC", typeof at === "number" ? at : at.getTime());
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 /** Test seam: drop memoised zones. */

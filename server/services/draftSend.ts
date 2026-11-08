@@ -28,6 +28,7 @@
  */
 import { and, eq, lt } from "drizzle-orm";
 import { emailDrafts, enrollments, sequences } from "../../drizzle/schema";
+import { affectedRowsOf } from "../_core/claim";
 
 export type DraftStatus = (typeof emailDrafts.$inferSelect)["status"];
 
@@ -137,7 +138,5 @@ export async function sweepStaleSendingDrafts(db: Db, now = new Date()): Promise
   return affected(res);
 }
 
-export function affected(res: unknown): number {
-  const r = res as any;
-  return Number(r?.[0]?.affectedRows ?? r?.affectedRows ?? r?.rowsAffected ?? 0);
-}
+/** Rows changed; the shared reader (_core/claim.ts, audit X1.5) under this file's old name. */
+export const affected = affectedRowsOf;

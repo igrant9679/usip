@@ -25,6 +25,8 @@ import { activities, chatSessions, leads, tasks, unipileAccounts, unipileInvites
 import { getDb } from "../db";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { textToHtml } from "../mergeVars";
+import { affectedRowsOf } from "../_core/claim";
+import { utcDayStart } from "@shared/timeWindows";
 
 export type ApprovalTaskKind = "chat_follow_up" | "social_invite";
 export interface ApprovalTaskRow {
@@ -121,7 +123,7 @@ export async function sendChatFollowUpTask(workspaceId: number, taskId: number, 
   // Claim before sending (at-most-once, same rule as the Auto branch).
   const claimed = await db.update(tasks).set({ status: "in_progress" } as never)
     .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId), eq(tasks.status, "open")));
-  if (Number((claimed as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0) !== 1) return { ok: false, reason: "already_taken" };
+  if (affectedRowsOf(claimed) !== 1) return { ok: false, reason: "already_taken" };
   const res = await sendWorkspaceEmail(workspaceId, { to, subject: p.subject, text: p.body, html: textToHtml(p.body) });
   if (!res.ok) {
     await db.update(tasks).set({ status: "open" } as never).where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId)));
@@ -172,7 +174,7 @@ export async function sendSocialInviteTask(workspaceId: number, taskId: number, 
   const note = await generateInviteNote(workspaceId, { name, title: leadTitle, company: leadCompany });
   const claimed = await db.update(tasks).set({ status: "in_progress" } as never)
     .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId), eq(tasks.status, "open")));
-  if (Number((claimed as unknown as Array<{ affectedRows?: number }>)[0]?.affectedRows ?? 0) !== 1) return { ok: false, reason: "already_taken" };
+  if (affectedRowsOf(claimed) !== 1) return { ok: false, reason: "already_taken" };
   try {
     await sendLinkedInInvitation({ accountId: account.id, providerId: slug, message: note });
   } catch (e) {
@@ -202,7 +204,10 @@ export async function sendAllApprovalTasks(workspaceId: number, kind: ApprovalTa
     // per-account activity gate still applies inside each send.
     const db = await getDb();
     if (db) {
-      const since = new Date(); since.setUTCHours(0, 0, 0, 0);
+      // UTC on purpose, the same day socialAutopilot's INVITE_HARD_CAP counts:
+      // LinkedIn's limits are the account's risk, not the workspace's calendar
+      // (audit X1.4 kept this one; shared/timeWindows.ts).
+      const since = utcDayStart();
       const [{ n: sentToday }] = await db
         .select({ n: sql<number>`count(*)` })
         .from(unipileInvites)

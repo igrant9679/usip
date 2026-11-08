@@ -5281,6 +5281,39 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A daily cap on the other auto-task sources (audit 2026-10-20, L15). Two
+  // additive columns: the cap, 25 as Task Autopilot's is, and the source on a
+  // task, null on every existing one (only new auto tasks are counted).
+  {
+    name: "0321_auto_task_cap.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `autoTaskDailyCap` int NOT NULL DEFAULT 25",
+      "ALTER TABLE `tasks` ADD COLUMN `autoSource` varchar(32) NULL",
+      "CREATE INDEX `ix_tasks_ws_autosrc` ON `tasks` (`workspaceId`, `autoSource`, `createdAt`)",
+    ],
+  },
+
+  // Errors the browser reports (audit 2026-10-20, F49): a new table, nothing
+  // existing changes. Rows are scrubbed before they are written and kept 30
+  // days (server/clientErrors.ts).
+  {
+    name: "0320_client_errors.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `client_errors` (" +
+        "`id` int AUTO_INCREMENT NOT NULL, " +
+        "`workspaceId` int NOT NULL, " +
+        "`userId` int NOT NULL, " +
+        "`kind` varchar(16) NOT NULL, " +
+        "`message` varchar(500) NOT NULL, " +
+        "`stack` text NULL, " +
+        "`path` varchar(255) NULL, " +
+        "`release` varchar(40) NULL, " +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "PRIMARY KEY (`id`), " +
+        "KEY `ix_ce_ws_created` (`workspaceId`, `createdAt`))",
+    ],
+  },
+
   // A scheduled report's last send, and how it went (audit 2026-10-20, F45):
   // only scheduleLastSentAt was kept, and only on success, so a schedule that
   // kept failing showed nothing. Additive, nullable, nothing backfilled; when a

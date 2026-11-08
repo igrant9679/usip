@@ -34,6 +34,7 @@ import { and, eq, isNotNull, or } from "drizzle-orm";
 import { calendarAccounts, sendingAccounts, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { decryptField, encryptField } from "../emailAdapter";
+import { affectedRowsOf } from "../_core/claim";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -74,7 +75,7 @@ export async function encryptLegacyMailboxSecrets(dbArg?: Db): Promise<{ encrypt
             .update(t)
             .set({ [col]: enc, updatedAt: row.updatedAt })
             .where(and(eq(t.id, row.id), eq(t[col], row[col])))) as any;
-          if (!(Number(res?.affectedRows ?? 1) > 0)) continue;
+          if (!(affectedRowsOf(res) > 0)) continue;
           // Read back: a value cut short by a column still too narrow is put
           // back as it was (see the header), never left half-written.
           const [back] = await db.select({ v: t[col] }).from(t).where(eq(t.id, row.id)).limit(1);

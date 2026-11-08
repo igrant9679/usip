@@ -24,6 +24,8 @@ import { activities, contacts, leads, prospects, tasks, websiteVisits, workspace
 import { pageIntent } from "@shared/pageIntent";
 import { activeOwnerOrNull } from "./_core/activeMembers";
 import { findSuppression, type SuppressionTarget } from "./services/suppression";
+import { affectedRowsOf } from "./_core/claim";
+import { mayFileAutoTask } from "./services/autoTaskCap";
 
 /**
  * Privacy (audit 2026-10-20, P87). A visitor whose browser sends Do Not Track
@@ -74,7 +76,7 @@ export async function purgeOldWebsiteVisits(now: Date = new Date()): Promise<num
   for (let i = 0; i < 200; i++) {
     const [res] = await db.execute(sql`DELETE FROM ${websiteVisits} WHERE ${websiteVisits.createdAt} < ${cutoff} LIMIT 5000`);
     batches++;
-    if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+    if (affectedRowsOf(res) < 5000) break;
   }
   return batches;
 }
@@ -256,7 +258,10 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
           .from(tasks)
           .where(and(eq(tasks.workspaceId, ws.id), like(tasks.title, "High-intent website visit:%"), gte(tasks.createdAt, since)));
         // count includes the row we just inserted; 1 ⇒ this is the first today.
-        if (Number(n) <= 1 && Number(filed) < MAX_INTENT_TASKS_PER_DAY) {
+        // Under the rolling ceiling, and the workspace's daily cap for this
+        // source (audit L15): at the cap the visit is still logged below,
+        // only the task is skipped, and the skip is recorded.
+        if (Number(n) <= 1 && Number(filed) < MAX_INTENT_TASKS_PER_DAY && (await mayFileAutoTask(db, ws.id, "website_visit"))) {
           let name = "A known prospect";
           let ownerUserId: number | null = null;
           let target: SuppressionTarget = {};
@@ -292,6 +297,7 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
             relatedType: contactId ? "contact" : prospectId ? "prospect" : "lead",
             relatedId: contactId ?? prospectId ?? leadId,
             source: "ai",
+            autoSource: "website_visit",
           } as never);
           await db.insert(activities).values({
             workspaceId: ws.id,
