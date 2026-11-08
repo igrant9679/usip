@@ -44,6 +44,25 @@ export function portalView(p: Proposal) {
   };
 }
 
+/**
+ * The pricing table the portal shows (audit 2026-10-20, F34): the proposal's
+ * current quote version, as its PDF prints it — lines, totals, notes and
+ * terms. Not the AI pricing advice, the deal, the author or the version
+ * history: those are the team's.
+ */
+export function portalPricing(q: {
+  version: number; subtotal: unknown; discountTotal: unknown; taxTotal: unknown; total: unknown; notes: string | null; terms: string | null;
+  lineItems: Array<{ name: string; description: string | null; quantity: number; unitPrice: unknown; discountPct: unknown; lineTotal: unknown }>;
+} | null) {
+  if (!q) return null;
+  return {
+    version: q.version,
+    lineItems: q.lineItems.map((l) => ({ name: l.name, description: l.description, quantity: l.quantity, unitPrice: String(l.unitPrice), discountPct: String(l.discountPct), lineTotal: String(l.lineTotal) })),
+    subtotal: String(q.subtotal), discountTotal: String(q.discountTotal), taxTotal: String(q.taxTotal), total: String(q.total),
+    notes: q.notes, terms: q.terms,
+  };
+}
+
 export function portalSection(s: Pick<ProposalSection, "sectionKey" | "content">) {
   return { sectionKey: s.sectionKey, content: s.content };
 }

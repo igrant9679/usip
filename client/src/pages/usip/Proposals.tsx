@@ -1,4 +1,4 @@
-import { Shell, PageHeader, QueryError, SubNav } from "@/components/usip/Shell";
+import { Shell, PageHeader, QueryError } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
 import { extendedExpiry } from "@/lib/localDay";
 import { zonedDayKey } from "@shared/availability";
@@ -667,9 +667,6 @@ export default function Proposals() {
           </Button>
         </div>
       </PageHeader>
-      <SubNav items={[
-        { href: "/quotes", label: "Quotes", title: "Pricing-only quotes — shorter, signature-ready documents" },
-      ]} />
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">
@@ -952,7 +949,7 @@ export default function Proposals() {
                     className="ml-1 text-muted-foreground hover:text-destructive p-1.5 h-auto rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity self-center"
                     ariaLabel="Delete proposal"
                     title="Delete this proposal?"
-                    description={`"${p.title}" will be permanently deleted. This cannot be undone.`}
+                    description={`"${p.title}" will be permanently deleted, with its sections, milestones and every pricing version. This cannot be undone.`}
                     confirmLabel="Delete"
                     onConfirm={() => removeProposal.mutate({ id: p.id })}
                   >

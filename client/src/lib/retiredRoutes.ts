@@ -23,6 +23,16 @@
  *   /campaigns       → /are/campaigns  The legacy Broadcasts page. See below:
  *                                   this one was settled by retiring WITHOUT
  *                                   the fold its plan item assumed.
+ *   /quotes          → /proposals   Quotes folded INTO proposals first
+ *                                   (audit 2026-10-20, F34, 2026-11-07): a
+ *                                   quote is a proposal's pricing section,
+ *                                   versioned, with its PDF and the AI
+ *                                   pricing advice; existing quotes were
+ *                                   attached to their deal's proposal (or a
+ *                                   new draft one) by services/quoteFold, so
+ *                                   every one stays readable there. The page
+ *                                   file is kept, unrouted: put its <Route>
+ *                                   line back in App.tsx to undo.
  *
  * About `/campaigns`, so nobody re-runs the investigation (2026-10-27):
  *
@@ -129,6 +139,7 @@ export const RETIRED_ROUTES = {
   "/mailbox": "/v2/inbox?tab=mailbox",
   "/unified-inbox": "/v2/inbox?tab=social&view=chats",
   "/v2/conversations": "/v2/inbox",
+  "/quotes": "/proposals",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

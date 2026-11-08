@@ -11,9 +11,26 @@ import { Brain, Download, FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { confirmAction } from "@/components/usip/Common";
+import { useSourceBudgets } from "@/components/usip/SpendPreview";
+import { aiCallText } from "@shared/spendPreview";
+
+/**
+ * What one brief costs, said before it is generated (audit 2026-10-20, F35;
+ * F8's rule that every control that spends says so first): one streamed model
+ * call over the company's record and up to five contacts, deals and recent
+ * activities, writing about 300 words. The prompt is about 700 tokens and the
+ * brief about 600, so roughly 1,300; the month's AI use is shown beside it.
+ */
+export const ACCOUNT_BRIEF_TOKEN_ESTIMATE = 1300;
+
+export function accountBriefCostText(ai?: { used: number; cap: number | null } | null): string {
+  return `${aiCallText(1, ai, "to write a 300-word brief from this company's record and up to 5 contacts, 5 deals and 5 recent activities")} A brief uses about ${ACCOUNT_BRIEF_TOKEN_ESTIMATE.toLocaleString("en-US")} tokens.`;
+}
 
 export function AccountBriefPanel({ accountId }: { accountId: number }) {
   const utils = trpc.useUtils();
+  const budgets = useSourceBudgets();
   const { data: brief, isLoading } = trpc.accountBriefs.getLatest.useQuery({ accountId });
   const exportPdf = trpc.accountBriefs.exportPdf.useMutation({
     onSuccess: (data) => {
@@ -106,6 +123,13 @@ export function AccountBriefPanel({ accountId }: { accountId: number }) {
     }
   };
 
+  // Generating spends AI tokens: say how many and ask first (F35).
+  const askGenerate = (regenerate: boolean) => confirmAction({
+    title: regenerate ? "Regenerate this account brief?" : "Generate an account brief?",
+    description: `${accountBriefCostText(budgets.data?.ai)}${regenerate ? " The new brief replaces the one shown." : ""}`,
+    confirmLabel: regenerate ? "Regenerate brief" : "Generate brief",
+  }, () => { void handleGenerate(); });
+
   const handleStop = () => {
     abortRef.current?.abort();
     setStreaming(false);
@@ -153,7 +177,7 @@ export function AccountBriefPanel({ accountId }: { accountId: number }) {
               PDF
             </Button>
           )}
-          <Button size="sm" onClick={handleGenerate} disabled={streaming}>
+          <Button size="sm" onClick={() => askGenerate(!!brief)} disabled={streaming}>
             {streaming ? <Loader2 className="size-3 animate-spin mr-1" /> : <Brain className="size-3 mr-1" />}
             {brief ? "Regenerate" : "Generate Brief"}
           </Button>
@@ -165,7 +189,7 @@ export function AccountBriefPanel({ accountId }: { accountId: number }) {
           <FileText className="size-8 text-muted-foreground/30 mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No brief generated yet.</p>
           <p className="text-xs text-muted-foreground/70 mt-1">
-            Click "Generate Brief" to create an AI-powered 300-word executive account summary.
+            Click "Generate Brief" to create an AI-powered 300-word executive account summary. You'll see what it costs before it runs.
           </p>
         </div>
       )}

@@ -543,7 +543,13 @@ describe("R41: the forecast", () => {
 
   it("the page and the deal say what the numbers are", () => {
     const page = read("client/src/pages/usip/Forecast.tsx");
-    expect(page).toContain("Quarters are calendar quarters. Reps see their own row; managers see the team.");
+    // 2026-11-07 (audit F29, batch CRMD): the quarters are the workspace's
+    // fiscal ones now (Settings → General; January = calendar quarters), and
+    // the page says so; reps still see only their own deals. What this pin
+    // protects — the page naming the categories, the quarters and the
+    // scoping — is unchanged; the fiscal calendar is pinned in crmdForecast.
+    expect(page).toContain("Quarters are your fiscal quarters, set in Settings → General. Reps see their own deals; managers see the team");
+    expect(page).toContain("a deal with none counts in Commit at 90% or more and in Best case at 50% or more");
     expect(page).not.toContain("Commit = ≥90% win prob");
     const detail = read("client/src/pages/usip/OpportunityDetail.tsx");
     expect(detail).toContain('aria-label="Forecast category"');

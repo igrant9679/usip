@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { usePageTitle } from "@/lib/usePageTitle";
+import { formatMoney } from "@shared/quoteTotals";
 
 /**
  * A proposal section as the client should see it (audit 2026-10-20, R22).
@@ -50,6 +51,44 @@ function SectionBody({ content }: { content: string }) {
     return <div className="prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(content) }} />;
   }
   return <div className="prose prose-sm max-w-none text-gray-700"><Streamdown>{content}</Streamdown></div>;
+}
+
+/**
+ * The pricing table (audit 2026-10-20, F34): the proposal's current quote
+ * version — lines, totals, notes and terms — as its PDF prints it. Amounts are
+ * dollars: the portal has no workspace session to read a currency from, and
+ * the quote PDF prints dollars too.
+ */
+export function PortalPricingTable({ pricing }: { pricing: { lineItems: Array<{ name: string; description: string | null; quantity: number; unitPrice: string; discountPct: string; lineTotal: string }>; subtotal: string; discountTotal: string; total: string; notes: string | null; terms: string | null } }) {
+  const money = (v: string) => formatMoney(v);
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-xs text-gray-500 border-b"><tr>
+          <th className="text-left py-1.5 pr-2">Item</th><th className="text-right py-1.5 px-2">Qty</th>
+          <th className="text-right py-1.5 px-2">Unit price</th><th className="text-right py-1.5 px-2">Discount</th><th className="text-right py-1.5 pl-2">Total</th>
+        </tr></thead>
+        <tbody className="divide-y divide-gray-100">
+          {pricing.lineItems.map((l, i) => (
+            <tr key={i}>
+              <td className="py-1.5 pr-2 text-gray-800">{l.name}{l.description && <div className="text-xs text-gray-500">{l.description}</div>}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{l.quantity}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{money(l.unitPrice)}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums">{Number(l.discountPct) > 0 ? `${Number(l.discountPct)}%` : "—"}</td>
+              <td className="py-1.5 pl-2 text-right tabular-nums">{money(l.lineTotal)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="mt-2 flex justify-end gap-4 text-sm tabular-nums">
+        <span className="text-gray-500">Subtotal {money(pricing.subtotal)}</span>
+        {Number(pricing.discountTotal) > 0 && <span className="text-gray-500">Discount −{money(pricing.discountTotal)}</span>}
+        <span className="font-semibold text-gray-900">Total {money(pricing.total)}</span>
+      </div>
+      {pricing.notes && <p className="mt-3 text-xs text-gray-600"><span className="font-medium">Notes:</span> {pricing.notes}</p>}
+      {pricing.terms && <p className="mt-1 text-xs text-gray-600"><span className="font-medium">Terms:</span> {pricing.terms}</p>}
+    </div>
+  );
 }
 
 /**
@@ -91,13 +130,23 @@ export default function ProposalPortal() {
   );
 
   usePageTitle(data?.proposal.title ?? "Proposal");
+  // One visit recorded per page load (audit 2026-10-20, F48): the team sees
+  // when the proposal was first and last opened, and how often. Only when.
+  const recordView = trpc.proposals.recordView.useMutation({ meta: { silentError: true }, onError: () => {} });
+  const viewSent = useRef(false);
+  useEffect(() => {
+    if (!data || viewSent.current || !token) return;
+    viewSent.current = true;
+    recordView.mutate({ token });
+  }, [data, token]); // eslint-disable-line react-hooks/exhaustive-deps
   const [feedbackForm, setFeedbackForm] = useState({ name: "", email: "", message: "" });
   const [submitted, setSubmitted] = useState(false);
 
+  // "Request changes" (F48): the feedback path, named for what it asks.
   const submitFeedback = trpc.proposals.submitFeedback.useMutation({
     onSuccess: () => {
       setSubmitted(true);
-      toast.success("Feedback submitted — thank you!");
+      toast.success("Change request sent. The team will get back to you.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -179,10 +228,13 @@ export default function ProposalPortal() {
   }
 
   const { proposal, sections, milestones } = data;
+  // The proposal's pricing section: its current quote version (F34).
+  const pricing = data.pricing ?? null;
   const statusCfg: { label: string; color: string } | undefined = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG];
   const sectionMap: Record<string, string> = {};
   for (const s of sections) sectionMap[s.sectionKey] = s.content;
   const populatedSections = Object.entries(sectionMap).filter(([, v]) => v?.trim());
+  const hasContent = populatedSections.length > 0 || !!pricing;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -333,9 +385,9 @@ export default function ProposalPortal() {
           )}
         </div>
 
-        <Tabs defaultValue={populatedSections.length > 0 ? "content" : "timeline"} className="space-y-4">
+        <Tabs defaultValue={hasContent ? "content" : "timeline"} className="space-y-4">
           <TabsList className="bg-white border border-gray-200 rounded-lg p-1 gap-1 h-auto flex-wrap">
-            {populatedSections.length > 0 && (
+            {hasContent && (
               <TabsTrigger value="content" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
                 Proposal Content
               </TabsTrigger>
@@ -346,7 +398,7 @@ export default function ProposalPortal() {
               </TabsTrigger>
             )}
             <TabsTrigger value="feedback" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
-              Submit Feedback
+              Request changes
             </TabsTrigger>
             {extensionHistory && extensionHistory.length > 0 && (
               <TabsTrigger value="extension_history" className="rounded-md data-[state=active]:bg-teal-600 data-[state=active]:text-white text-sm">
@@ -356,7 +408,7 @@ export default function ProposalPortal() {
           </TabsList>
 
           {/* Content sections */}
-          {populatedSections.length > 0 && (
+          {hasContent && (
             <TabsContent value="content" className="mt-0 space-y-4">
               {populatedSections.map(([key, content]) => (
                 <div key={key} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
@@ -364,8 +416,15 @@ export default function ProposalPortal() {
                     {SECTION_LABELS[key] ?? key}
                   </h2>
                   <SectionBody content={content} />
+                  {key === "pricing" && pricing && <PortalPricingTable pricing={pricing} />}
                 </div>
               ))}
+              {pricing && !sectionMap.pricing?.trim() && (
+                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                  <h2 className="text-base font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">Pricing</h2>
+                  <PortalPricingTable pricing={pricing} />
+                </div>
+              )}
             </TabsContent>
           )}
 
@@ -402,18 +461,18 @@ export default function ProposalPortal() {
             </TabsContent>
           )}
 
-          {/* Feedback */}
+          {/* Request changes (F48): the feedback path, named for what it does. */}
           <TabsContent value="feedback" className="mt-0">
             <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-              <h2 className="text-base font-semibold text-gray-800 mb-1">Submit Feedback</h2>
+              <h2 className="text-base font-semibold text-gray-800 mb-1">Request changes</h2>
               <p className="text-sm text-gray-500 mb-4">
-                Have questions or comments about this proposal? Send them directly to the team.
+                Want something changed, or have a question first? Tell the team what you need and they will come back to you with a revised proposal or an answer.
               </p>
 
               {submitted ? (
                 <div className="flex flex-col items-center py-8 text-center">
                   <CheckCircle2 className="size-12 text-teal-500 mb-3" />
-                  <p className="font-semibold text-gray-800">Feedback received!</p>
+                  <p className="font-semibold text-gray-800">Change request sent</p>
                   <p className="text-sm text-gray-500 mt-1">The team will follow up with you shortly.</p>
                 </div>
               ) : (
@@ -443,7 +502,7 @@ export default function ProposalPortal() {
                     <Textarea aria-label="Message"
                       value={feedbackForm.message}
                       onChange={(e) => setFeedbackForm(f => ({ ...f, message: e.target.value }))}
-                      placeholder="Your questions or comments about this proposal..."
+                      placeholder="What would you like changed, or what would you like to ask?"
                       className="mt-1 min-h-[120px]"
                       maxLength={5000}
                     />
@@ -459,7 +518,7 @@ export default function ProposalPortal() {
                     className="bg-teal-600 hover:bg-teal-700 text-white gap-1.5"
                   >
                     <MessageSquare className="size-4" />
-                    {submitFeedback.isPending ? "Submitting..." : "Submit Feedback"}
+                    {submitFeedback.isPending ? "Sending..." : "Send change request"}
                   </Button>
                 </div>
               )}
@@ -573,9 +632,13 @@ export default function ProposalPortal() {
               <ul className="space-y-0.5">
                 <li>• The proposal team is notified immediately</li>
                 <li>• A follow-up task is created for your account manager</li>
-                <li>• You can still submit feedback via the Feedback tab</li>
+                <li>• You can still ask for changes from the Request changes tab</li>
               </ul>
             </div>
+            {/* What the e-signature record keeps (F48), said before it is made. */}
+            <p className="text-xs text-gray-500">
+              Accepting with your name is an electronic signature. Your name, the email you give, the time and the network address you accept from are kept with this proposal.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAcceptDialogOpen(false)}>

@@ -37,10 +37,14 @@ import {
   Mail,
   Trash2,
   CalendarX,
+  AlarmClock,
+  AlarmClockOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 import { ConfirmButton } from "@/components/usip/Common";
+import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
+import { formatAmount } from "@shared/money";
 import { pressable } from "@/lib/pressable";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
@@ -141,6 +145,9 @@ function MoveStageDialog({
     onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); invalidateDealReads(utils); onSuccess(); onClose(); },
     onError: (e) => toast.error(e.message),
   });
+  // A move to a lost stage asks why first; Skip still moves it (F28).
+  const lostPrompt = useLostReasonPrompt((v: { opportunityId: number; newStage: string }) => moveStage.mutate(v));
+  const target = stages.find((s: any) => s.key === newStage);
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-sm">
@@ -158,11 +165,13 @@ function MoveStageDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => moveStage.mutate({ opportunityId: deal.id, newStage })} disabled={!newStage || moveStage.isPending}>
+          <Button onClick={() => lostPrompt.ask({ opportunityId: deal.id, newStage }, { isLost: !!target?.isLost, dealName: deal?.name ?? "this deal", stageLabel: target?.label ?? newStage })} disabled={!newStage || moveStage.isPending}>
             {moveStage.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
             Move Stage
           </Button>
         </DialogFooter>
+        {/* Inside the content, so the nested dialog layers over this one. */}
+        {lostPrompt.dialog}
       </DialogContent>
     </Dialog>
   );
@@ -212,6 +221,68 @@ function StuckDealCard({ deal, onAction }: { deal: any; onAction: () => void }) 
   );
 }
 
+/**
+ * The queue grouped by deal (audit 2026-10-20, U25): a deal with three alerts
+ * was three separate cards. Deals with the most alerts first, then the
+ * newest; each deal's alerts newest first.
+ */
+export function groupAlertsByDeal<A extends { opportunityId: number; createdAt?: string | Date | null; opportunity?: any }>(alerts: A[]) {
+  const groups = new Map<number, { opportunityId: number; opportunity: any; alerts: A[]; newest: number }>();
+  for (const a of alerts) {
+    const t = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const g = groups.get(a.opportunityId) ?? { opportunityId: a.opportunityId, opportunity: a.opportunity ?? null, alerts: [], newest: 0 };
+    g.alerts.push(a);
+    g.newest = Math.max(g.newest, t);
+    groups.set(a.opportunityId, g);
+  }
+  const at = (a: A) => (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+  return Array.from(groups.values())
+    .map((g) => ({ ...g, alerts: g.alerts.slice().sort((x, y) => at(y) - at(x)) }))
+    .sort((a, b) => b.alerts.length - a.alerts.length || b.newest - a.newest);
+}
+
+/** "YYYY-MM-DD", `days` from today on this device's calendar. */
+function dayFromToday(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ─── Snooze Dialog (U25) ──────────────────────────────────────────────────────
+function SnoozeDialog({ alert, open, onClose, onDone }: { alert: any; open: boolean; onClose: () => void; onDone: () => void }) {
+  const [until, setUntil] = useState(dayFromToday(3));
+  const snooze = trpc.pipelineAlerts.snooze.useMutation({
+    onSuccess: () => { toast.success(`Snoozed until ${until}. It comes back then if the deal still needs it.`); onDone(); onClose(); },
+    onError: (e) => toast.error(e.message),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader><DialogTitle>Snooze alert — {alert?.opportunity?.name ?? "deal"}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-muted-foreground">Off the queue until the day you pick. It still clears itself if the deal no longer needs it.</p>
+          <div className="flex flex-wrap gap-1.5">
+            {[["Tomorrow", 1], ["3 days", 3], ["1 week", 7], ["2 weeks", 14]].map(([label, n]) => (
+              <Button key={label} type="button" size="sm" variant={until === dayFromToday(n as number) ? "default" : "outline"} className="h-7 text-xs"
+                onClick={() => setUntil(dayFromToday(n as number))}>{label}</Button>
+            ))}
+          </div>
+          <label className="block text-xs font-medium" htmlFor="snooze-until">Until</label>
+          <input id="snooze-until" type="date" min={dayFromToday(1)} value={until} onChange={(e) => setUntil(e.target.value)}
+            className="h-9 w-full text-sm rounded-md border bg-background px-2" />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => snooze.mutate({ alertId: alert.id, until })} disabled={!until || snooze.isPending}>
+            {snooze.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+            Snooze
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) {
   const config = ALERT_CONFIG[alert.alertType] ?? {
     label: alert.alertType,
@@ -225,6 +296,12 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
 
   const dismiss = trpc.pipelineAlerts.dismiss.useMutation({
     onSuccess: () => { toast.success("Dismissed for 7 days. It comes back after that if the deal still needs it."); onDismiss(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const snoozedUntil = alert.snoozedUntil && new Date(alert.snoozedUntil).getTime() > Date.now() ? new Date(alert.snoozedUntil) : null;
+  const wake = trpc.pipelineAlerts.unsnooze.useMutation({
+    onSuccess: () => { toast.success("Back on the queue"); onDismiss(); },
     onError: (e) => toast.error(e.message),
   });
   // Clearing an alert hides it from everyone: the deal's owner or a manager (R37).
@@ -263,6 +340,7 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
           <span className="text-xs text-muted-foreground">
             {new Date(alert.createdAt).toLocaleDateString()}
           </span>
+          {snoozedUntil && <span className="text-xs text-muted-foreground">Snoozed until {snoozedUntil.toLocaleDateString()}</span>}
           <div className="ml-auto flex gap-2">
             {/* This was href={`/pipeline`} — a template literal with nothing
                 interpolated into it, so every alert's "View Opp" landed on the
@@ -289,8 +367,40 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
                 Dismiss
               </Button>
             )}
+            {/* Snooze to a day, or wake a snoozed one (U25): the same people as Dismiss. */}
+            {canDismiss && snoozedUntil && (
+              <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => wake.mutate({ alertId: alert.id })} disabled={wake.isPending}>
+                <AlarmClockOff className="h-3 w-3 mr-1" />Wake now
+              </Button>
+            )}
+            {canDismiss && !snoozedUntil && (
+              <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setSnoozeOpen(true)}>
+                <AlarmClock className="h-3 w-3 mr-1" />Snooze
+              </Button>
+            )}
           </div>
         </div>
+      </div>
+      {snoozeOpen && <SnoozeDialog alert={alert} open={snoozeOpen} onClose={() => setSnoozeOpen(false)} onDone={onDismiss} />}
+    </div>
+  );
+}
+
+/** One deal's alerts under one heading that opens the deal (U25). */
+function DealAlertGroup({ group, onChange }: { group: { opportunityId: number; opportunity: any; alerts: any[] }; onChange: () => void }) {
+  const o = group.opportunity;
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex items-center gap-2 px-3 py-2 border-b">
+        <Link href={`/opportunities/${group.opportunityId}`} className="text-sm font-semibold hover:underline truncate">
+          {o?.name ?? `Opp #${group.opportunityId}`}
+        </Link>
+        {o?.stage && <Badge variant="secondary" className="text-xs capitalize">{o.stage}</Badge>}
+        {o?.value && <span className="text-xs text-muted-foreground">{formatAmount(o.value)}</span>}
+        <Badge variant="outline" className="ml-auto text-xs">{group.alerts.length} alert{group.alerts.length === 1 ? "" : "s"}</Badge>
+      </div>
+      <div className="p-2 space-y-2">
+        {group.alerts.map((alert: any) => <AlertCard key={alert.id} alert={alert} onDismiss={onChange} />)}
       </div>
     </div>
   );
@@ -298,12 +408,14 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
 
 export default function PipelineAlerts() {
   const [filterType, setFilterType] = useState<string>("all");
+  // The queue, or what is snoozed off it (U25).
+  const [showSnoozed, setShowSnoozed] = useState(false);
 
   const { data: summary, refetch: refetchSummary } = trpc.pipelineAlerts.summary.useQuery(undefined, {
     refetchInterval: 30000,
   });
   const { data: alerts = [], isLoading, refetch } = trpc.pipelineAlerts.list.useQuery(
-    { limit: 100 },
+    { limit: 100, snoozed: showSnoozed },
     { refetchInterval: 30000 }
   );
   const { data: stuckDeals = [], isLoading: stuckLoading, refetch: refetchStuck } =
@@ -349,6 +461,7 @@ export default function PipelineAlerts() {
 
   const filteredAlerts =
     filterType === "all" ? alerts : alerts.filter((a: any) => a.alertType === filterType);
+  const dealGroups = groupAlertsByDeal(filteredAlerts as any[]);
 
   const totalAlerts = summary?.total ?? 0;
   const filterTypes = ["all", "no_activity", "closing_soon_regression", "past_close_date", "amount_change", "no_champion", "deal_stuck"];
@@ -458,6 +571,10 @@ export default function PipelineAlerts() {
               : ALERT_CONFIG[t]?.label ?? t}
           </Button>
         ))}
+        <Button size="sm" variant={showSnoozed ? "default" : "outline"} className="text-xs ml-auto" aria-pressed={showSnoozed}
+          onClick={() => setShowSnoozed((v) => !v)}>
+          <AlarmClock className="h-3 w-3 mr-1" />{showSnoozed ? "Back to the queue" : `Snoozed (${summary?.snoozed ?? 0})`}
+        </Button>
       </div>
 
       {/* Stuck Deals section */}
@@ -529,9 +646,9 @@ export default function PipelineAlerts() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-2">
-              {filteredAlerts.map((alert: any) => (
-                <AlertCard key={alert.id} alert={alert} onDismiss={handleRefresh} />
+            <div className="space-y-3">
+              {dealGroups.map((g) => (
+                <DealAlertGroup key={g.opportunityId} group={g} onChange={handleRefresh} />
               ))}
             </div>
           )}

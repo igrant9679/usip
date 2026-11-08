@@ -24,7 +24,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity, AlertTriangle, BarChart3, Bot, Building2, CalendarClock,
-  CalendarDays, ClipboardCheck, ClipboardList, Database, DollarSign, FileText,
+  CalendarDays, ClipboardCheck, ClipboardList, Database, FileText,
   Filter, GitFork, Globe, Heart, HelpCircle, Home, Inbox, KanbanSquare,
   LayoutDashboard, LayoutTemplate, Linkedin, ListChecks, Mail, MailOpen, MailWarning, Megaphone,
   MessageSquare, Mic2, Network, Package, PenLine, Phone, PieChart, Plug,
@@ -227,12 +227,12 @@ export const TOOLS: Tool[] = [
   /* ── Proposals — price it, propose it, get a yes ─────────────────────── */
   // There is no electronic signing (audit 2026-10-20, R79): the client
   // accepts from their portal link.
+  // Quotes folded into proposals as their versioned pricing section (audit
+  // 2026-10-20, F34); /quotes redirects here.
   { href: "/proposals", label: "Proposals", icon: ClipboardList, group: "Proposals", primary: true,
-    description: "Client-facing proposals with portal links the client accepts from." },
-  { href: "/quotes", label: "Quotes", icon: DollarSign, group: "Proposals",
-    description: "Priced quotes attached to deals." },
+    description: "Client-facing proposals, with their versioned pricing, and portal links the client accepts from." },
   { href: "/products", label: "Products", icon: Package, group: "Proposals",
-    description: "Your sellable catalog, used by quotes and proposals." },
+    description: "Your sellable catalog, used to price proposals." },
 
   /* ── Dialer — calls, human and AI ────────────────────────────────────── */
   { href: "/v2/calls", label: "Calls", icon: Phone, group: "Dialer", primary: true,

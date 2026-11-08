@@ -134,7 +134,14 @@ describe("settings.save allowlist", () => {
     // key names belonging to other procedures in the same file.
     const saveIdx = adminRouter.indexOf("save: adminWsProcedure");
     expect(saveIdx, "settings save mutation not found — did it get renamed?").toBeGreaterThan(-1);
-    const schemaBlock = adminRouter.slice(saveIdx, saveIdx + 4000);
+    // 2026-11-07 (audit F29, batch CRMD): the block ends where the save's
+    // input schema ends — its `.mutation(` — instead of 4,000 characters on.
+    // Adding the fiscal-year and currency keys pushed sendWindowDays and
+    // outboundPaused past the fixed window, a false failure. Ending at the
+    // mutation is tighter, not looser: no later procedure's text is read.
+    const saveEnd = adminRouter.indexOf(".mutation(", saveIdx);
+    expect(saveEnd, "settings save has no .mutation( after its schema").toBeGreaterThan(saveIdx);
+    const schemaBlock = adminRouter.slice(saveIdx, saveEnd);
 
     const bodies = extractSaveCallBodies(settingsPage);
     const sentKeys = new Set(bodies.flatMap(topLevelKeys));

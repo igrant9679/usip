@@ -7,6 +7,7 @@ import { fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
+import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
 import { trpc } from "@/lib/trpc";
 import { invalidateDealReads } from "@/lib/crmCache";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -523,6 +524,8 @@ export default function Pipeline() {
    */
   const handleAcceptStage = (e: React.MouseEvent, opportunityId: number, toStage: string) => {
     e.stopPropagation();
+    // A suggestion to close it lost asks why, like every move to Lost (F28).
+    if (STAGES.find((s) => s.id === toStage)?.isLost) { requestMove(opportunityId, toStage); return; }
     setAcceptingIds((prev) => new Set(prev).add(opportunityId));
     setStage.mutate(
       { id: opportunityId, stage: toStage },
@@ -554,6 +557,15 @@ export default function Pipeline() {
   // The server returns the selected pipeline's deals (legacy deals with no
   // pipeline sit on the default board), so the board is what it sent.
   const filteredOpps = data ?? [];
+  // Every move on this board — a drop, a card's arrows, an accepted AI
+  // suggestion — asks why when it goes to a lost stage (audit 2026-10-20,
+  // F28). Skipping the question still moves the deal.
+  const lostPrompt = useLostReasonPrompt((v: { id: number; stage: string }) => setStage.mutate(v));
+  const requestMove = (id: number, toStage: string) => {
+    const st = STAGES.find((s) => s.id === toStage);
+    const deal = filteredOpps.find((o: any) => o.id === id);
+    lostPrompt.ask({ id, stage: toStage }, { isLost: !!st?.isLost, dealName: deal?.name ?? "this deal", stageLabel: st?.label ?? toStage });
+  };
   const scopeLabel = `${pipelineName ? `${pipelineName} pipeline` : "All deals"}${ownerUserId ? ", one rep" : ", every owner"}: the deals on the board.`;
 
   const grouped = useMemo(() => {
@@ -656,7 +668,7 @@ export default function Pipeline() {
                   onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes(DEAL_DRAG_TYPE)) e.preventDefault(); }}
                   onDrop={(e) => {
                     const id = droppedDealId(e.dataTransfer);
-                    if (id) setStage.mutate({ id, stage: s.id });
+                    if (id) requestMove(id, s.id);
                   }}
                 >
                   <div className="px-3 py-2 border-b flex items-center gap-2">
@@ -687,7 +699,7 @@ export default function Pipeline() {
                         isAnalyzing={analyzingIds.has(o.id)}
                         onAcceptStage={(e, toStage) => handleAcceptStage(e, o.id, toStage)}
                         isAccepting={acceptingIds.has(o.id)}
-                        onMove={(toStage) => setStage.mutate({ id: o.id, stage: toStage })}
+                        onMove={(toStage) => requestMove(o.id, toStage)}
                         stages={STAGES}
                       />
                     ))}
@@ -703,6 +715,7 @@ export default function Pipeline() {
       )}
 
       <NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={STAGES} pipelineId={pipelineId} />
+      {lostPrompt.dialog}
 
       <RecordDrawer
         open={!!drawer}

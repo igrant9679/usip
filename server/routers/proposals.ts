@@ -6,7 +6,7 @@
  *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, inArray, isNull, like, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, like, lt, ne, or, sql } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
 import {
@@ -25,6 +25,10 @@ import {
   proposalScoreHistory,
   contacts,
   accounts,
+  workspaceMembers,
+  quotes,
+  quoteLineItems,
+  products,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
@@ -47,9 +51,11 @@ import {
 } from "../_core/workspace";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertRowInWorkspace } from "../services/foreignIds";
-import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
+import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalPricing, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
 import { clientIpOf } from "../_core/clientIp";
 import { affectedRowsOf } from "../_core/claim";
+import { recordAudit } from "../audit";
+import { currentPricing, writePricingVersion } from "../services/quoteFold";
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 export const SECTION_KEYS = [
@@ -111,6 +117,9 @@ function generateShareToken() {
 
 /** Statuses a client can accept from: the proposal is out with them (R24). */
 const ACCEPTABLE_STATUSES = ["sent", "under_review", "revision_requested"] as const;
+
+/** Reopening the portal within this long is the same visit (F48). */
+export const PORTAL_VIEW_GAP_MS = 30 * 60_000;
 
 /**
  * Insert a system activity row for a proposal event.
@@ -189,6 +198,20 @@ async function snapshotAcceptedSections(db: Db, proposalId: number, savedByUserI
     }
   } catch (e) {
     console.warn(`[proposals] accepted-version snapshot failed for proposal ${proposalId}:`, e);
+  }
+}
+
+/**
+ * The pricing the client accepted (audit 2026-10-20, F34): the proposal's
+ * current quote version is recorded as accepted, so its version history says
+ * which price was agreed. Best-effort, like the section snapshot.
+ */
+async function acceptCurrentPricing(db: Db, workspaceId: number, proposalId: number) {
+  try {
+    await db.update(quotes).set({ status: "accepted" })
+      .where(and(eq(quotes.workspaceId, workspaceId), eq(quotes.proposalId, proposalId), isNull(quotes.supersededAt)));
+  } catch (e) {
+    console.warn(`[proposals] accepted pricing stamp failed for proposal ${proposalId}:`, e);
   }
 }
 
@@ -870,6 +893,7 @@ export const proposalsRouter = router({
         return { ok: true, alreadyAccepted: true, opportunityId: proposal.linkedOpportunityId ?? null, taskId: null };
       }
       await snapshotAcceptedSections(db, input.id, ctx.user.id);
+      await acceptCurrentPricing(db, ctx.workspace.id, input.id);
       // Create follow-up task
       const taskTitle = `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`;
       const taskResult = await db.insert(tasks).values({
@@ -977,6 +1001,13 @@ export const proposalsRouter = router({
       await db.delete(proposalMilestones).where(eq(proposalMilestones.proposalId, input.id));
       await db.delete(proposalSections).where(eq(proposalSections.proposalId, input.id));
       await db.delete(proposalFeedback).where(eq(proposalFeedback.proposalId, input.id));
+      // Its pricing versions are part of it (F34): the quotes and their lines go too.
+      const pricing = await db.select({ id: quotes.id }).from(quotes)
+        .where(and(eq(quotes.workspaceId, ctx.workspace.id), eq(quotes.proposalId, input.id)));
+      if (pricing.length > 0) {
+        await db.delete(quoteLineItems).where(and(eq(quoteLineItems.workspaceId, ctx.workspace.id), inArray(quoteLineItems.quoteId, pricing.map((q) => q.id))));
+        await db.delete(quotes).where(and(eq(quotes.workspaceId, ctx.workspace.id), eq(quotes.proposalId, input.id)));
+      }
       await db.delete(proposals).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
@@ -1041,12 +1072,52 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       // A draft is not served, and says what an unknown link says (G40).
       if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       const proposal = rows[0];
-      const [sections, milestones] = await Promise.all([
+      const [sections, milestones, pricing] = await Promise.all([
         getSections(db, proposal.id),
         getMilestones(db, proposal.id),
+        currentPricing(db, proposal.workspaceId, proposal.id),
       ]);
-      // The fields the portal shows, not the internal row (R67).
-      return { proposal: portalView(proposal), sections: sections.map(portalSection), milestones: milestones.map(portalMilestone) };
+      // The fields the portal shows, not the internal row (R67); the pricing
+      // section is the current quote version's table (F34).
+      return { proposal: portalView(proposal), sections: sections.map(portalSection), milestones: milestones.map(portalMilestone), pricing: portalPricing(pricing) };
+    }),
+
+  /**
+   * The portal was opened (audit 2026-10-20, F48): first and last viewed and
+   * a view count, shown to the team on the proposal. Nothing about the viewer
+   * is kept — no address, no browser — only when. Reopening within
+   * PORTAL_VIEW_GAP_MS is the same visit, so a refresh does not count twice,
+   * and a signed-in member of the proposal's own workspace (a rep checking
+   * the link) is not counted at all. A draft or unknown link records nothing.
+   */
+  recordView: publicProcedure
+    .input(z.object({ token: z.string().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const [p] = await db.select({ id: proposals.id, workspaceId: proposals.workspaceId, status: proposals.status })
+        .from(proposals).where(eq(proposals.shareToken, input.token)).limit(1);
+      if (!p || !servedOnPortal(p.status)) return { counted: false };
+      if (ctx.user) {
+        const [m] = await db.select({ id: workspaceMembers.id }).from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, p.workspaceId), eq(workspaceMembers.userId, ctx.user.id))).limit(1);
+        if (m) return { counted: false };
+      }
+      const now = new Date();
+      const visit = await db.update(proposals)
+        .set({
+          portalViewCount: sql`${proposals.portalViewCount} + 1`,
+          portalFirstViewedAt: sql`COALESCE(${proposals.portalFirstViewedAt}, ${now})`,
+          portalLastViewedAt: now,
+        } as never)
+        .where(and(
+          eq(proposals.id, p.id),
+          or(isNull(proposals.portalLastViewedAt), lt(proposals.portalLastViewedAt, new Date(now.getTime() - PORTAL_VIEW_GAP_MS))),
+        ));
+      if (Number((visit as any)?.[0]?.affectedRows ?? 0) === 1) return { counted: true };
+      // The same visit: only the last-viewed time moves.
+      await db.update(proposals).set({ portalLastViewedAt: now } as never).where(eq(proposals.id, p.id));
+      return { counted: false };
     }),
 
   /** Submit client feedback — public. */
@@ -1120,9 +1191,17 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       // were accepted from the link, and a double click ran every side effect
       // twice. The update names the states it accepts from, so of two clicks
       // one lands.
+      //
+      // The e-signature record (audit 2026-10-20, F48) is written by that same
+      // update, so it is the winning click's: the name typed, the email given,
+      // the server's time and the address the request came from. It is shown
+      // on the proposal; the timeline keeps the fuller record below.
+      const signerName = (input.signerName || input.clientName || "").trim().slice(0, 200) || null;
+      const signerEmail = (input.signerEmail || "").trim().slice(0, 320) || null;
+      const signerIp = (ctx.req ? clientIpOf(ctx.req as never) : null)?.slice(0, 64) || null;
       const claim = await db
         .update(proposals)
-        .set({ status: "accepted", acceptedAt: new Date() })
+        .set({ status: "accepted", acceptedAt: new Date(), acceptedSignerName: signerName, acceptedSignerEmail: signerEmail, acceptedIp: signerIp })
         .where(and(
           eq(proposals.id, proposal.id),
           inArray(proposals.status, ACCEPTABLE_STATUSES),
@@ -1137,19 +1216,20 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal is not open for acceptance. Contact the team that sent it." });
       }
       await snapshotAcceptedSections(db, proposal.id, null);
+      await acceptCurrentPricing(db, proposal.workspaceId, proposal.id);
       /**
        * Who accepted (audit 2026-10-20, G18). Written only by the click that
        * won the claim above, so a double click records one acceptance.
        */
-      const signer = (input.signerName || input.clientName || "").trim() || null;
+      const signer = signerName;
       await logProposalActivity(db, {
         workspaceId: proposal.workspaceId,
         proposalId: proposal.id,
         subject: signer ? `Accepted by ${signer} on the client portal`.slice(0, 240) : "Accepted on the client portal",
         body: acceptanceRecord({
           signerName: signer,
-          signerEmail: input.signerEmail || null,
-          ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+          signerEmail,
+          ip: signerIp,
           userAgent: String((ctx.req as { headers?: Record<string, unknown> } | undefined)?.headers?.["user-agent"] ?? "") || null,
           timeZone: input.timeZone ?? null,
           at: new Date(),
@@ -1414,6 +1494,108 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),
+
+  // ── Pricing: the quote is the proposal's pricing section (F34, F36) ───────
+
+  /**
+   * The proposal's pricing: the current quote version with its lines, every
+   * version (newest first) for the history, and the linked deal's value so
+   * the page can say whether saving would change it.
+   */
+  pricing: workspaceProcedure
+    .input(z.object({ proposalId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      const current = await currentPricing(db, ctx.workspace.id, proposal.id);
+      const versions = await db.select({
+        id: quotes.id, version: quotes.version, total: quotes.total, status: quotes.status, quoteNumber: quotes.quoteNumber,
+        createdAt: quotes.createdAt, createdByUserId: quotes.createdByUserId, supersededAt: quotes.supersededAt, pdfUrl: quotes.pdfUrl,
+      }).from(quotes)
+        .where(and(eq(quotes.workspaceId, ctx.workspace.id), eq(quotes.proposalId, proposal.id)))
+        .orderBy(desc(quotes.version), desc(quotes.id));
+      let dealValue: string | null = null;
+      if (proposal.linkedOpportunityId) {
+        const [opp] = await db.select({ value: opportunities.value }).from(opportunities)
+          .where(and(eq(opportunities.id, proposal.linkedOpportunityId), eq(opportunities.workspaceId, ctx.workspace.id))).limit(1);
+        dealValue = opp ? String(opp.value) : null;
+      }
+      return { current, versions, linkedOpportunityId: proposal.linkedOpportunityId ?? null, dealValue, locked: proposal.status === "accepted" };
+    }),
+
+  /**
+   * A pricing change: a new quote version for the proposal (the one it
+   * replaces is kept, superseded), which becomes the proposal's price. The
+   * linked deal's value moves to the new total only when `setDealValue` —
+   * the page asks first, naming both amounts. An accepted proposal's pricing
+   * is what the client agreed to, so it is not changed here.
+   */
+  savePricing: repProcedure
+    .input(z.object({
+      proposalId: z.number(),
+      lineItems: z.array(z.object({
+        productId: z.number().optional(),
+        name: z.string().trim().min(1).max(200),
+        description: z.string().max(2000).optional(),
+        quantity: z.number().int().min(1).max(1_000_000),
+        unitPrice: z.number().min(0).max(1e10),
+        discountPct: z.number().min(0).max(100).default(0),
+      })).min(1).max(200),
+      notes: z.string().max(5000).optional(),
+      terms: z.string().max(10000).optional(),
+      expiresInDays: z.number().int().min(1).max(180).default(30),
+      setDealValue: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      if (proposal.status === "accepted") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal was accepted; its pricing is what the client agreed to. Duplicate it to price a new version." });
+      }
+      if (!proposal.linkedOpportunityId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Link this proposal to a deal first: its pricing sets the deal's value." });
+      }
+      const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value })
+        .from(opportunities).where(and(eq(opportunities.id, proposal.linkedOpportunityId), eq(opportunities.workspaceId, ctx.workspace.id))).limit(1);
+      if (!opp) throw new TRPCError({ code: "BAD_REQUEST", message: "The deal this proposal is linked to is gone. Link it to a deal first." });
+      // A line's product, when it names one, is this workspace's (X1.1).
+      const productIds = input.lineItems.map((l) => l.productId).filter((id): id is number => typeof id === "number");
+      if (productIds.length > 0) {
+        const found = await db.select({ id: products.id }).from(products).where(and(eq(products.workspaceId, ctx.workspace.id), inArray(products.id, productIds)));
+        if (new Set(found.map((p) => p.id)).size !== new Set(productIds).size) throw new TRPCError({ code: "NOT_FOUND", message: "A product on this pricing is not in this workspace." });
+      }
+      const v = await writePricingVersion(db, {
+        workspaceId: ctx.workspace.id, proposalId: proposal.id, opportunityId: opp.id, actorUserId: ctx.user.id,
+        lineItems: input.lineItems, notes: input.notes?.trim() || null, terms: input.terms?.trim() || null, expiresInDays: input.expiresInDays,
+      });
+      // The proposal's price is its pricing section's total: one document.
+      await db.update(proposals).set({ budget: v.total }).where(and(eq(proposals.id, proposal.id), eq(proposals.workspaceId, ctx.workspace.id)));
+      let dealValueChanged = false;
+      if (input.setDealValue && Number(opp.value ?? 0) !== Number(v.total)) {
+        await db.update(opportunities).set({ value: v.total } as never)
+          .where(and(eq(opportunities.id, opp.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+        // A large move of the amount is an alert, as on any other write (R38).
+        const { noteAmountChange } = await import("./pipelineAlerts");
+        await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), Number(v.total));
+        await recordAudit({
+          workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: opp.id,
+          before: { value: opp.value }, after: { value: v.total, source: "proposal_pricing", proposalId: proposal.id, version: v.version },
+        });
+        dealValueChanged = true;
+      }
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id,
+        proposalId: proposal.id,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? undefined,
+        subject: `Pricing version ${v.version} saved`,
+        body: `Total ${v.total}.${dealValueChanged ? ` The deal's value was set to it (was ${opp.value}).` : " The deal's value was left as it was."}`,
+      });
+      return { quoteId: v.quoteId, version: v.version, total: v.total, dealValueChanged };
+    }),
+
   /**
    * A company's OPEN deals, for the new-proposal wizard's "Deal" picker (R25).
    * Closed ones are left out: accepting never moves them.

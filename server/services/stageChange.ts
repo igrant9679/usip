@@ -20,6 +20,8 @@
  *     so of two simultaneous moves only one lands and runs its side effects;
  *   • records stageEnteredAt, and wonAt / lostAt (cleared when the deal leaves
  *     a closed stage), which quota and the deal metrics count from;
+ *   • on a move to a lost stage, records why (F28): the reason the mover gave,
+ *     or "Not given" when they skipped the question, so the move never blocks;
  *   • then writes the history, tells the owner, runs closed-won (the account
  *     becomes a Customer) or closed-lost (a win-back task), audits, and fires
  *     the stage_changed workflow rules — for every path alike.
@@ -37,6 +39,7 @@ import type { getDb } from "../db";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { stageResolver } from "../_core/stageSemantics";
 import { notifyIfEnabled } from "./policyNotify";
+import { normalizeLostReason } from "@shared/lostReason";
 import { ensureCustomerForWonOpp } from "./wonToCustomer";
 import { affectedRowsOf } from "../_core/claim";
 
@@ -80,6 +83,11 @@ export async function changeOpportunityStage(
     alsoSet?: { value?: string };
     /** Overrides the stage's default win %. */
     winProb?: number;
+    /**
+     * Why the deal was lost, on a move to a lost stage (audit 2026-10-20,
+     * F28). Left out or blank, the loss is recorded as "Not given".
+     */
+    lostReason?: string | null;
   },
 ): Promise<StageChangeResult> {
   const { workspaceId, opportunityId, toStage } = input;
@@ -106,6 +114,8 @@ export async function changeOpportunityStage(
 
   const now = new Date();
   const winProb = input.winProb ?? (meta.isWon ? 100 : meta.isLost ? 0 : meta.defaultWinProb ?? before.winProb);
+  // Written with the move, so every lost deal carries a reason (F28).
+  const lostReason = meta.isLost ? normalizeLostReason(input.lostReason) : null;
   const res = await db
     .update(opportunities)
     .set({
@@ -115,6 +125,7 @@ export async function changeOpportunityStage(
       stageEnteredAt: now,
       wonAt: meta.isWon ? now : null,
       lostAt: meta.isLost ? now : null,
+      ...(lostReason !== null ? { lostReason } : {}),
       ...(input.alsoSet?.value !== undefined ? { value: input.alsoSet.value } : {}),
     } as never)
     .where(and(
@@ -136,7 +147,7 @@ export async function changeOpportunityStage(
       toStage,
       changedByUserId: input.actorUserId,
       daysInPrevStage,
-      note: input.note ?? null,
+      note: input.note ?? (lostReason !== null ? `Lost: ${lostReason}` : null),
     });
   } catch (e) {
     console.warn(`[stageChange] history insert failed for opportunity ${opportunityId}:`, e);
@@ -219,7 +230,7 @@ export async function changeOpportunityStage(
       entityType: "opportunity",
       entityId: opportunityId,
       before: { stage: before.stage },
-      after: { stage: toStage, source: input.source, customerCreated },
+      after: { stage: toStage, source: input.source, customerCreated, ...(lostReason !== null ? { lostReason } : {}) },
     });
   } catch (e) {
     console.warn(`[stageChange] audit failed for opportunity ${opportunityId}:`, e);

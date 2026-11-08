@@ -419,6 +419,29 @@ export const opportunities = mysqlTable(
 );
 export type Opportunity = typeof opportunities.$inferSelect;
 
+/**
+ * Every change of a deal's forecast category (migration 0403, audit
+ * 2026-10-20, F29): who set it, when, from what, and whether it was someone
+ * other than the deal's owner — a manager's override of the rep's call.
+ */
+export const opportunityForecastChanges = mysqlTable(
+  "opportunity_forecast_changes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    opportunityId: int("opportunityId").notNull(),
+    fromCategory: varchar("fromCategory", { length: 16 }),
+    toCategory: varchar("toCategory", { length: 16 }),
+    changedByUserId: int("changedByUserId"),
+    ownerUserId: int("ownerUserId"),
+    isOverride: boolean("isOverride").default(false).notNull(),
+    note: varchar("note", { length: 500 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byOpp: index("ix_ofc_opp").on(t.workspaceId, t.opportunityId) }),
+);
+export type OpportunityForecastChange = typeof opportunityForecastChanges.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    CRM polish (migration 0081): notes + multi-pipeline support
    ────────────────────────────────────────────────────────────────────────── */
@@ -1354,6 +1377,13 @@ export const customers = mysqlTable(
       "renewed",
       "churned",
     ]).default("early").notNull(),
+    /**
+     * Migration 0402 (audit 2026-10-20, F36): when a churn was recorded with
+     * "Record churn", and why. NULL for every customer not recorded churned
+     * that way; a renewal clears both.
+     */
+    churnedAt: timestamp("churnedAt"),
+    churnReason: varchar("churnReason", { length: 200 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -1666,12 +1696,23 @@ export const quotes = mysqlTable(
     aiDiscountCeil: decimal("aiDiscountCeil", { precision: 5, scale: 2 }),
     aiPriceRationale: text("aiPriceRationale"),
     aiPriceScoredAt: timestamp("aiPriceScoredAt"),
+    /**
+     * Migration 0404 (audit 2026-10-20, F34, F36): a quote is a proposal's
+     * pricing section. `version` counts its pricing changes; a version a newer
+     * one replaced keeps its row, stamped `supersededAt`, so every earlier
+     * price stays viewable. NULL proposalId: not folded yet (services/quoteFold
+     * attaches it at boot).
+     */
+    proposalId: int("proposalId"),
+    version: int("version").default(1).notNull(),
+    supersededAt: timestamp("supersededAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byOpp: index("ix_quote_opp").on(t.opportunityId),
     uqNum: uniqueIndex("uq_quote_num").on(t.workspaceId, t.quoteNumber),
+    byProposal: index("ix_quote_proposal").on(t.workspaceId, t.proposalId),
   }),
 );
 export const quoteLineItems = mysqlTable(
@@ -1870,6 +1911,13 @@ export type LeadRoutingRule = typeof leadRoutingRules.$inferSelect;
 export const workspaceSettings = mysqlTable("workspace_settings", {
   workspaceId: int("workspaceId").primaryKey(),
   timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
+  /**
+   * Migration 0403 (audit 2026-10-20, F29, R41): the month the fiscal year
+   * starts (1 = January: calendar quarters, what every workspace had) and the
+   * currency amounts are shown in. Read through services/workspaceRevenue.
+   */
+  fiscalYearStartMonth: int("fiscalYearStartMonth").default(1).notNull(),
+  currency: varchar("currency", { length: 3 }).default("USD").notNull(),
   // The send window (Migration 0191): everything Velocity sends to prospects on
   // its own waits for [start, end) on these weekdays, in `timezone`. See
   // @shared/sendWindow. Days are JS weekday numbers, 0 = Sunday.
@@ -3283,6 +3331,16 @@ export const pipelineAlerts = mysqlTable(
     details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
     dismissedAt: timestamp("dismissedAt"),
     dismissedByUserId: int("dismissedByUserId"),
+    /**
+     * Migration 0400 (audit 2026-10-20, U25): alerts as a work queue. A
+     * snoozed alert stays live but is off the queue until this instant; an
+     * alert resolved because the deal had new activity is held until then
+     * too, so it does not come straight back. NULL = not snoozed.
+     */
+    snoozedUntil: timestamp("snoozedUntil"),
+    snoozedByUserId: int("snoozedByUserId"),
+    /** Why it left the queue: dismissed | cleared | closed | activity. NULL while live. */
+    resolvedReason: varchar("resolvedReason", { length: 16 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -3994,6 +4052,19 @@ export const proposals = mysqlTable(
     emailOpenedAt: timestamp("emailOpenedAt"),
     emailClickedAt: timestamp("emailClickedAt"),
     acceptedAt: timestamp("acceptedAt"),
+    /**
+     * Migration 0401 (audit 2026-10-20, F48): the e-signature record of a
+     * portal acceptance — the name typed, the email given and the address the
+     * accepting request came from; acceptedAt is its time. NULL for a
+     * proposal a team member marked accepted, or one accepted before this.
+     */
+    acceptedSignerName: varchar("acceptedSignerName", { length: 200 }),
+    acceptedSignerEmail: varchar("acceptedSignerEmail", { length: 320 }),
+    acceptedIp: varchar("acceptedIp", { length: 64 }),
+    /** Portal views (0401, F48): when, and how many visits. Nothing about who. */
+    portalFirstViewedAt: timestamp("portalFirstViewedAt"),
+    portalLastViewedAt: timestamp("portalLastViewedAt"),
+    portalViewCount: int("portalViewCount").default(0).notNull(),
     expiresAt: timestamp("expiresAt"),
     /** When true, the email-open auto-extend logic is skipped for this proposal */
     skipAutoExtend: boolean("skipAutoExtend").default(false).notNull(),

@@ -27,6 +27,7 @@ import { opportunities } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { stageResolver } from "../_core/stageSemantics";
 import { forecastBuckets } from "@shared/forecastCategory";
+import { renewalStageFor } from "@shared/renewalStage";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -212,15 +213,77 @@ export function instantMonthKey(tz: string, d: Date): string {
   return monthKey(y, m);
 }
 
-export function currentRanges(tz: string, now: Date = new Date()) {
+/* ── The fiscal calendar (audit 2026-10-20, F29 and R41) ───────────────────
+ * A workspace's fiscal year starts in the month it sets (workspace_settings.
+ * fiscalYearStartMonth, January unless an admin changes it), and its quarters
+ * are the three-month runs from there. A fiscal year is named by the calendar
+ * year it ends in. With January every function below is the calendar one,
+ * which is what every number counted by before. */
+
+/** Months since the fiscal year began, 0–11. */
+const fiscalOffset = (m: number, fyStart: number) => (((m - fyStart) % 12) + 12) % 12;
+
+/** The fiscal quarter a calendar month is in: its fiscal year, its number, and its first month. */
+export function fiscalQuarterOf(y: number, m: number, fyStart = 1): { fy: number; q: number; start: { y: number; m: number } } {
+  const off = fiscalOffset(m, fyStart);
+  const fyFirst = addMonths(y, m, -off);
+  const last = addMonths(fyFirst.y, fyFirst.m, 11);
+  const q = Math.floor(off / 3) + 1;
+  return { fy: last.y, q, start: addMonths(fyFirst.y, fyFirst.m, (q - 1) * 3) };
+}
+
+/** The first calendar month of fiscal year `fy`. */
+export function fiscalYearFirstMonth(fy: number, fyStart = 1): { y: number; m: number } {
+  const last = fyStart === 1 ? { y: fy, m: 12 } : { y: fy, m: fyStart - 1 };
+  return addMonths(last.y, last.m, -11);
+}
+
+/** The first calendar month of quarter `q` of fiscal year `fy`. */
+export function fiscalQuarterFirstMonth(fy: number, q: number, fyStart = 1): { y: number; m: number } {
+  const first = fiscalYearFirstMonth(fy, fyStart);
+  return addMonths(first.y, first.m, (q - 1) * 3);
+}
+
+const monthSpan = (s: { y: number; m: number }, n: number, withYears: boolean) => {
+  const e = addMonths(s.y, s.m, n - 1);
+  return withYears ? `${MONTHS[s.m - 1]} ${s.y}–${MONTHS[e.m - 1]} ${e.y}` : `${MONTHS[s.m - 1]}–${MONTHS[e.m - 1]}`;
+};
+
+/** "Q4 2026 (Oct–Dec)" for a calendar year; "Q1 FY2027 (Feb 2026–Apr 2026)" otherwise. */
+export function fiscalQuarterLabel(fy: number, q: number, fyStart = 1): string {
+  const s = fiscalQuarterFirstMonth(fy, q, fyStart);
+  return fyStart === 1 ? `Q${q} ${fy} (${monthSpan(s, 3, false)})` : `Q${q} FY${fy} (${monthSpan(s, 3, true)})`;
+}
+
+/** "2026" for a calendar year; "FY2027 (Feb 2026–Jan 2027)" otherwise. */
+export function fiscalYearLabel(fy: number, fyStart = 1): string {
+  return fyStart === 1 ? String(fy) : `FY${fy} (${monthSpan(fiscalYearFirstMonth(fy, fyStart), 12, true)})`;
+}
+
+/**
+ * This month, last month, this fiscal quarter and this fiscal year, in the
+ * workspace's zone. `fyStart` 1 (the default) is the calendar year.
+ */
+export function currentRanges(tz: string, now: Date = new Date(), fyStart = 1) {
   const { y, m } = zonedYmd(tz, now);
   const prev = addMonths(y, m, -1);
-  const qm = Math.floor((m - 1) / 3) * 3 + 1;
+  const fq = fiscalQuarterOf(y, m, fyStart);
+  const fyFirst = fiscalYearFirstMonth(fq.fy, fyStart);
+  const nextQ = addMonths(fq.start.y, fq.start.m, 3);
+  const nq = fiscalQuarterOf(nextQ.y, nextQ.m, fyStart);
   return {
     month: monthsRange(tz, y, m, 1),
     prevMonth: monthsRange(tz, prev.y, prev.m, 1),
-    quarter: monthsRange(tz, y, qm, 3),
-    year: monthsRange(tz, y, 1, 12),
+    quarter: monthsRange(tz, fq.start.y, fq.start.m, 3),
+    year: monthsRange(tz, fyFirst.y, fyFirst.m, 12),
+    nextQuarter: monthsRange(tz, nextQ.y, nextQ.m, 3),
+    quarterLabel: fiscalQuarterLabel(fq.fy, fq.q, fyStart),
+    nextQuarterLabel: fiscalQuarterLabel(nq.fy, nq.q, fyStart),
+    yearLabel: fiscalYearLabel(fq.fy, fyStart),
+    /** The quota keys these periods are stored under ("2026-Q4", "2026-FY"). */
+    quarterKey: `${fq.fy}-Q${fq.q}`,
+    nextQuarterKey: `${nq.fy}-Q${nq.q}`,
+    yearKey: `${fq.fy}-FY`,
   };
 }
 
@@ -251,26 +314,98 @@ export const monthLabel = (m: number) => MONTHS[m - 1];
  * decides how much of the calendar around it counts — a quarterly target
  * stored under a month (as they were before this) measures that month's
  * quarter, an annual one the whole year.
+ *
+ * Quarters and years are the workspace's fiscal ones (F29): "2027-Q1" is the
+ * first quarter of FY2027 and "2027-FY" the whole of it. With a January start
+ * (the default) these are calendar quarters and years, as before.
  */
 export function quotaPeriodRange(
   tz: string,
   period: string,
   periodType: "monthly" | "quarterly" | "annual" | string | null | undefined,
+  fyStart = 1,
 ): Range & { label: string } {
   const q = /^(\d{4})-Q([1-4])$/.exec(period);
   const mm = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period);
   const fy = /^(\d{4})-FY$/.exec(period);
   if (!q && !mm && !fy) throw new Error(`Not a quota period: ${period}`);
   const y = Number((q ?? mm ?? fy)![1]);
-  const m = q ? (Number(q[2]) - 1) * 3 + 1 : mm ? Number(mm[2]) : 1;
   const type = periodType === "annual" || fy ? "annual" : periodType === "quarterly" || q ? "quarterly" : "monthly";
-  if (type === "annual") return { ...monthsRange(tz, y, 1, 12), label: String(y) };
-  if (type === "quarterly") {
-    const qm = Math.floor((m - 1) / 3) * 3 + 1;
-    return { ...monthsRange(tz, y, qm, 3), label: `Q${(qm + 2) / 3} ${y} (${MONTHS[qm - 1]}–${MONTHS[qm + 1]})` };
+  if (type === "annual") {
+    // A year key names the fiscal year; a month names the fiscal year it is in.
+    const fiscalYear = fy ? y : q ? y : fiscalQuarterOf(y, Number(mm![2]), fyStart).fy;
+    const s = fiscalYearFirstMonth(fiscalYear, fyStart);
+    return { ...monthsRange(tz, s.y, s.m, 12), label: fiscalYearLabel(fiscalYear, fyStart) };
   }
+  if (type === "quarterly") {
+    const fq = q ? { fy: y, q: Number(q[2]) } : fiscalQuarterOf(y, Number(mm![2]), fyStart);
+    const s = fiscalQuarterFirstMonth(fq.fy, fq.q, fyStart);
+    return { ...monthsRange(tz, s.y, s.m, 3), label: fiscalQuarterLabel(fq.fy, fq.q, fyStart) };
+  }
+  const m = Number(mm![2]);
   return { ...monthsRange(tz, y, m, 1), label: `${MONTHS[m - 1]} ${y}` };
+}
+
+/**
+ * Quota pacing (F29): closed against the target, and closed plus Commit, set
+ * against how much of the period has gone. `expectedToDate` is the target
+ * times the time elapsed; a rep "ahead" has closed more than that already, "on
+ * track" will reach the target if their Commit closes, "behind" will not.
+ */
+export function quotaPacing(o: { target: number; closed: number; commit: number; range: Range; now?: Date }) {
+  const now = (o.now ?? new Date()).getTime();
+  const span = o.range.end.getTime() - o.range.start.getTime();
+  const elapsed = span > 0 ? Math.max(0, Math.min(1, (now - o.range.start.getTime()) / span)) : 1;
+  const target = Math.max(0, o.target);
+  const expectedToDate = Math.round(target * elapsed * 100) / 100;
+  const projected = Math.round((o.closed + o.commit) * 100) / 100;
+  const pct = (v: number) => (target > 0 ? Math.round((v / target) * 100) : null);
+  const status: "no_target" | "attained" | "ahead" | "on_track" | "behind" =
+    target <= 0 ? "no_target"
+      : o.closed >= target ? "attained"
+      : o.closed >= expectedToDate ? "ahead"
+      : projected >= target ? "on_track"
+      : "behind";
+  return {
+    target, closed: o.closed, commit: o.commit, projected, expectedToDate,
+    elapsedPct: Math.round(elapsed * 100),
+    attainmentPct: pct(o.closed),
+    projectedPct: pct(projected),
+    status,
+  };
 }
 
 /** "YYYY-MM" an open deal is expected to close in, or null with no date. */
 export const closeMonthKey = (d: MetricDeal) => calendarMonthKey(d.closeDate);
+
+/* ── Customer revenue (audit 2026-10-20, U26 and F36) ───────────────────── */
+
+export type CustomerRevenueRow = {
+  arr: unknown;
+  renewalStage: string;
+  contractEnd: Date | string | null;
+  /** When the customer churned (recorded by cs.recordChurn), else null. */
+  churnedAt?: Date | string | null;
+};
+
+/**
+ * ARR, the one way (U26, F36): the Customers KPIs and the company page read
+ * this, and Record renewal / Record churn change the rows it sums. A churned
+ * customer is not ARR (R58) — their stored arr is the ARR that churned, and
+ * counts in `churnedArr` when they churned inside `range` (by churnedAt, or by
+ * the contract's end for a churn recorded before 0402). Summed in cents.
+ */
+export function customerArrTotals(
+  rows: CustomerRevenueRow[],
+  opts: { now?: Date; range?: Range } = {},
+): { arr: number; customers: number; churnedArr: number; churned: number } {
+  let arr = 0, customers = 0, churnedArr = 0, churned = 0;
+  for (const c of rows) {
+    const cents = Math.round(Number(c.arr ?? 0) * 100) || 0;
+    const stage = renewalStageFor({ current: c.renewalStage, contractEnd: c.contractEnd, now: opts.now });
+    if (stage !== "churned") { arr += cents; customers++; continue; }
+    const at = toDate(c.churnedAt) ?? toDate(c.contractEnd);
+    if (!opts.range || inRange(at, opts.range)) { churnedArr += cents; churned++; }
+  }
+  return { arr: dollars(arr), customers, churnedArr: dollars(churnedArr), churned };
+}

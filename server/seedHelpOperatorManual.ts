@@ -154,7 +154,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page. (The Broadcasts page that prepared one message to a segment was retired on 2026-10-27; a fixed-copy Revenue Engine campaign does that job.)
 
-**Proposals** (/proposals) are client-facing documents with sections, milestones and a portal link where the client reviews and accepts them; **Quotes** (/quotes) price a deal from the **Products** (/products) catalog.
+**Proposals** (/proposals) are client-facing documents with sections, milestones, a portal link and an e-signature on accept; their **Pricing** section is a versioned quote priced from the **Products** (/products) catalog, and saving it can set the deal's value.
 
 **Calls** (/v2/calls) is the call queue and log, plus AI voice agents that answer call-backs and log transcripts.
 
@@ -417,7 +417,7 @@ If the panel is empty, you are done with this block.
 
 1. **Deals**: every open deal has a dated next step and an owner; move stages honestly.
 2. **Pipeline Alerts**: clear each alert by acting or by acknowledging with a note.
-3. **Proposals and Quotes**: anything sent more than five days ago without an open gets a call task.
+3. **Proposals**: anything sent more than five days ago without an open gets a call task.
 4. Log every touch on the record; it feeds the Deal Autopilot and the forecast.
 
 ## Customer success (about 15 minutes)
@@ -574,7 +574,7 @@ Handling a reply marks it handled and stops the sequence for that person. Correc
     bodyMarkdown: `1. **Deals** by stage, sorted by days in stage. Every deal: a dated next step, a named champion, a realistic close date. Move stages honestly; stage history is kept.
 2. **Pipeline Alerts** cleared; Deal Autopilot suggestions accepted or dismissed.
 3. **Forecast**: commit against best case; adjust win probabilities; note slips with reasons.
-4. **Proposals and Quotes**: follow up on anything sent more than five days ago; check portal opens.
+4. **Proposals**: follow up on anything sent more than five days ago; check portal opens.
 5. **Log** every call, meeting and note on the record; the autopilot and the forecast read them.
 
 Managers: compare forecast to actuals at quarter end and adjust stage probabilities.`,

@@ -11,6 +11,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { pressable } from "@/lib/pressable";
 import { churnRiskFor, HEALTH_TIER_TONE } from "@shared/customerHealth";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { RecordRenewalOrChurn } from "@/components/usip/RecordRenewalOrChurn";
+
+type CustomerSort = "health" | "arr" | "renewal" | "name" | "nps";
 
 // The tiers the server writes, coloured from the one shared reading (R58).
 // This listed "thriving" and "neutral", which no customer holds, and missed
@@ -20,7 +24,30 @@ const TIER_TONE: Record<string, "success" | "info" | "warning" | "danger"> = HEA
 export default function Customers() {
   const [selected, setSelected] = useState<number | null>(null);
   const utils = trpc.useUtils();
-  const { data: list, isLoading: listLoading, error: listError, refetch: listRefetch } = trpc.cs.list.useQuery();
+  // Search, sort and pages on the server (audit 2026-10-20, U26): the table
+  // loaded every customer and could only be read in health order.
+  const [q, setQ] = useState("");
+  const query = useDebouncedValue(q.trim());
+  const [sort, setSort] = useState<CustomerSort>("health");
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+  const { data: listData, isLoading: listLoading, error: listError, refetch: listRefetch } = trpc.cs.search.useQuery({ q: query || undefined, sort, dir, page, pageSize: PAGE_SIZE });
+  const list = listData?.rows;
+  const total = listData?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const sortBy = (s: CustomerSort) => {
+    if (s === sort) setDir(dir === "asc" ? "desc" : "asc");
+    else { setSort(s); setDir(s === "name" || s === "renewal" ? "asc" : "desc"); }
+    setPage(1);
+  };
+  const header = (s: CustomerSort, label: string, align: "left" | "right" = "left") => (
+    <th className={`px-3 py-2 text-${align}`} aria-sort={sort === s ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="inline-flex items-center gap-1 uppercase hover:text-foreground" onClick={() => sortBy(s)}>
+        {label}{sort === s ? (dir === "asc" ? " ↑" : " ↓") : ""}
+      </button>
+    </th>
+  );
   const { data: kpis } = trpc.cs.kpis.useQuery();
   const detail = trpc.cs.get.useQuery({ id: selected! }, { enabled: !!selected });
   const amendments = trpc.cs.listAmendments.useQuery({ customerId: selected! }, { enabled: !!selected });
@@ -80,7 +107,7 @@ export default function Customers() {
       <div className="p-4 md:p-5 space-y-4">
         {kpis && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <StatCard label="ARR" value={fmt$(kpis.arr)} />
+            <StatCard label="ARR" value={fmt$(kpis.arr)} hint={kpis.churnedArrThisQuarter > 0 ? `${fmt$(kpis.churnedArrThisQuarter)} churned this quarter` : undefined} />
             <StatCard label="Expansion" value={fmt$(kpis.expansion)} tone="success" />
             <StatCard label="At-risk" value={kpis.atRisk} tone={kpis.atRisk > 0 ? "warning" : "default"} />
             <StatCard label="Renewing 90d" value={kpis.renewing90} />
@@ -91,13 +118,16 @@ export default function Customers() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2">
-            <Section title="All customers">
-              {listError ? <QueryError message={listError.message} onRetry={() => listRefetch()} /> : listLoading ? <TableSkeleton rows={6} /> : (list ?? []).length === 0 ? <EmptyState icon={Heart} title="No customers" /> : (
+            <Section title="All customers" description={total > 0 ? `${total.toLocaleString()} customer${total === 1 ? "" : "s"}${query ? ` matching “${query}”` : ""}` : undefined}
+              right={<input aria-label="Search customers" type="search" value={q} placeholder="Search by company…"
+                onChange={(e) => { setQ(e.target.value); setPage(1); }}
+                className="h-8 w-48 rounded-md border bg-background px-2 text-sm" />}>
+              {listError ? <QueryError message={listError.message} onRetry={() => listRefetch()} /> : listLoading ? <TableSkeleton rows={6} /> : (list ?? []).length === 0 ? <EmptyState icon={Heart} title={query ? "No customers match" : "No customers"} /> : (
                 <div className="overflow-x-auto"><table className="w-full text-sm">
                   <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground"><tr>
-                    <th className="text-left px-3 py-2">Account</th><th className="text-left px-3 py-2">Tier</th>
-                    <th className="text-right px-3 py-2">Health</th><th className="text-right px-3 py-2">ARR</th>
-                    <th className="text-right px-3 py-2">NPS</th><th className="text-right px-3 py-2">Renewal</th>
+                    {header("name", "Account")}<th className="text-left px-3 py-2">Tier</th>
+                    {header("health", "Health", "right")}{header("arr", "ARR", "right")}
+                    {header("nps", "NPS", "right")}{header("renewal", "Renewal", "right")}
                     <th className="w-8 px-1"></th>
                   </tr></thead>
                   <tbody className="divide-y">
@@ -128,6 +158,13 @@ export default function Customers() {
                   </tbody>
                 </table></div>
               )}
+              {total > PAGE_SIZE && (
+                <div className="flex items-center justify-end gap-2 px-3 py-2 border-t text-xs text-muted-foreground">
+                  <span>{((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{Math.min(page * PAGE_SIZE, total).toLocaleString()} of {total.toLocaleString()}</span>
+                  <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
+                  <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => setPage(page + 1)}>Next</Button>
+                </div>
+              )}
             </Section>
           </div>
           <div className="space-y-4">
@@ -149,6 +186,13 @@ export default function Customers() {
                     </div>
                   ) : null;
                 })()}
+                {/* The renewal or churn, recorded in one step (F36). */}
+                <div className="flex items-center gap-2 text-xs">
+                  <RecordRenewalOrChurn customer={detail.data} accountName={detail.data.account?.name ?? null} />
+                  {detail.data.renewalStage === "churned" && (detail.data as any).churnReason && (
+                    <span className="text-muted-foreground">Churned{(detail.data as any).churnedAt ? ` ${fmtDate((detail.data as any).churnedAt)}` : ""}: {(detail.data as any).churnReason}</span>
+                  )}
+                </div>
                 <Section title={detail.data.account?.name ?? "Customer"} description={`Health ${detail.data.healthScore} · ${detail.data.healthTier}`} right={<Button size="sm" variant="outline" className="bg-card" onClick={() => setDrawer({ id: detail.data!.id, name: detail.data!.account?.name ?? "Customer" })}><FolderOpen className="size-3 mr-1" />Timeline & files</Button>}>
                   <div className="p-3 space-y-2 text-xs">
                     {/* Each slider saves when it is let go, and sends only

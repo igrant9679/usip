@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
+import { WorkspaceCurrencySync } from "@/components/usip/WorkspaceCurrencySync";
 import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
@@ -71,8 +72,10 @@ const Forecast = lazyChunk(() => import("@/pages/usip/Forecast"));
 const FindProspects = lazyChunk(() => import("@/pages/usip/FindProspects"));
 const Pipeline = lazyChunk(() => import("@/pages/usip/Pipeline"));
 const Products = lazyChunk(() => import("@/pages/usip/Products"));
-const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
+// Kept, unrouted (audit F34): /quotes redirects to /proposals, where a quote
+// is the proposal's pricing. Put its <Route> line back to undo the redirect.
 const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
+const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
 const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
 const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));
 // Retired (U14, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
@@ -466,7 +469,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // gate too: someone with no workspace to work in gets a screen that says
   // why, on every page (audit 2026-10-20, G35). The enforce2fa gate lives here
   // so it covers every authed page; in Shell it missed the settings hub (G66).
-  return <WorkspaceProvider><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate><PageBoundary>{children}</PageBoundary></WorkspaceAccessGate></WorkspaceProvider>;
+  // The workspace currency (F29) sits here for the same reason.
+  return <WorkspaceProvider><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceCurrencySync><WorkspaceAccessGate><PageBoundary>{children}</PageBoundary></WorkspaceAccessGate></WorkspaceCurrencySync></WorkspaceProvider>;
 }
 
 /**
@@ -550,7 +554,7 @@ function Router() {
           at /v2/home replaces it (phase 5 item 2, 2026-10-27). */}
       <Route path="/dashboard-home2"><AuthGate><RetiredRedirect from="/dashboard-home2" /></AuthGate></Route>
       <Route path="/products"><AuthGate><Products /></AuthGate></Route>
-      <Route path="/quotes"><AuthGate><Quotes /></AuthGate></Route>
+      <Route path="/quotes"><AuthGate><RetiredRedirect from="/quotes" /></AuthGate></Route>
       <Route path="/territories"><AuthGate><Territories /></AuthGate></Route>
       <Route path="/team"><AuthGate><Team /></AuthGate></Route>
       <Route path="/audit"><AuthGate><Audit /></AuthGate></Route>

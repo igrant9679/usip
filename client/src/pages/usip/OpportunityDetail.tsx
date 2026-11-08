@@ -24,21 +24,24 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2, Plus } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
+import { useLostReasonPrompt } from "@/components/usip/LostReasonDialog";
 import { toast } from "sonner";
 import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
 import { FORECAST_CATEGORIES, FORECAST_CATEGORY_LABEL, type ForecastCategory } from "@shared/forecastCategory";
 import { FailedLoadsBanner, NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
+import { formatAmount, getDisplayCurrency } from "@shared/money";
 
 function fmt$(n: any) {
   // Full, comma-grouped amount to match the list pages (e.g. $1,250,000).
-  // The old K-only format mis-rendered millions as "$5000.0K".
-  return `$${Math.round(Number(n ?? 0)).toLocaleString()}`;
+  // The old K-only format mis-rendered millions as "$5000.0K". In the
+  // workspace's currency (F29), through the one formatter.
+  return formatAmount(Math.round(Number(n ?? 0)));
 }
 
 /** A line's money to the cent: a discounted line is rarely whole dollars. */
 function fmtCents(n: any) {
-  return `$${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: getDisplayCurrency(), minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n ?? 0));
 }
 
 const ROLE_OPTIONS = ["champion", "decision_maker", "influencer", "evaluator", "blocker", "user", "other"] as const;
@@ -192,11 +195,29 @@ export default function OpportunityDetail() {
   const { data: intel } = trpc.oppIntelligence.getIntelligence.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
   const { data: stageHistory } = trpc.opportunities.stageHistory.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
   const { data: members } = trpc.team.list.useQuery();
+  // Who last set the forecast category, when, from what — and whether it
+  // overrode the owner (F29).
+  const { data: forecastHistory } = trpc.opportunities.forecastHistory.useQuery({ opportunityId: id }, { enabled: !Number.isNaN(id) });
 
   const update = trpc.opportunities.update.useMutation({
     onSuccess: () => { invalidateDealReads(utils); toast.success("Saved"); },
     onError: (e) => toast.error(e.message),
   });
+
+  // The deal's own pipeline's stages, so the page can move it (F28): it
+  // could not, and a loss reason could only be typed after a board move.
+  const pipelineIdOf = data?.opportunity?.pipelineId ?? undefined;
+  const { data: pipe } = trpc.crmPipelines.get.useQuery(
+    pipelineIdOf ? { pipelineId: pipelineIdOf } : (undefined as any),
+    { enabled: !!data, staleTime: 60_000 },
+  );
+  const stageOptions = (pipe?.stages ?? []) as Array<{ key: string; label: string; isLost?: boolean | number | null }>;
+  const setStage = trpc.opportunities.setStage.useMutation({
+    onSuccess: (r) => { invalidateDealReads(utils); toast.success(r.customerCreated ? "Closed won — customer created" : "Stage changed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // A move to a lost stage asks why first; Skip still moves it (F28).
+  const lostPrompt = useLostReasonPrompt((v: { id: number; stage: string }) => setStage.mutate(v));
 
   // Delete was previously reachable ONLY from the pipeline board's record
   // drawer — this page had no way to remove the record you were looking at.
@@ -229,6 +250,13 @@ export default function OpportunityDetail() {
   const isClosedWon = !!data.stageMeta?.isWon;
   const isClosedLost = !!data.stageMeta?.isLost;
   const reasonValue = isClosedWon ? o.winReason : isClosedLost ? o.lostReason : null;
+  // Before the overview, which names who changed the forecast category.
+  const memberName = (uid: number | null | undefined): string => {
+    if (!uid) return "—";
+    const m = (members ?? []).find((x: any) => x.userId === uid);
+    return (m as any)?.name ?? `User ${uid}`;
+  };
+  const fmtTs = (t: any): string => { try { return t ? new Date(t).toLocaleString() : "—"; } catch { return "—"; } };
 
   const overview = (
     <div className="space-y-5">
@@ -236,7 +264,18 @@ export default function OpportunityDetail() {
       <DetailSection title="Deal" className="md:col-span-2">
         <div className="space-y-2 text-sm">
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant="outline">{o.stage}</Badge>
+          {stageOptions.length > 0 ? (
+            <select aria-label="Stage" className="h-7 text-xs rounded-md border bg-background px-2" disabled={setStage.isPending}
+              value={o.stage}
+              onChange={(e) => {
+                const st = stageOptions.find((s) => s.key === e.target.value);
+                if (!st || st.key === o.stage) return;
+                lostPrompt.ask({ id: o.id, stage: st.key }, { isLost: !!st.isLost, dealName: o.name, stageLabel: st.label });
+              }}>
+              {stageOptions.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {!stageOptions.some((s) => s.key === o.stage) && <option value={o.stage}>{o.stage}</option>}
+            </select>
+          ) : <Badge variant="outline">{o.stage}</Badge>}
           <Badge variant="secondary">{fmt$(o.value)}</Badge>
           <Badge>{o.winProb}%</Badge>
           {o.daysInStage > 0 && <span className="text-xs text-muted-foreground">{o.daysInStage}d in stage</span>}
@@ -267,6 +306,15 @@ export default function OpportunityDetail() {
             </select>
           </label>
         )}
+        {!isClosedWon && !isClosedLost && forecastHistory?.[0] && (() => {
+          const ch = forecastHistory[0];
+          const label = (c: string | null) => (c ? FORECAST_CATEGORY_LABEL[c as ForecastCategory] ?? c : "by win %");
+          return (
+            <div className={`text-[11px] ${ch.isOverride ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>
+              {ch.isOverride ? "Manager override: " : ""}{label(ch.toCategory)} set by {memberName(ch.changedByUserId)} on {fmtTs(ch.createdAt)}, was {label(ch.fromCategory)}{ch.note ? ` — ${ch.note}` : ""}
+            </div>
+          );
+        })()}
         {o.nextStep &&<div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
         {account && (
           <div className="flex items-center gap-2 pt-2"><Building2 className="size-4 text-muted-foreground" />
@@ -324,13 +372,6 @@ export default function OpportunityDetail() {
       <DealLineItems opportunityId={o.id} items={lineItems ?? []} onChanged={lineItemsChanged} />
     </div>
   );
-
-  const memberName = (uid: number | null | undefined): string => {
-    if (!uid) return "—";
-    const m = (members ?? []).find((x: any) => x.userId === uid);
-    return (m as any)?.name ?? `User ${uid}`;
-  };
-  const fmtTs = (t: any): string => { try { return t ? new Date(t).toLocaleString() : "—"; } catch { return "—"; } };
 
   const stageTab = stageHistory && stageHistory.length > 0 ? {
     value: "stages",
@@ -406,6 +447,7 @@ export default function OpportunityDetail() {
           extraTabs={stageTab ? [stageTab] : undefined}
         />
       </DetailBody>
+      {lostPrompt.dialog}
       </div>
     </Shell>
   );

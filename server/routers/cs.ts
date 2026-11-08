@@ -1,6 +1,9 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, like, sql } from "drizzle-orm";
 import { calendarDayFrom } from "../services/calendarDeadline";
+import { currentRanges, customerArrTotals } from "../services/dealMetrics";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { recordCustomerChurn, recordCustomerRenewal } from "../services/customerRevenue";
 import { z } from "zod";
 import { accounts, contractAmendments, customers, qbrs, supportTickets } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -57,6 +60,85 @@ export const csRouter = router({
     return cs.map((c) => ({ ...withStage(c), account: accMap.get(c.accountId) ?? null }));
   }),
 
+  /**
+   * The Customers table: search, sort and pages, in SQL (audit 2026-10-20,
+   * U26). The page loaded every customer and every account and sorted by
+   * health only. Search matches the account's name; every sort ends on the
+   * id, so a page never repeats or skips a row.
+   */
+  search: workspaceProcedure
+    .input(z.object({
+      q: z.string().trim().max(200).optional(),
+      sort: z.enum(["health", "arr", "renewal", "name", "nps"]).default("health"),
+      dir: z.enum(["asc", "desc"]).default("asc"),
+      page: z.number().int().min(1).default(1),
+      pageSize: z.number().int().min(10).max(200).default(50),
+    }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      const page = input?.page ?? 1, pageSize = input?.pageSize ?? 50;
+      if (!db) return { rows: [], total: 0, page, pageSize };
+      const ws = ctx.workspace.id;
+      const q = input?.q?.trim();
+      const where = and(
+        eq(customers.workspaceId, ws),
+        q ? like(accounts.name, `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`) : undefined,
+      );
+      // The account in this workspace only (C8): another tenant's is no name here.
+      const onAccount = and(eq(accounts.id, customers.accountId), eq(accounts.workspaceId, ws));
+      const col = { health: customers.healthScore, arr: customers.arr, renewal: customers.contractEnd, name: accounts.name, nps: customers.npsScore }[input?.sort ?? "health"];
+      const order = (input?.dir ?? "asc") === "desc" ? desc(col) : asc(col);
+      const [{ n }] = await db.select({ n: count() }).from(customers).leftJoin(accounts, onAccount).where(where);
+      const rows = await db.select({ c: customers, a: accounts }).from(customers).leftJoin(accounts, onAccount).where(where)
+        .orderBy(order, asc(customers.id))
+        .limit(pageSize).offset((page - 1) * pageSize);
+      return {
+        rows: rows.map((r) => ({ ...withStage(r.c), account: r.a?.id ? r.a : null })),
+        total: Number(n ?? 0),
+        page,
+        pageSize,
+      };
+    }),
+
+  /**
+   * The customer record behind a company (U26): its health and ARR as
+   * stored, for the company page. Null when the company is not a customer.
+   */
+  forAccount: workspaceProcedure.input(z.object({ accountId: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return null;
+    const [c] = await db.select().from(customers)
+      .where(and(eq(customers.workspaceId, ctx.workspace.id), eq(customers.accountId, input.accountId)))
+      .orderBy(desc(customers.id)).limit(1);
+    if (!c) return null;
+    const totals = customerArrTotals([c]);
+    return { ...withStage(c), activeArr: totals.arr };
+  }),
+
+  /** Record a renewal: the new term and ARR (F36). Through services/customerRevenue. */
+  recordRenewal: repProcedure.input(z.object({
+    customerId: z.number(),
+    newArr: z.number().min(0).max(1e12),
+    termStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    termEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick the day the new term ends"),
+    notes: z.string().max(2000).optional(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return recordCustomerRenewal(db, { workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, ...input });
+  }),
+
+  /** Record a churn: the day and the reason (F36). Through services/customerRevenue. */
+  recordChurn: repProcedure.input(z.object({
+    customerId: z.number(),
+    churnedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick the day they churned"),
+    reason: z.string().trim().min(1, "Say why they churned").max(200),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return recordCustomerChurn(db, { workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, ...input });
+  }),
+
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -76,7 +158,11 @@ export const csRouter = router({
     // A churned customer is not ARR, expansion or a risk any more (R58): their
     // contract counted in every figure here after it ended.
     const cs = all.filter((c) => withStage(c).renewalStage !== "churned");
-    const arr = cs.reduce((s, c) => s + Number(c.arr ?? 0), 0);
+    // ARR the one way (U26, F36): the deal-and-revenue module's sum, which
+    // Record renewal and Record churn move. Churned ARR is this quarter's.
+    const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
+    const revenue = customerArrTotals(all, { range: quarter });
+    const arr = revenue.arr;
     const expansion = cs.reduce((s, c) => s + Number(c.expansionPotential ?? 0), 0);
     const atRisk = cs.filter((c) => c.healthTier === "at_risk" || c.healthTier === "critical").length;
     // Counted off the DERIVED stage — the stored column never moved, so this
@@ -86,7 +172,7 @@ export const csRouter = router({
     const promoters = cs.filter((c) => c.npsScore >= 50).length;
     const detractors = cs.filter((c) => c.npsScore <= 0).length;
     const npsBand = cs.length === 0 ? 0 : Math.round(((promoters - detractors) / cs.length) * 100);
-    return { arr, expansion, atRisk, renewing90, avgNps, npsBand, total: cs.length };
+    return { arr, expansion, atRisk, renewing90, avgNps, npsBand, total: cs.length, churnedArrThisQuarter: revenue.churnedArr, churnedThisQuarter: revenue.churned };
   }),
 
   /** Renewals kanban grouped by renewalStage. */
