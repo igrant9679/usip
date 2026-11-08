@@ -6,6 +6,12 @@
  *   Row 2: Revenue area chart (period dropdown) | Win/Loss donut
  *   Row 3: Stage Funnel bar chart | Top Reps leaderboard (clickable → filtered Pipeline)
  *   Row 4: Recent Opportunities table | AI Drafts Awaiting Review
+ *
+ * One home (audit 2026-10-20, U33 and X6.3; batch CONB, 2026-11-08): this is
+ * the Pipeline view of the home page now. DashboardOverview is the body, and
+ * Home (/v2/home) renders it as its "Pipeline" view; /dashboard redirects
+ * there (lib/retiredRoutes.ts). The page wrapper below is kept, unrouted, so
+ * the redirect can be undone in one line.
  */
 import { PageHeader, Shell, useAccentColor } from "@/components/usip/Shell";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
@@ -322,8 +328,8 @@ function WinLossTooltip({ active, payload }: any) {
   );
 }
 
-/* ─── Main page ───────────────────────────────────────────────────────────── */
-export default function Dashboard() {
+/* ─── The overview: the body Home's Pipeline view renders ────────────────── */
+export function DashboardOverview() {
   const [, navigate] = useLocation();
   const [period, setPeriod] = useState<string>("6");
   const months = PERIOD_OPTIONS.find((o) => o.value === period)?.months ?? 6;
@@ -384,12 +390,10 @@ export default function Dashboard() {
   const maxRepValue = Math.max(...(topReps ?? []).map((r) => r.value), 1);
 
   return (
-    <Shell title="Dashboard">
-      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview — pipeline health, activity metrics, and team performance at a glance. Set goals, track progress, and drill into any metric instantly." pageKey="dashboard"
-        icon={<LayoutDashboard className="size-5" />}
-      >
-        {/* Last refreshed + Refresh button */}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="p-4 md:p-5 space-y-6">
+        {/* Last refreshed + Refresh button (in the page header before the
+            dashboard became a view of the home page). */}
+        <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
           <UpdatedAgo at={dataUpdatedAt} />
           <button
             onClick={handleRefresh}
@@ -398,10 +402,6 @@ export default function Dashboard() {
             <RefreshCw className="size-3" /> Refresh
           </button>
         </div>
-      </PageHeader>
-      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
-      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
-      <div className="p-4 md:p-5 space-y-6">
 
         {/* ── Funnel overview: the workflow at a glance ── */}
         <div className="rounded-xl border bg-card p-4">
@@ -885,6 +885,19 @@ export default function Dashboard() {
         </div>
 
       </div>
+  );
+}
+
+/* ─── The old page: kept, unrouted (U33) ──────────────────────────────────── */
+export default function Dashboard() {
+  return (
+    <Shell title="Dashboard">
+      <PageHeader title="Dashboard" description="Your unified revenue intelligence overview — pipeline health, activity metrics, and team performance at a glance. Set goals, track progress, and drill into any metric instantly." pageKey="dashboard"
+        icon={<LayoutDashboard className="size-5" />}
+      />
+      {/* A failed load says so instead of showing an empty page (audit X1.6). */}
+      <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
+      <DashboardOverview />
     </Shell>
   );
 }

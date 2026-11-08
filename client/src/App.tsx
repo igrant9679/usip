@@ -32,9 +32,9 @@ const AccountRedirect = lazyChunk(() => import("@/pages/usip/AccountRedirect"));
 const Audit = lazyChunk(() => import("@/pages/usip/Audit"));
 const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
+// Retired (U33, 2026-11-08): the Pipeline view of Home now; kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
 const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
-const HomeRoute = lazyChunk(() => import("@/pages/usip/HomeRoute"));
 const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
 const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
 const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
@@ -502,9 +502,11 @@ function Router() {
     <ErrorBoundary resetKey={path} inline>
     <Suspense fallback={<PageLoading />}>
     <Switch>
-      {/* "/" is the home picked with "Set as home" (G56): the Dashboard unless Home was picked. */}
-      <Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>
-      <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
+      {/* "/" is the one home page (U33, X6.3; 2026-11-08), opening on the
+          view the person picked with "Set as home" (stored on the server).
+          /dashboard is its Pipeline view now. See lib/retiredRoutes. */}
+      <Route path="/"><AuthGate><Home /></AuthGate></Route>
+      <Route path="/dashboard"><AuthGate><RetiredRedirect from="/dashboard" /></AuthGate></Route>
       <Route path="/inbox"><AuthGate><RetiredRedirect from="/inbox" /></AuthGate></Route>
       <Route path="/mailbox"><AuthGate><RetiredRedirect from="/mailbox" /></AuthGate></Route>
       <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>

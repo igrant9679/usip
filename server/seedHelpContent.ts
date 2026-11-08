@@ -1753,10 +1753,10 @@ export const TOURS: TourSeed[] = [
     type: "onboarding",
     estimatedMinutes: 3,
     pageKey: "dashboard",
-    route: "/dashboard",
+    route: "/v2/home?view=pipeline",
     roleTags: ["sdr"],
     steps: [
-      { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/dashboard", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/v2/home?view=pipeline", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, AI Assistant, Inbox, Mailbox, Calendar), then the work: Prospect and enrich, Engage, Win deals, Revenue Engine, and more.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Your daily numbers", bodyMarkdown: "The Dashboard is your morning home — pipeline, leads, customers.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Help anytime", bodyMarkdown: "Click the ? in the top bar for contextual articles, Ask AI, and these tours — on any page.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
@@ -1768,7 +1768,7 @@ export const TOURS: TourSeed[] = [
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "dashboard",
-    route: "/dashboard",
+    route: "/v2/home?view=pipeline",
     roleTags: ["sdr"],
     steps: [
       { title: "KPIs at a glance", bodyMarkdown: "Pipeline value, closed-won, leads, customers — vs. goal.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },

@@ -135,6 +135,15 @@
  *                            filter (ported 2026-10-29). Tasks.tsx is kept,
  *                            unrouted, and still exports RelatedTasks, which
  *                            the record pages embed.
+ *   /dashboard → /v2/home?view=pipeline   U33: one home. The Dashboard and
+ *                            Home were two homes that disagreed (G56); Home
+ *                            has a Today view (its own) and a Pipeline view
+ *                            (the Dashboard's whole body, DashboardOverview,
+ *                            so no read was written twice), and "/" renders
+ *                            it. "Set as home" picks the view and is stored on
+ *                            the person (users.home_view, migration 0430); a
+ *                            browser's old choice is carried over once.
+ *                            Dashboard.tsx's page wrapper is kept, unrouted.
  */
 
 /**
@@ -154,6 +163,7 @@ export const RETIRED_ROUTES = {
   "/v2/conversations": "/v2/inbox",
   "/quotes": "/proposals",
   "/tasks": "/v2/tasks",
+  "/dashboard": "/v2/home?view=pipeline",
 } as const;
 
 export type RetiredRoute = keyof typeof RETIRED_ROUTES;

@@ -27,16 +27,21 @@ const primaryHrefs = new Set(PRIMARY_TOOLS.map((t) => t.href));
 const tool = (href: string) => TOOLS.find((t) => t.href === href)!;
 
 describe("what came back to the rail", () => {
+  // 2026-11-08 (batch CONB, U33): the Dashboard is the Pipeline view of the one
+  // home page now, so its rail entry links that view. The owner's ask still
+  // holds: Dashboard is on the rail, second after Home, with help copy.
   it("Dashboard: registered primary in Daily AND in the Shell's top row, with help copy", () => {
-    expect(tool("/dashboard")).toBeTruthy();
-    expect(tool("/dashboard").group).toBe("Daily");
-    expect(primaryHrefs.has("/dashboard")).toBe(true);
+    const DASH = "/v2/home?view=pipeline";
+    expect(tool(DASH)).toBeTruthy();
+    expect(tool(DASH).label).toBe("Dashboard");
+    expect(tool(DASH).group).toBe("Daily");
+    expect(primaryHrefs.has(DASH)).toBe(true);
     const shell = client("components", "usip", "Shell.tsx");
     const top = shell.slice(shell.indexOf("const TOP_LINKS"), shell.indexOf("// THE RAIL IS A BUDGET"));
-    expect(top).toContain('{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard');
+    expect(top).toContain(`{ href: "${DASH}", label: "Dashboard", icon: LayoutDashboard`);
     // Home stays first — Dashboard is the second row, not the landing page.
-    expect(top.indexOf('href: "/v2/home"')).toBeLessThan(top.indexOf('href: "/dashboard"'));
-    expect(NAV_HELP["/dashboard"]?.body).toBeTruthy();
+    expect(top.indexOf('href: "/v2/home"')).toBeLessThan(top.indexOf(`href: "${DASH}"`));
+    expect(NAV_HELP[DASH]?.body).toBeTruthy();
   });
 
   it("Lists and Tasks under CRM; Campaigns and Social under Outreach", () => {

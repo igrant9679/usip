@@ -80,7 +80,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { rememberPage } from "@/lib/lastPage";
 import { PageTransition } from "@/components/PageTransition";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -305,8 +305,9 @@ type NavSection = { label: string; icon: any; items: NavLink[]; color: string; d
 // mailbox, calendar). Uncoloured links inherit their legacy section hue.
 const TOP_LINKS: NavLink[] = [
   { href: "/v2/home", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
-  // Back on the rail (owner, 2026-09-04): the pipeline dashboard.
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
+  // Back on the rail (owner, 2026-09-04): the pipeline dashboard. Since the two
+  // homes became one page (U33, 2026-11-08) it is that page's Pipeline view.
+  { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
   // One reply workspace (F25): Inbox and My Mailbox are its tabs now.
   { href: "/v2/inbox", label: "Inbox", icon: Inbox, color: "#1D4ED8", darkColor: "#93C5FD" },
@@ -507,12 +508,10 @@ function resolveAccent(loc: string, isDark: boolean): string {
   return isDark ? "#93C5FD" : "#1D4ED8";
 }
 
-/** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
-export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
-
 export function Shell({ children, title, actions }: { children: ReactNode; title?: string; actions?: ReactNode }) {
   const [location] = useLocation();
   usePageTitle(title);
+  const currentSearch = useSearch().replace(/^\?/, "");
   // The AI Assistant sends "the page the user came from" with each turn.
   useEffect(() => { rememberPage(location); }, [location]);
   const { user, logout } = useAuth();
@@ -601,11 +600,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const brandingQ = trpc.workspace.getBranding.useQuery(undefined, { enabled: !!current, staleTime: 60_000 });
   const workspaceLogo = brandingQ.data?.logoUrl ?? null;
 
-  // Respect the user's "Set as Home" preference for the Dashboard nav link
-  const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
-
-  // Home quick-link honours the user's "Set as Home" dashboard preference.
-  const topLinks = TOP_LINKS.map((l) => (l.href === "/" ? { ...l, href: homeDashboardHref } : l));
+  // "Set as home" is the person's now, read by the home page itself (U33,
+  // hooks/useHomeView): the Home link opens whichever view they chose.
+  const topLinks = TOP_LINKS;
 
   const isDark = theme === "dark";
   // Accent tracks the active section's colour and is published on AccentContext,
@@ -615,7 +612,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
   // ── Sidebar renderers (light, sectioned, colour-per-section rail) ───────
   const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
-    const active = location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
+    // A link to a view (/v2/home?view=pipeline) is active on that view only.
+    const [hrefPath, hrefQuery] = l.href.split("?");
+    const active = hrefQuery
+      ? location === hrefPath && currentSearch.split("&").includes(hrefQuery)
+      : location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
     const Icon = l.icon;
     // Colour precedence: explicit link colour → the page's legacy section hue
     // (this is what gives every "More" item its own functional-area colour)

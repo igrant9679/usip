@@ -102,7 +102,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Home** (/v2/home) — the attention panel (everything waiting on a human), the 24-hour digest, and what the autopilots did. Work it top to bottom; each row links to its queue.
 
-**Dashboard** (/dashboard) — pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only.
+**Dashboard** (/v2/home?view=pipeline, the Pipeline view of Home) — pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only.
 
 **AI Assistant** (/v2/ai-assistant) — chat over your own data. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. Admins can also confirm an Off / Approve / Auto dial change from chat; the card names the dial and says what Auto does unattended. Two things it will not do: fully unattended campaign autonomy (a human sets that on the campaign's Settings tab behind the acknowledgement), and composing mail — it can only send what an approval queue already holds (an approved draft, a proposed meeting, a chat follow-up), and the card says so.
 

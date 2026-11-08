@@ -74,11 +74,12 @@ export const TOOL_GROUPS: ToolGroup[] = [
 export const TOOLS: Tool[] = [
   /* ── Daily — the loop: what needs me, what the machine did, where I act ── */
   { href: "/v2/home", label: "Home", icon: Home, group: "Daily", primary: true,
-    description: "What needs you, what the autopilots did, and today's numbers." },
+    description: "What needs you, what the autopilots did, and today's numbers — or the pipeline dashboard, whichever you set as home." },
   // Back on the rail (owner, 2026-09-04): the pipeline dashboard — revenue,
   // win/loss, stage funnel, top reps — is a different question from Home's
   // "what needs me", and it was the app's landing page before /v2/home.
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
+  // One home since 2026-11-08 (U33): the Dashboard is Home's Pipeline view.
+  { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
     description: "Pipeline at a glance — revenue, win/loss, stage funnel, top reps, recent deals.", keywords: ["overview", "kpi", "home screen", "revenue"] },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, group: "Daily", primary: true,
     description: "Ask anything about your pipeline in plain language." },

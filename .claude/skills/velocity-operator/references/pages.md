@@ -15,7 +15,7 @@ The first stop every day. Three things:
 3. **What the autopilots did** — the recent engine and autopilot events.
 Work it top to bottom; each row links to the queue it came from.
 
-### ★ Dashboard — `/dashboard`
+### ★ Dashboard — `/v2/home?view=pipeline` (the Pipeline view of Home)
 Pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only. Good for a manager's Monday glance; `/dashboards` is where custom boards live.
 
 ### ★ AI Assistant — `/v2/ai-assistant`
