@@ -1,7 +1,10 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { adminRuntimePayload } from "../health";
+import { getDb } from "../db";
+import { engineStatusFor } from "../services/engineStatus";
 import { publicProcedure, router } from "./trpc";
-import { superAdminProcedure } from "./workspace";
+import { adminWsProcedure, superAdminProcedure } from "./workspace";
 
 export const systemRouter = router({
   /** Public branding config. The Logo Link client id is public BY DESIGN —
@@ -42,4 +45,17 @@ export const systemRouter = router({
    * here, notifyOwner, had no caller and was deleted: audit X6.2, 2026-11-07.)
    */
   deployRuntime: superAdminProcedure.query(() => adminRuntimePayload()),
+
+  /**
+   * The engine status page (audit 2026-10-20, F49): each engine's last tick
+   * and failures, this workspace's queues and browser errors, and the slow
+   * queries sampled. Admins: the queues and errors are their workspace's.
+   * The engines and slow queries are the install's, so their error text and
+   * statements are for a super admin only (services/engineStatus.ts).
+   */
+  engineStatus: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+    return engineStatusFor(db, ctx.workspace.id, { showErrors: ctx.member.role === "super_admin" });
+  }),
 });

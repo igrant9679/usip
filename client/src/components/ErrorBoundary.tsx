@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { AlertTriangle, ArrowLeft, RotateCcw } from "lucide-react";
-import { Component, ReactNode } from "react";
+import { Component, ErrorInfo, ReactNode } from "react";
+import { reportClientError } from "@/lib/clientErrors";
 
 /**
  * What broke, said plainly (audit 2026-10-20, Phase 4, G37).
@@ -44,6 +45,11 @@ class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  /** What a boundary caught reaches the admin engine status page (F49), scrubbed. */
+  componentDidCatch(error: Error, _info: ErrorInfo) {
+    if (!isStaleChunkError(error)) reportClientError("boundary", error);
   }
 
   componentDidUpdate(prev: Props) {

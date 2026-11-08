@@ -6806,3 +6806,27 @@ export const researchExternalRefs = mysqlTable(
   (t) => ({ byLink: index("ix_rer_link").on(t.workspaceId, t.linkId, t.kind) }),
 );
 export type ResearchExternalRef = typeof researchExternalRefs.$inferSelect;
+
+/**
+ * Errors the browser reported (audit 2026-10-20, F49; migration 0320): window
+ * errors, unhandled rejections and error-boundary catches, scrubbed of emails,
+ * query strings and tokens (server/clientErrors.ts). Kept 30 days.
+ */
+export const clientErrors = mysqlTable(
+  "client_errors",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    /** error | rejection | boundary */
+    kind: varchar("kind", { length: 16 }).notNull(),
+    message: varchar("message", { length: 500 }).notNull(),
+    stack: text("stack"),
+    /** The page's path, never its query string. */
+    path: varchar("path", { length: 255 }),
+    release: varchar("release", { length: 40 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWsCreated: index("ix_ce_ws_created").on(t.workspaceId, t.createdAt) }),
+);
+export type ClientErrorRow = typeof clientErrors.$inferSelect;

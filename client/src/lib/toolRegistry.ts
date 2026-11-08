@@ -302,6 +302,9 @@ export const TOOLS: Tool[] = [
     description: "Members, roles, and invitations." },
   { href: "/audit", label: "Audit Log", icon: Activity, group: "Configuration",
     description: "Who changed what, when." },
+  { href: "/engine-status", label: "Engine Status", icon: Activity, group: "Configuration", adminOnly: true,
+    description: "Is every engine running? Last runs, queues, browser errors and slow queries.",
+    keywords: ["health", "monitoring", "errors", "cron", "queue"] },
   { href: "/help", label: "Help Center", icon: HelpCircle, group: "Configuration",
     description: "Guides, articles, and product tours.", keywords: ["support"] },
 ];

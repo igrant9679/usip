@@ -35,6 +35,7 @@ import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
+import { registerClientErrorRoute } from "../clientErrors";
 import { registerStorageProxy } from "./storageProxy";
 import { registerMediaRoutes } from "./mediaRoutes";
 import { registerScimRoutes } from "../scimHttp";
@@ -145,6 +146,8 @@ async function startServer() {
   registerStorageProxy(app);
   registerMediaRoutes(app);
   registerOAuthRoutes(app);
+  // The browser's errors, scrubbed and rate-limited (audit F49).
+  registerClientErrorRoute(app);
   registerScimRoutes(app);
   registerEmailTrackingRoutes(app);
   // SendGrid Inbound Parse webhook — replies to SendGrid-sent campaign mail

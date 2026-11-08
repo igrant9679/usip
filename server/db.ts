@@ -14,6 +14,7 @@ import {
   workspaces,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { instrumentPool } from "./_core/slowQuery";
 import { PERMISSION_KEYS, defaultGranted } from "@shared/permissions";
 import { isAdminRole } from "@shared/roleRank";
 
@@ -23,6 +24,8 @@ export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
       _db = drizzle(process.env.DATABASE_URL);
+      // Slow queries are timed and sampled (audit F49, _core/slowQuery.ts).
+      try { instrumentPool((_db as unknown as { $client: Parameters<typeof instrumentPool>[0] }).$client); } catch { /* never block the database */ }
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;

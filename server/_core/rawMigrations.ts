@@ -5188,6 +5188,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Errors the browser reports (audit 2026-10-20, F49): a new table, nothing
+  // existing changes. Rows are scrubbed before they are written and kept 30
+  // days (server/clientErrors.ts).
+  {
+    name: "0320_client_errors.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `client_errors` (" +
+        "`id` int AUTO_INCREMENT NOT NULL, " +
+        "`workspaceId` int NOT NULL, " +
+        "`userId` int NOT NULL, " +
+        "`kind` varchar(16) NOT NULL, " +
+        "`message` varchar(500) NOT NULL, " +
+        "`stack` text NULL, " +
+        "`path` varchar(255) NULL, " +
+        "`release` varchar(40) NULL, " +
+        "`createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "PRIMARY KEY (`id`), " +
+        "KEY `ix_ce_ws_created` (`workspaceId`, `createdAt`))",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

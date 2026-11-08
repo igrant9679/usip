@@ -142,6 +142,7 @@ const HelpArticle = lazyChunk(() => import("@/pages/usip/HelpArticle"));
 const TourBuilder = lazyChunk(() => import("@/pages/usip/TourBuilder"));
 const Mindmaps = lazyChunk(() => import("@/pages/usip/Mindmaps"));
 const MindmapCanvas = lazyChunk(() => import("@/pages/usip/MindmapCanvas"));
+const EngineStatus = lazyChunk(() => import("@/pages/usip/EngineStatus"));
 // Only for a page's error state (G37): the Shell is in every page's chunk, not the entry.
 const LazyShell = lazyChunk(() => import("@/components/usip/Shell").then((m) => ({ default: m.Shell })));
 
@@ -544,6 +545,8 @@ function Router() {
       <Route path="/territories"><AuthGate><Territories /></AuthGate></Route>
       <Route path="/team"><AuthGate><Team /></AuthGate></Route>
       <Route path="/audit"><AuthGate><Audit /></AuthGate></Route>
+      {/* Engines, queues, browser errors and slow queries, for admins (F49). */}
+      <Route path="/engine-status"><AuthGate><EngineStatus /></AuthGate></Route>
       <Route path="/scim"><AuthGate><SCIM /></AuthGate></Route>
       <Route path="/lead-scoring"><AuthGate><LeadScoring /></AuthGate></Route>
       <Route path="/lead-routing"><AuthGate><LeadRouting /></AuthGate></Route>

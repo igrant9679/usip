@@ -9,6 +9,7 @@ import App from "./App";
 import { getLoginUrl } from "./const";
 import { MFA_REQUIRED_EVENT, isMfaRequiredError, returnPathFor, shouldRedirectToLogin } from "./lib/authRedirect";
 import { shouldRetryQuery } from "./lib/queryRetry";
+import { installClientErrorReporting } from "./lib/clientErrors";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -92,6 +93,9 @@ const trpcClient = trpc.createClient({
     }),
   ],
 });
+
+// Uncaught errors and unhandled rejections reach the admin engine status page (F49).
+installClientErrorReporting();
 
 createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
