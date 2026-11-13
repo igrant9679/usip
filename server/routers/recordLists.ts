@@ -15,6 +15,24 @@ import { recordLists, recordListMembers, prospects, accounts } from "../../drizz
 import { eq, and, inArray, desc, isNull } from "drizzle-orm";
 import { affectedRowsOf } from "../_core/claim";
 
+/**
+ * Delete this workspace's lists among `ids`, with their memberships, in one
+ * transaction: a list is never left without its members' rows gone or the
+ * other way round. Returns the ids it deleted.
+ */
+async function deleteLists(workspaceId: number, ids: number[]): Promise<number[]> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  return db.transaction(async (tx) => {
+    const found = (await tx.select({ id: recordLists.id }).from(recordLists)
+      .where(and(eq(recordLists.workspaceId, workspaceId), inArray(recordLists.id, Array.from(new Set(ids)))))).map((r) => r.id);
+    if (found.length === 0) return [];
+    await tx.delete(recordListMembers).where(and(eq(recordListMembers.workspaceId, workspaceId), inArray(recordListMembers.listId, found)));
+    await tx.delete(recordLists).where(and(eq(recordLists.workspaceId, workspaceId), inArray(recordLists.id, found)));
+    return found;
+  });
+}
+
 export const recordListsRouter = router({
   /** All lists in the workspace, each with a live member count: the members its page shows (P46). */
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -80,13 +98,27 @@ export const recordListsRouter = router({
       return { ok: true };
     }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new Error("Database unavailable");
-    await db.delete(recordListMembers).where(and(eq(recordListMembers.listId, input.id), eq(recordListMembers.workspaceId, ctx.workspace.id)));
-    await db.delete(recordLists).where(and(eq(recordLists.id, input.id), eq(recordLists.workspaceId, ctx.workspace.id)));
+  /**
+   * Delete one list. The list and its memberships go; the people and
+   * companies on it stay. Another workspace's list is not found, never deleted.
+   */
+  delete: workspaceProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const deleted = await deleteLists(ctx.workspace.id, [input.id]);
+    if (deleted.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
     return { ok: true };
   }),
+
+  /**
+   * Delete several lists at once (owner ask 2026-11-13: "i need to be able to
+   * delete lists" — one at a time, behind a menu that showed only on hover,
+   * was the only way). Ids that are not this workspace's lists are skipped.
+   */
+  deleteMany: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const deleted = await deleteLists(ctx.workspace.id, input.ids);
+      return { deleted: deleted.length };
+    }),
 
   /**
    * One page of a list's members with the columns the list shows, searched
