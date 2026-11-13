@@ -132,7 +132,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 The **Forecast** tab beside the board gives the weighted forecast with AI commentary; **New opportunity**, **Export CSV** and a switcher between your configured pipelines are in the header too.
 
-**Lists** (/v2/lists) — named static sets of people or companies for targeting and bulk actions. **Tasks** (/v2/tasks) — your queue, including AI-proposed draft tasks awaiting approval. Assign a task to a teammate when you create it (blank means you), see the owner on every queue row, and filter the queue by assignee; the assignee is notified when it is not you.
+**Lists** (/v2/lists) — named static sets of people or companies for targeting and bulk actions. Rename or delete a list from its row's ⋯ menu or with Delete list on its own page; tick several rows to delete them together. Deleting a list is permanent, and the people and companies on it stay. **Tasks** (/v2/tasks) — your queue, including AI-proposed draft tasks awaiting approval. Assign a task to a teammate when you create it (blank means you), see the owner on every queue row, and filter the queue by assignee; the assignee is notified when it is not you.
 
 ## Outreach
 
