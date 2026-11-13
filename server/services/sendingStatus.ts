@@ -119,7 +119,9 @@ export async function sendingStatus(workspaceId: number, now: Date = new Date())
     const [s] = await db.select({ cap: workspaceSettings.areDefaultDailySendCap }).from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, workspaceId)).limit(1);
     const cap = s?.cap ?? DEFAULT_WORKSPACE_DAILY_CAP;
-    const sent = await getWorkspaceSentToday(workspaceId);
+    // The day is the one `now` falls in (2026-11-13: these read the real
+    // clock, so a caller's `now` on another day counted the wrong day's sends).
+    const sent = await getWorkspaceSentToday(workspaceId, now);
     if (sent >= cap) {
       blocks.push({
         key: "email_cap", label: `Daily send cap reached (${sent}/${cap})`, tone: "wait",
@@ -137,7 +139,7 @@ export async function sendingStatus(workspaceId: number, now: Date = new Date())
     const [configured] = await db.select({ n: sql<number>`count(*)` }).from(workspaceSettings)
       .where(and(eq(workspaceSettings.workspaceId, workspaceId), isNotNull(workspaceSettings.apolloApiKeyEnc)));
     if (Number(configured?.n ?? 0) > 0) {
-      const [cap, used] = await Promise.all([getApolloDailyCap(workspaceId), apolloPulledToday(workspaceId)]);
+      const [cap, used] = await Promise.all([getApolloDailyCap(workspaceId), apolloPulledToday(workspaceId, now)]);
       if (used >= cap) {
         blocks.push({
           key: "apollo_cap", label: "Apollo cap reached", tone: "wait", surfaces: ["are"],
