@@ -14,6 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { confirmAction } from "@/components/usip/Common";
 import { toast } from "sonner";
 import {
@@ -49,6 +50,7 @@ import {
   ExternalLink,
   Pencil,
   X,
+  Loader2,
 } from "lucide-react";
 import { pressable } from "@/lib/pressable";
 import { createSingleFlight } from "@/lib/singleFlight";
@@ -78,10 +80,49 @@ function fmtWhen(d?: string | Date | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; accent: string; onOpen: () => void; onRename: () => void; onDelete: () => void }) {
+/**
+ * The confirm for deleting lists: one from its row's menu, several from the
+ * selection bar (owner ask 2026-11-13). The lists go for good; the people and
+ * companies on them do not.
+ */
+export function confirmDeleteLists(lists: Array<Pick<RecordList, "id" | "name">>, onAccept: (ids: number[]) => void) {
+  if (lists.length === 0) return;
+  const one = lists.length === 1;
+  confirmAction({
+    title: one ? `Delete list "${lists[0].name}"?` : `Delete ${lists.length.toLocaleString()} lists?`,
+    description: one
+      ? "Only the list goes: the people and companies on it stay in your workspace."
+      : "Only the lists go: the people and companies on them stay in your workspace.",
+    ...(one ? {} : { count: { n: lists.length, one: "list" } }),
+    consequence: { kind: "permanent" },
+    confirmLabel: "Delete",
+  }, () => onAccept(lists.map((l) => l.id)));
+}
+
+/** Shown while lists are picked: how many, pick all shown, clear, delete them. */
+export function SelectionBar({ selected, shown, deleting, onSelectAll, onClear, onDelete }: { selected: number; shown: number; deleting: boolean; onSelectAll: () => void; onClear: () => void; onDelete: () => void }) {
+  if (selected === 0) return null;
+  return (
+    <div className="shrink-0 border-b border-border px-4 py-1.5 flex flex-wrap items-center gap-2 bg-muted/40 text-[12px]">
+      <span className="font-medium tabular-nums">{selected.toLocaleString()} selected</span>
+      {selected < shown && <Button size="sm" variant="ghost" className="h-7" onClick={onSelectAll}>Select all {shown.toLocaleString()}</Button>}
+      <Button size="sm" variant="ghost" className="h-7" onClick={onClear}>Clear</Button>
+      <div className="flex-1" />
+      <Button size="sm" variant="outline" className="h-7 gap-1.5 text-destructive" disabled={deleting} onClick={onDelete}>
+        {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} Delete {selected.toLocaleString()} {selected === 1 ? "list" : "lists"}
+      </Button>
+    </div>
+  );
+}
+
+function ListRow({ l, accent, selected, onSelect, onOpen, onRename, onDelete }: { l: RecordList; accent: string; selected: boolean; onSelect: () => void; onOpen: () => void; onRename: () => void; onDelete: () => void }) {
   const Icon = l.entityType === "companies" ? Building2 : ListChecks;
   return (
-    <div className="group/row flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer" {...pressable(onOpen)}>
+    <div className={cn("group/row flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer", selected && "bg-muted/40")} {...pressable(onOpen)}>
+      {/* Pick lists to delete together (owner ask 2026-11-13). */}
+      <div className="shrink-0 flex" onClick={(e) => e.stopPropagation()}>
+        <Checkbox aria-label={`Select ${l.name}`} checked={selected} onCheckedChange={onSelect} />
+      </div>
       <span className="shrink-0 size-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
         <Icon className="size-4" />
       </span>
@@ -94,8 +135,9 @@ function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; acc
       <div onClick={(e) => e.stopPropagation()}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {/* Shown on keyboard focus and while open too, not on hover alone (audit 2026-10-20, P58). */}
-            <Button aria-label={`Actions for ${l.name}`} variant="ghost" size="icon-sm" className="opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"><MoreHorizontal className="size-4" /></Button>
+            {/* Always shown (owner ask 2026-11-13): hidden until hovered, the
+                way to delete a list could not be found, and a phone has no hover. */}
+            <Button aria-label={`Actions for ${l.name}`} title="Rename or delete" variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground"><MoreHorizontal className="size-4" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={onOpen}><ExternalLink className="size-4 mr-2" /> Open list</DropdownMenuItem>
@@ -158,7 +200,22 @@ export default function Lists() {
   const { data: team } = trpc.team.list.useQuery();
   const teamMembers = ((team ?? []) as Array<{ userId: number; name: string | null }>);
   const [owner, setOwner] = useState<string>("");
-  const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => invalidateListReads(utils), onError: (e) => toast.error(e.message) });
+  // A failed delete refreshes too: the usual cause is a list a teammate deleted first.
+  const deleteMut = trpc.recordLists.delete.useMutation({
+    onSuccess: () => { invalidateListReads(utils); toast.success("List deleted"); },
+    onError: (e) => { invalidateListReads(utils); toast.error(e.message); },
+  });
+  // Delete several at once (owner ask 2026-11-13).
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const toggleSelected = (id: number) => setSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const deleteManyMut = trpc.recordLists.deleteMany.useMutation({
+    onSuccess: (res) => {
+      invalidateListReads(utils);
+      setSelected(new Set());
+      toast.success(`Deleted ${res.deleted.toLocaleString()} ${res.deleted === 1 ? "list" : "lists"}`);
+    },
+    onError: (e) => { invalidateListReads(utils); toast.error(e.message); },
+  });
   // Rename (owner ask 2026-10-06: there was no way to rename a list).
   const [renaming, setRenaming] = useState<RecordList | null>(null);
   const [renameTo, setRenameTo] = useState("");
@@ -218,7 +275,10 @@ export default function Lists() {
       { onSettled: done },
     ));
   };
-  const del = (l: RecordList) => { confirmAction({ title: `Delete list "${l.name}"?`, description: "This removes the list, not the records in it.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); };
+  const del = (l: RecordList) => confirmDeleteLists([l], ([id]) => deleteMut.mutate({ id }));
+  // Only lists on screen are deleted: a pick hidden by a later search stays put.
+  const shownLists = [...(openSections.has("People") ? peopleLists : []), ...(openSections.has("Companies") ? companyLists : [])];
+  const selectedLists = shownLists.filter((l) => selected.has(l.id));
 
   return (
     <Shell title="Lists">
@@ -263,6 +323,15 @@ export default function Lists() {
           </DropdownMenu>
         </div>
 
+        <SelectionBar
+          selected={selectedLists.length}
+          shown={shownLists.length}
+          deleting={deleteManyMut.isPending}
+          onSelectAll={() => setSelected(new Set(shownLists.map((l) => l.id)))}
+          onClear={() => setSelected(new Set())}
+          onDelete={() => confirmDeleteLists(selectedLists, (ids) => deleteManyMut.mutate({ ids }))}
+        />
+
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-4">
           <Section title="People" icon={Users} count={peopleLists.length} accent={accent} open={openSections.has("People")} onToggle={() => toggleSection("People")}>
             {isLoading ? (
@@ -272,7 +341,7 @@ export default function Lists() {
             ) : peopleLists.length === 0 ? (
               <SectionEmpty object="People" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("People")} />
             ) : (
-              peopleLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
+              peopleLists.map((l) => <ListRow key={l.id} l={l} accent={accent} selected={selected.has(l.id)} onSelect={() => toggleSelected(l.id)} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
             )}
           </Section>
 
@@ -284,7 +353,7 @@ export default function Lists() {
             ) : companyLists.length === 0 ? (
               <SectionEmpty object="Companies" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("Companies")} />
             ) : (
-              companyLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
+              companyLists.map((l) => <ListRow key={l.id} l={l} accent={accent} selected={selected.has(l.id)} onSelect={() => toggleSelected(l.id)} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
             )}
           </Section>
         </div>

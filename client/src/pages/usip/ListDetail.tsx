@@ -133,6 +133,22 @@ export default function ListDetail() {
     renameMut.mutate({ id: list.id, name });
   };
 
+  // Delete from the list's own page (owner ask 2026-11-13: "i need to be able
+  // to delete lists"; the only way was a menu on the index shown on hover).
+  const deleteListMut = trpc.recordLists.delete.useMutation({
+    onSuccess: () => { invalidateListReads(utils); toast.success("List deleted"); setLocation("/v2/lists"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteList = () => {
+    if (!list) return;
+    confirmAction({
+      title: `Delete list "${list.name}"?`,
+      description: "Only the list goes: the people and companies on it stay in your workspace.",
+      consequence: { kind: "permanent" },
+      confirmLabel: "Delete",
+    }, () => { deleteListMut.mutate({ id: list.id }); });
+  };
+
   // The description is entered and edited here too (audit 2026-10-20, U31).
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
@@ -285,6 +301,11 @@ export default function ListDetail() {
             <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => { setPicked(new Set()); setAddOpen(true); }}>
               <Plus className="size-3.5" /> Add {isCompanies ? "companies" : "people"} to list
             </Button>
+            {list && (
+              <Button variant="outline" size="sm" className="h-7 gap-1.5 text-destructive" disabled={deleteListMut.isPending} onClick={deleteList}>
+                {deleteListMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} Delete list
+              </Button>
+            )}
           </div>
           {editingDesc ? (
             <div className="mt-1.5 flex items-start gap-1.5">

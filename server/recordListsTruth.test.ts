@@ -32,6 +32,7 @@ const h = vi.hoisted(() => {
     buttons: [] as any[],
     params: {} as Record<string, string>,
     nav: [] as string[],
+    confirms: [] as Array<{ opts: any; accept: () => void }>,
   };
 });
 
@@ -67,7 +68,8 @@ vi.mock("@/components/usip/Shell", async () => {
 vi.mock("@/components/usip/AddToMenu", () => ({ AddToMenu: () => null }));
 vi.mock("@/components/usip/people/LinkedInEnrichment", () => ({ LinkedInUpdateIndicator: () => null, useEnrichJob: () => ({ enrichList: () => {}, running: false }) }));
 vi.mock("@/components/usip/people/ResearchAiMenu", () => ({ ResearchAiMenu: () => null }));
-vi.mock("@/components/usip/Common", () => ({ confirmAction: () => {} }));
+// A confirm is recorded, not accepted: a test accepts it by calling `accept`.
+vi.mock("@/components/usip/Common", () => ({ confirmAction: (opts: any, accept: () => void) => { h.confirms.push({ opts, accept }); } }));
 // Open or not, a dialog's body renders inline (a portal renders nothing on the server).
 vi.mock("@/components/ui/dialog", async (a) => {
   const { createElement: el } = await import("react");
@@ -103,7 +105,7 @@ import { listMemberPage } from "./services/listMembers";
 import { pushChunks } from "../client/src/lib/pushChunks";
 import { createSingleFlight } from "../client/src/lib/singleFlight";
 import ListDetail, { AddRecordsDialog } from "../client/src/pages/usip/ListDetail";
-import Lists from "../client/src/pages/usip/Lists";
+import Lists, { SelectionBar, confirmDeleteLists } from "../client/src/pages/usip/Lists";
 
 const WS = 2, OTHER = 9;
 const rows = (t: string) => h.db.rowsOf(t) as any[];
@@ -130,7 +132,7 @@ const member = (listId: number, recordType: string, recordId: number, ws = WS) =
 
 beforeEach(() => {
   h.db = makeSqlFakeDb({ roles: { [WS]: "rep" }, wsId: () => WS });
-  h.queries = {}; h.mutations = {}; h.calls = []; h.invalidated = []; h.toasts = []; h.buttons = []; h.params = {}; h.nav = [];
+  h.queries = {}; h.mutations = {}; h.calls = []; h.invalidated = []; h.toasts = []; h.buttons = []; h.params = {}; h.nav = []; h.confirms = [];
   mid = 0;
   rows("record_lists").push(
     { id: 7, workspaceId: WS, name: "Buyers", entityType: "people", updatedAt: new Date() },
@@ -293,6 +295,24 @@ describe("a list's page", () => {
     expect(rows("record_list_members").map((m) => m.recordId)).toEqual([2]);
   });
 
+  it("the list's page has Delete list: it asks first, then deletes and goes back to Lists (owner ask 2026-11-13)", () => {
+    const page = renderList();
+    expect(page).toContain("Delete list");
+    h.buttons.find((b) => textOf(b).includes("Delete list")).onClick();
+    expect(h.confirms).toHaveLength(1);
+    const { opts, accept } = h.confirms[0];
+    expect(opts.title).toBe('Delete list "Buyers"?');
+    expect(opts.description).toBe("Only the list goes: the people and companies on it stay in your workspace.");
+    expect(opts.consequence).toEqual({ kind: "permanent" });
+    expect(h.calls).toEqual([]);
+    accept();
+    expect(h.calls).toEqual([{ path: "recordLists.delete", vars: { id: 7 } }]);
+    mutation("recordLists.delete").onSuccess({ ok: true });
+    expect(h.toasts.at(-1)).toMatchObject({ kind: "success", msg: "List deleted" });
+    expect(h.invalidated).toContain("recordLists.*");
+    expect(h.nav).toEqual(["/v2/lists"]);
+  });
+
   it("Go find some navigates inside the app instead of reloading it (P139)", () => {
     for (const isCompanies of [false, true]) {
       h.buttons = []; h.nav = [];
@@ -308,12 +328,15 @@ describe("a list's page", () => {
 /* ── The Lists index ─────────────────────────────────────────────────────── */
 
 describe("the Lists index", () => {
-  it("a row's actions button shows on keyboard focus, not on hover alone, and names its list (P58)", async () => {
+  // 2026-11-13 (owner ask, "i need to be able to delete lists"): P58 made the
+  // button show on keyboard focus as well as hover; it is now always shown,
+  // since hidden until hovered the way to delete a list could not be found.
+  it("a row's actions button is always shown and names its list (P58)", async () => {
     h.queries["recordLists.list"] = { data: await caller().recordLists.list(), isLoading: false };
     html(createElement(Lists));
     const actions = h.buttons.find((b) => b["aria-label"] === "Actions for Buyers");
-    expect(actions.className).toContain("focus-visible:opacity-100");
-    expect(actions.className).toContain("group-focus-within/row:opacity-100");
+    expect(actions.className).not.toContain("opacity-0");
+    expect(actions.title).toBe("Rename or delete");
   });
 
   it("Enter twice makes one list (P135)", () => {
@@ -331,5 +354,97 @@ describe("the Lists index", () => {
     expect(src).toContain("{ onSettled: done },");
     expect(src).toContain('onKeyDown={(e) => { if (e.key === "Enter") create(); }}');
     expect(src).toContain("<Button onClick={create} disabled={!newName.trim() || createMut.isPending}");
+  });
+});
+
+/* ── Deleting lists (owner ask 2026-11-13) ───────────────────────────────── */
+
+describe("deleting lists (owner ask 2026-11-13: \"i need to be able to delete lists\")", () => {
+  beforeEach(() => {
+    rows("record_list_members").push(member(7, "prospect", 1), member(7, "prospect", 2), member(8, "account", 50), member(9, "prospect", 40, OTHER));
+  });
+
+  it("delete takes the list and its memberships, never the people on it", async () => {
+    expect(await caller().recordLists.delete({ id: 7 })).toEqual({ ok: true });
+    expect(rows("record_lists").map((l) => l.id).sort()).toEqual([8, 9]);
+    expect(rows("record_list_members").map((m) => m.listId).sort()).toEqual([8, 9]);
+    expect(rows("prospects")).toHaveLength(5);
+  });
+
+  it("another workspace's list, or one already gone, is not found and nothing changes", async () => {
+    expect(await refusal(caller().recordLists.delete({ id: 9 }))).toEqual({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+    expect((await refusal(caller().recordLists.delete({ id: 404 }))).code).toBe("NOT_FOUND");
+    expect(rows("record_lists")).toHaveLength(3);
+    expect(rows("record_list_members")).toHaveLength(4);
+  });
+
+  it("deleteMany deletes this workspace's lists among the ids, skips the rest, and says how many", async () => {
+    expect(await caller().recordLists.deleteMany({ ids: [7, 8, 9, 404, 7] })).toEqual({ deleted: 2 });
+    expect(rows("record_lists").map((l) => l.id)).toEqual([9]);
+    expect(rows("record_list_members").map((m) => m.listId)).toEqual([9]);
+    expect(rows("prospects")).toHaveLength(5);
+    expect(rows("accounts")).toHaveLength(4);
+    expect(await caller().recordLists.deleteMany({ ids: [404] })).toEqual({ deleted: 0 });
+  });
+
+  it("deleteMany takes 1 to 200 ids", async () => {
+    expect((await refusal(caller().recordLists.deleteMany({ ids: [] }))).code).toBe("BAD_REQUEST");
+    expect((await refusal(caller().recordLists.deleteMany({ ids: Array.from({ length: 201 }, (_, i) => i + 1) }))).code).toBe("BAD_REQUEST");
+    expect(rows("record_lists")).toHaveLength(3);
+  });
+
+  it("every row on the index has a checkbox that names its list", async () => {
+    h.queries["recordLists.list"] = { data: await caller().recordLists.list(), isLoading: false };
+    const page = html(createElement(Lists));
+    expect(page).toContain('aria-label="Select Buyers"');
+    expect(page).toContain('aria-label="Select Targets"');
+    expect(page).not.toContain("Theirs");
+  });
+
+  it("the selection bar shows only with a pick, counts it, and its buttons call through", () => {
+    const calls: string[] = [];
+    const bar = (selected: number, shown: number) => {
+      h.buttons = [];
+      return html(createElement(SelectionBar, { selected, shown, deleting: false, onSelectAll: () => calls.push("all"), onClear: () => calls.push("clear"), onDelete: () => calls.push("delete") }));
+    };
+    expect(bar(0, 2)).toBe("");
+    const one = bar(1, 2);
+    expect(one).toContain("1 selected");
+    expect(one).toContain("Select all 2");
+    expect(one).toContain("Delete 1 list");
+    for (const label of ["Select all 2", "Clear", "Delete 1 list"]) h.buttons.find((b) => textOf(b).includes(label)).onClick();
+    expect(calls).toEqual(["all", "clear", "delete"]);
+    const all = bar(2, 2);
+    expect(all).toContain("Delete 2 lists");
+    expect(all).not.toContain("Select all");
+  });
+
+  it("deleting asks first, with the count for several and that it cannot be undone, then sends the ids", () => {
+    const sent: number[][] = [];
+    confirmDeleteLists([{ id: 7, name: "Buyers" }, { id: 8, name: "Targets" }], (ids) => sent.push(ids));
+    confirmDeleteLists([{ id: 7, name: "Buyers" }], (ids) => sent.push(ids));
+    confirmDeleteLists([], (ids) => sent.push(ids));
+    expect(h.confirms).toHaveLength(2);
+    const [many, one] = h.confirms;
+    expect(many.opts).toMatchObject({ title: "Delete 2 lists?", count: { n: 2, one: "list" }, consequence: { kind: "permanent" }, confirmLabel: "Delete" });
+    expect(many.opts.description).toBe("Only the lists go: the people and companies on them stay in your workspace.");
+    expect(one.opts).toMatchObject({ title: 'Delete list "Buyers"?', consequence: { kind: "permanent" } });
+    expect(one.opts.count).toBeUndefined();
+    expect(sent).toEqual([]);
+    many.accept(); one.accept();
+    expect(sent).toEqual([[7, 8], [7]]);
+  });
+
+  it("the index's deletes refresh the lists and say what happened, and a failed one refreshes too", async () => {
+    h.queries["recordLists.list"] = { data: await caller().recordLists.list(), isLoading: false };
+    html(createElement(Lists));
+    h.mutations["recordLists.deleteMany"][0].onSuccess({ deleted: 2 });
+    expect(h.toasts.at(-1)).toMatchObject({ kind: "success", msg: "Deleted 2 lists" });
+    h.mutations["recordLists.delete"][0].onSuccess({ ok: true });
+    expect(h.toasts.at(-1)).toMatchObject({ kind: "success", msg: "List deleted" });
+    h.invalidated = [];
+    h.mutations["recordLists.delete"][0].onError({ message: "That list is not in this workspace." });
+    expect(h.toasts.at(-1)).toMatchObject({ kind: "error", msg: "That list is not in this workspace." });
+    expect(h.invalidated).toContain("recordLists.*");
   });
 });

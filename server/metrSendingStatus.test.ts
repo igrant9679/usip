@@ -94,6 +94,25 @@ describe("LinkedIn, caps and discovery (U1)", () => {
     expect(s.blocks).toEqual([expect.objectContaining({ key: "email_cap", label: "Daily send cap reached (2/2)", surfaces: ["sequences", "emails", "mailbox"] })]);
   });
 
+  // 2026-11-13: the two cap counts read the real clock, not `now`, so these
+  // tests passed only while the real date was MIDDAY's and failed after it.
+  it("a cap counts the day `now` falls in, whatever day the real clock says", async () => {
+    settings().areDefaultDailySendCap = 2;
+    settings().apolloDailyPullCap = 10;
+    settings().apolloApiKeyEnc = "enc:xxx";
+    for (let i = 1; i <= 2; i++) rows("email_drafts").push({ id: i, workspaceId: WS, status: "sent", sentAt: new Date(MIDDAY.getTime() - 3600_000) });
+    rows("are_scrape_jobs").push({ id: 1, workspaceId: WS, sourceType: "apollo", resultCount: 10, scrapedAt: new Date(MIDDAY.getTime() - 3600_000) });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      for (const realNow of [new Date("2027-03-01T12:00:00Z"), new Date("2026-11-09T12:00:00Z")]) {
+        vi.setSystemTime(realNow);
+        expect(await keys(MIDDAY)).toEqual(["email_cap", "apollo_cap"]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("Apollo cap reached, only with an Apollo key", async () => {
     settings().apolloDailyPullCap = 10;
     rows("are_scrape_jobs").push({ id: 1, workspaceId: WS, sourceType: "apollo", resultCount: 10, scrapedAt: new Date(MIDDAY.getTime() - 3600_000) });

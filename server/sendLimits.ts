@@ -45,10 +45,10 @@ import { utcDayStart } from "@shared/timeWindows";
 /** Conservative workspace-wide cap when no per-workspace override is set. */
 const DEFAULT_WORKSPACE_DAILY_CAP = 100;
 
-function todayStart(): Date {
+function todayStart(now: Date = new Date()): Date {
   // UTC — see shared/timeWindows.ts. A send cap must not roll over at an hour
   // that depends on the host's timezone.
-  return utcDayStart();
+  return utcDayStart(now.getTime());
 }
 
 /** The same YYYY-MM-DD stamp warmupEngine writes into `warmupTodayDate`. */
@@ -208,7 +208,7 @@ export async function getAccountSentLastHour(
  * outbound is paused; ARE Settings and the refusal below say which mail each
  * count is.
  */
-export async function getWorkspaceSentToday(workspaceId: number): Promise<number> {
+export async function getWorkspaceSentToday(workspaceId: number, now: Date = new Date()): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const [row] = await db
@@ -218,7 +218,7 @@ export async function getWorkspaceSentToday(workspaceId: number): Promise<number
       and(
         eq(emailDrafts.workspaceId, workspaceId),
         eq(emailDrafts.status, "sent"),
-        sql`${emailDrafts.sentAt} >= ${todayStart()}`,
+        sql`${emailDrafts.sentAt} >= ${todayStart(now)}`,
       ),
     );
   return Number(row?.cnt ?? 0);

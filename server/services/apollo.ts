@@ -80,11 +80,11 @@ export async function getApolloDailyCap(workspaceId: number): Promise<number> {
  * rather than a new counter table — every Apollo pull writes an are_scrape_jobs
  * row with its resultCount, so summing today's rows IS the usage number.
  */
-export async function apolloPulledToday(workspaceId: number): Promise<number> {
+export async function apolloPulledToday(workspaceId: number, now: Date = new Date()): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   // UTC: this gates a paid daily credit cap.
-  const midnight = utcDayStart();
+  const midnight = utcDayStart(now.getTime());
   const [row] = await db
     .select({ total: sql<number>`COALESCE(SUM(${areScrapeJobs.resultCount}), 0)` })
     .from(areScrapeJobs)
