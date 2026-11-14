@@ -4,7 +4,7 @@
  * lead, prospect or queue id use this to fill a ResearchUse. Every lookup is
  * scoped to the workspace; a missing row just means less to match on.
  */
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull, type SQL } from "drizzle-orm";
 import { accounts, contacts, leads, proposals, prospectQueue, prospects } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import type { ResearchSurface, ResearchUse } from "./context";
@@ -19,8 +19,7 @@ export type RecipientRef = {
 
 /**
  * The campaign a person is in: the newest campaign row that names their
- * People record, their contact or their address, and that the campaign did
- * not reject. A plain sequence, a meeting invite or a workflow draft holds a
+ * People record or their address, and that the campaign did not reject. A plain sequence, a meeting invite or a workflow draft holds a
  * contact, lead or person, never a campaign row, so before 2026-11-14 the
  * sector a campaign was given on purpose reached only the campaign's own
  * writers and the mailbox (which finds the row by address).
@@ -28,21 +27,25 @@ export type RecipientRef = {
 async function campaignOfPerson(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
-  who: { prospectId?: number | null; contactId?: number | null; email?: string | null },
+  who: { prospectId?: number | null; email?: string | null },
 ): Promise<number | null> {
-  const keys = [];
-  if (who.prospectId) keys.push(eq(prospectQueue.personProspectId, who.prospectId));
-  if (who.contactId) keys.push(eq(prospectQueue.linkedContactId, who.contactId));
+  // One lookup per key, each on its own index (ix_pq_person, ix_pq_email): an
+  // OR across the two would read every campaign row in the workspace, and
+  // this runs once per message written.
+  const newest = (key: SQL) =>
+    db
+      .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+      .from(prospectQueue)
+      .where(and(eq(prospectQueue.workspaceId, workspaceId), isNull(prospectQueue.rejectedAt), key))
+      .orderBy(desc(prospectQueue.id))
+      .limit(1);
   const e = String(who.email ?? "").trim().toLowerCase();
-  if (e.includes("@")) keys.push(eq(prospectQueue.email, e));
-  if (keys.length === 0) return null;
-  const [q] = await db
-    .select({ campaignId: prospectQueue.campaignId })
-    .from(prospectQueue)
-    .where(and(eq(prospectQueue.workspaceId, workspaceId), isNull(prospectQueue.rejectedAt), keys.length === 1 ? keys[0] : or(...keys)))
-    .orderBy(desc(prospectQueue.id))
-    .limit(1);
-  return q?.campaignId ?? null;
+  const [byPerson, byEmail] = await Promise.all([
+    who.prospectId ? newest(eq(prospectQueue.personProspectId, who.prospectId)) : [],
+    e.includes("@") ? newest(eq(prospectQueue.email, e)) : [],
+  ]);
+  const rows = [...byPerson, ...byEmail].sort((x, y) => y.id - x.id);
+  return rows[0]?.campaignId ?? null;
 }
 
 export async function researchUseFor(workspaceId: number, surface: ResearchSurface, ref: RecipientRef): Promise<ResearchUse> {
@@ -54,7 +57,7 @@ export async function researchUseFor(workspaceId: number, surface: ResearchSurfa
     let email: string | null = null;
     if (ref.prospectQueueId) {
       const [q] = await db
-        .select({ title: prospectQueue.title, industry: prospectQueue.industry, campaignId: prospectQueue.campaignId, rejectedAt: prospectQueue.rejectedAt })
+        .select({ title: prospectQueue.title, industry: prospectQueue.industry, campaignId: prospectQueue.campaignId, rejectedAt: prospectQueue.rejectedAt, email: prospectQueue.email })
         .from(prospectQueue)
         .where(and(eq(prospectQueue.id, ref.prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)))
         .limit(1);
@@ -64,6 +67,7 @@ export async function researchUseFor(workspaceId: number, surface: ResearchSurfa
         // A campaign that turned someone down does not lend them its sector:
         // "not a fit" is the opposite of "write to them as this market".
         if (!q.rejectedAt) use.campaignId = q.campaignId;
+        email ??= q.email;
       }
     }
     if (!use.prospectTitle && ref.prospectId) {
@@ -103,8 +107,9 @@ export async function researchUseFor(workspaceId: number, surface: ResearchSurfa
         if (a.sectorId != null) use.accountSectorId = a.sectorId;
       }
     }
-    if (use.campaignId == null && !ref.prospectQueueId) {
-      const campaignId = await campaignOfPerson(db, workspaceId, { prospectId: ref.prospectId, contactId: ref.contactId, email });
+    // Also after a rejected campaign row: they may be in another campaign that kept them.
+    if (use.campaignId == null) {
+      const campaignId = await campaignOfPerson(db, workspaceId, { prospectId: ref.prospectId, email });
       if (campaignId != null) use.campaignId = campaignId;
     }
   } catch {

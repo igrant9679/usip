@@ -110,7 +110,10 @@ function seed() {
     { id: 50, workspaceId: 2, campaignId: 7, email: "p1@x.org", title: "Office Manager", sourceType: "apollo", personProspectId: 30, rejectedAt: null },
     // Turned down by the campaign: it lends them nothing.
     { id: 51, workspaceId: 2, campaignId: 7, email: "p2@x.org", title: "Office Manager", sourceType: "apollo", personProspectId: 31, rejectedAt: new Date("2026-11-01T00:00:00Z") },
-    { id: 52, workspaceId: 2, campaignId: 7, email: "other@x.org", title: "Office Manager", sourceType: "apollo", linkedContactId: 9, rejectedAt: null },
+    { id: 52, workspaceId: 2, campaignId: 7, email: "e@linked.org", title: "Office Manager", sourceType: "apollo", rejectedAt: null },
+    // Rejected by campaign 7 later, kept by campaign 8 earlier: the one that kept them counts.
+    { id: 56, workspaceId: 2, campaignId: 8, email: "two@x.org", title: "Office Manager", sourceType: "apollo", rejectedAt: null },
+    { id: 57, workspaceId: 2, campaignId: 7, email: "two@x.org", title: "Office Manager", sourceType: "apollo", rejectedAt: new Date("2026-11-02T00:00:00Z") },
     { id: 53, workspaceId: 2, campaignId: 7, email: "lead@x.org", title: "Office Manager", sourceType: "apollo", rejectedAt: null },
     { id: 54, workspaceId: 2, campaignId: 7, email: "p3@x.org", title: "Office Manager", sourceType: "apollo", personProspectId: 32, rejectedAt: null },
     // Another workspace's campaign row for the same address.
@@ -173,7 +176,7 @@ describe("a company's sector tag picks the research for its people", () => {
 /* ── The campaign a person is in ────────────────────────────────────────── */
 
 describe("a person in a campaign gets its research from every writer", () => {
-  it("by their People record, their contact or their address", async () => {
+  it("by their People record, or by the address on their contact or lead", async () => {
     expect(await researchUseFor(2, "outreach", { prospectId: 30 })).toMatchObject({ campaignId: 7 });
     expect(await researchUseFor(2, "outreach", { contactId: 9 })).toMatchObject({ campaignId: 7 });
     expect(await researchUseFor(2, "outreach", { leadId: 40 })).toMatchObject({ campaignId: 7 });
@@ -191,6 +194,8 @@ describe("a person in a campaign gets its research from every writer", () => {
     const byAddress = await researchUseForRecipient(2, "reply", {}, ["p2@x.org"]);
     expect(byAddress.campaignId ?? null).toBeNull();
     expect(byAddress.prospectTitle).toBe("Office Manager");
+    // Turned down by one campaign and kept by another: the one that kept them.
+    expect(await researchUseForRecipient(2, "reply", {}, ["two@x.org"])).toMatchObject({ campaignId: 8 });
   });
 
   it("someone in no campaign, or only in another workspace's, gets none", async () => {
