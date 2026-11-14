@@ -121,10 +121,11 @@ export const keySharesRouter = router({
     .mutation(async ({ ctx, input }) => {
       await checkPermission(ctx, "manage_api_keys");
       const db = await requireDb();
-      const where = and(eq(workspaceKeyShares.ownerWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.targetWorkspaceId, input.targetWorkspaceId), eq(workspaceKeyShares.keyKind, input.kind));
-      const [existing] = await db.select({ id: workspaceKeyShares.id }).from(workspaceKeyShares).where(where).limit(1);
+      const [existing] = await db.select({ id: workspaceKeyShares.id }).from(workspaceKeyShares)
+        .where(and(eq(workspaceKeyShares.ownerWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.targetWorkspaceId, input.targetWorkspaceId), eq(workspaceKeyShares.keyKind, input.kind))).limit(1);
       if (!existing) return { ok: true as const, removed: false };
-      await db.delete(workspaceKeyShares).where(where);
+      await db.delete(workspaceKeyShares)
+        .where(and(eq(workspaceKeyShares.ownerWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.targetWorkspaceId, input.targetWorkspaceId), eq(workspaceKeyShares.keyKind, input.kind)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "key_share", entityId: input.targetWorkspaceId, after: { kind: input.kind, sharedWithWorkspaceId: input.targetWorkspaceId, stopped: true } });
       await recordAudit({ workspaceId: input.targetWorkspaceId, actorUserId: ctx.user.id, action: "update", entityType: "key_share", entityId: ctx.workspace.id, after: { kind: input.kind, sharedFromWorkspaceId: ctx.workspace.id, stopped: true } });
       return { ok: true as const, removed: true };
@@ -136,10 +137,11 @@ export const keySharesRouter = router({
     .mutation(async ({ ctx, input }) => {
       await checkPermission(ctx, "manage_api_keys");
       const db = await requireDb();
-      const where = and(eq(workspaceKeyShares.targetWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.keyKind, input.kind));
-      const [existing] = await db.select({ id: workspaceKeyShares.id, owner: workspaceKeyShares.ownerWorkspaceId }).from(workspaceKeyShares).where(where).limit(1);
+      const [existing] = await db.select({ id: workspaceKeyShares.id, owner: workspaceKeyShares.ownerWorkspaceId }).from(workspaceKeyShares)
+        .where(and(eq(workspaceKeyShares.targetWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.keyKind, input.kind))).limit(1);
       if (!existing) return { ok: true as const, removed: false };
-      await db.delete(workspaceKeyShares).where(where);
+      await db.delete(workspaceKeyShares)
+        .where(and(eq(workspaceKeyShares.targetWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.keyKind, input.kind)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "key_share", entityId: existing.owner, after: { kind: input.kind, sharedFromWorkspaceId: existing.owner, stoppedByBorrower: true } });
       await recordAudit({ workspaceId: existing.owner, actorUserId: ctx.user.id, action: "update", entityType: "key_share", entityId: ctx.workspace.id, after: { kind: input.kind, borrowerWorkspaceId: ctx.workspace.id, stoppedByBorrower: true } });
       return { ok: true as const, removed: true };

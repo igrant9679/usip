@@ -51,11 +51,11 @@ export function KeySharingCard({ kinds }: { kinds?: ShareableKind[] }) {
   const here = current?.name ?? "This workspace";
   const overview = trpc.keyShares.overview.useQuery(undefined, { enabled: isAdmin });
   const refresh = useRefreshKeyStatus();
-  const onError = (e: { message?: string }) => toast.error(e?.message ?? "Could not change the share");
+  const fail = (e: { message?: string }) => toast.error(e?.message ?? "Could not change the share");
 
-  const share = trpc.keyShares.share.useMutation({ onSuccess: () => { void refresh(); toast.success("Key shared"); }, onError });
-  const unshare = trpc.keyShares.unshare.useMutation({ onSuccess: () => { void refresh(); toast.success("Sharing stopped"); }, onError });
-  const stopUsing = trpc.keyShares.stopUsing.useMutation({ onSuccess: () => { void refresh(); toast.success("No longer using the shared key"); }, onError });
+  const share = trpc.keyShares.share.useMutation({ onSuccess: () => { void refresh(); toast.success("Key shared"); }, onError: fail });
+  const unshare = trpc.keyShares.unshare.useMutation({ onSuccess: () => { void refresh(); toast.success("Sharing stopped"); }, onError: fail });
+  const stopUsing = trpc.keyShares.stopUsing.useMutation({ onSuccess: () => { void refresh(); toast.success("No longer using the shared key"); }, onError: fail });
 
   if (!isAdmin) return null;
   const data = overview.data;

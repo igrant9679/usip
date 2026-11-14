@@ -508,7 +508,9 @@ describe("wiring", () => {
   it("research bills the workspace's own key and never falls back to the server's", () => {
     const llm = read("server/_core/llm.ts");
     const fn = llm.slice(llm.indexOf("export async function workspaceAnthropicKey"), llm.indexOf("export async function runAnthropicServerTools"));
-    expect(fn).toContain("return tryDecryptSecret(row?.enc);");
+    // 2026-11-13: or a key another workspace lends it (services/keyShares) — a
+    // key some workspace entered and pays for, and still never the server's.
+    expect(fn).toContain('return tryDecryptSecret(row?.enc) || (await linkedKey(workspaceId, "anthropic"));');
     expect(fn).not.toContain("ENV.");
     const run = llm.slice(llm.indexOf("export async function runAnthropicServerTools"));
     expect(run).toContain("await checkMonthlyCap(args.workspaceId, Date.now());");

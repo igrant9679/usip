@@ -108,7 +108,7 @@ export default function Social() {
                     </div>
                     <div className="ml-auto flex items-center gap-1">
                       {inv.date && <span className="text-xs text-muted-foreground">{fmtDate(inv.date)}</span>}
-                      {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                      {url && <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${name} on LinkedIn`} title="Open on LinkedIn" className="text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
                       <ConfirmButton size="sm" variant="ghost" disabled={withdraw.isPending}
                         title={`Withdraw your invitation to ${name}?`}
                         description="The connection request is cancelled on LinkedIn and marked withdrawn here."
@@ -143,7 +143,7 @@ export default function Social() {
                       <div className="font-medium truncate">{name}</div>
                       {r.headline && <div className="text-xs text-muted-foreground truncate">{r.headline}</div>}
                     </div>
-                    {url && <a href={url} target="_blank" rel="noopener noreferrer" className="ml-auto text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
+                    {url && <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${name} on LinkedIn`} title="Open on LinkedIn" className="ml-auto text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
                   </li>
                 );
               })}
