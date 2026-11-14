@@ -144,6 +144,13 @@ const ALLOWED: Record<string, string> = {
     "Same cascade, same verified parent id. No workspaceId column.",
   "server/routers/proposals.ts::proposalFeedback::eq(proposalFeedback.proposalId, input.id)":
     "Same cascade, same verified parent id. No workspaceId column.",
+  // 2026-11-13: workspace_key_shares names two workspaces, so it has no single
+  // workspaceId column. Each delete is pinned to the caller's own workspace on
+  // the side that caller owns: the lender's column, or the borrower's.
+  "server/routers/keyShares.ts::workspaceKeyShares::and(eq(workspaceKeyShares.ownerWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.targetWorkspaceId, input.targetWorkspaceId), eq(workspaceKeyShares.keyKind, input.kind))":
+    "keyShares.unshare — ownerWorkspaceId = ctx.workspace.id: a lender takes back only what it lends.",
+  "server/routers/keyShares.ts::workspaceKeyShares::and(eq(workspaceKeyShares.targetWorkspaceId, ctx.workspace.id), eq(workspaceKeyShares.keyKind, input.kind))":
+    "keyShares.stopUsing — targetWorkspaceId = ctx.workspace.id: a borrower gives up only what it borrows.",
 };
 
 describe("no destructive statement can be aimed at another tenant", () => {
