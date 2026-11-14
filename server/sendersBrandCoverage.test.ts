@@ -83,7 +83,8 @@ describe("every prospect-facing writer carries the sender's brand", () => {
   it("the voice agent speaks with the workspace's brand", () => {
     const src = read("server/services/voiceBridge.ts");
     expect(src).toContain("const brand = await buildBrandContext(agent.workspaceId).catch(() => \"\");");
-    expect(src).toContain("defaultInstructions(agent.name, ownerName), brand].filter(Boolean).join(\"\\n\\n\")");
+    // 2026-11-14: the caller's market research rides beside the brand (researchReach.test.ts); the brand still comes first.
+    expect(src).toContain("defaultInstructions(agent.name, ownerName), brand, research].filter(Boolean).join(\"\\n\\n\")");
   });
 
   it("writers that already build the block are not double-branded", () => {
