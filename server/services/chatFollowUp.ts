@@ -29,6 +29,8 @@ import { activities, chatAgents, chatSessions, notifications, tasks } from "../.
 import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
+import type { ResearchUse } from "./research/context";
+import { researchUseForRecipient } from "./research/recipient";
 import { scrubUnsupportedClaims, transcriptText, type ChatMessage } from "./chatAgent";
 import { isEmailSuppressed } from "../routers/emailSuppressions";
 import { sendWorkspaceEmail } from "../emailDelivery";
@@ -150,6 +152,8 @@ async function draftFollowUp(opts: {
   messages: ChatMessage[];
   visitorName: string | null;
   bookingUrl: string;
+  /** The visitor's market, when the address they left belongs to a record (2026-11-14). */
+  research?: ResearchUse;
 }): Promise<{ subject: string; body: string } | null> {
   const brand = await buildBrandContext(opts.workspaceId).catch(() => "");
   const prompt = `You are ${opts.displayName}. A visitor chatted with you on our website, gave their email, and then left without booking a meeting. Write ONE short follow-up email to bring them back.
@@ -172,6 +176,7 @@ ${HUMAN_COPY_RULES}`;
   try {
     const res = await invokeLLM({
       workspaceId: opts.workspaceId,
+      research: opts.research,
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic — same pattern as runChatTurn.
       outputSchema: {
@@ -295,6 +300,11 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
             messages,
             visitorName: (s as any).visitorName ?? null,
             bookingUrl,
+            // The email goes to the address itself, so its owner is the only
+            // reader: unlike the live chat, nothing here can tell a stranger
+            // that an address is on file. The reply view carries no market
+            // figures, which this email may not state anyway.
+            research: await researchUseForRecipient(agent.workspaceId, "reply", { leadId: (s as any).leadId ?? null }, [email]),
           });
           if (!draft) { out.failed += 1; continue; }
 

@@ -171,7 +171,7 @@ export async function sendSocialInviteTask(workspaceId: number, taskId: number, 
   }
   const { generateInviteNote } = await import("./socialAutopilot");
   const { sendLinkedInInvitation } = await import("../lib/unipile");
-  const note = await generateInviteNote(workspaceId, { name, title: leadTitle, company: leadCompany });
+  const note = await generateInviteNote(workspaceId, { name, title: leadTitle, company: leadCompany, ref: t.relatedType === "lead" && t.relatedId ? { leadId: t.relatedId } : undefined });
   const claimed = await db.update(tasks).set({ status: "in_progress" } as never)
     .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId), eq(tasks.status, "open")));
   if (affectedRowsOf(claimed) !== 1) return { ok: false, reason: "already_taken" };

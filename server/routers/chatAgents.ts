@@ -38,6 +38,8 @@ import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
 import { checkCode, issueDecoyCode, resolveChatIdentity, sendCode } from "../services/chatIdentity";
 import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
+import { researchContextFor } from "../services/research/context";
+import { researchUseForRecipient } from "../services/research/recipient";
 import { getChatFunnelStats } from "../services/performanceMetrics";
 import { slugify } from "@shared/slugify";
 import { assertOwnerInWorkspace, assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
@@ -570,6 +572,14 @@ export const chatAgentsRouter = router({
         session = { ...session, ...check.patch } as typeof session;
       }
       const identity = await resolveChatIdentity(agent.workspaceId, session, typedEmail).catch(() => ({ status: "unknown" as const }));
+      // Their market's research, only once the address is proven (2026-11-14).
+      // Before that the agent must read the same for a customer and a
+      // stranger (G44), so it gets nothing that depends on who they are.
+      let researchBlock = "";
+      if (identity.status === "verified") {
+        const use = await researchUseForRecipient(agent.workspaceId, "reply", {}, [typedEmail]);
+        researchBlock = (await researchContextFor(agent.workspaceId, use)).block;
+      }
 
       const turn = await runChatTurn({
         workspaceId: agent.workspaceId,
@@ -588,6 +598,7 @@ export const chatAgentsRouter = router({
         }),
         identity,
         codeResult: check.result,
+        researchBlock,
       });
 
       const visitor = mergeVisitor(known, turn.extracted);

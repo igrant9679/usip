@@ -434,6 +434,14 @@ export interface ChatTurnInput {
   identity?: ChatIdentityView;
   /** What the code in this message did, if it had one. */
   codeResult?: "verified" | "wrong" | "expired" | null;
+  /**
+   * The research on the visitor's market, already rendered, for a visitor who
+   * has PROVEN their email and is in the CRM (2026-11-14). Empty for everyone
+   * else: an agent that sounded like it knew a stranger's sector would tell
+   * them the address is on file, which is what G44 stopped. The caller
+   * decides (routers/chatAgents); this only places it in the prompt.
+   */
+  researchBlock?: string;
 }
 
 /**
@@ -490,7 +498,7 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
 ${brand ? `About us:\n${brand}\n` : ""}${input.persona ? `Additional instructions:\n${input.persona}\n` : ""}
 ${input.knowledge ? `Facts you may answer from:\n${input.knowledge}\nThese facts and "About us" above are the ONLY specifics you may state. This applies to WHAT SERVICES WE OFFER as much as to anything else: if a visitor asks whether we do something and it is not written above, you do NOT know — say so, say you will find out, and offer the audit conversation. Confirming a service we have not listed is the single worst thing you can do here, because someone will book expecting it.\n` : ""}${questions.length ? `Work these into the conversation naturally, one at a time — never interrogate:\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n` : ""}
 ${input.pageContext ? `${input.pageContext}\n\n` : ""}Already known about this visitor (do NOT ask again): ${knownLines.length ? knownLines.join(", ") : "nothing yet"}
-${identityGuidance(input.identity, input.codeResult) ? `\n${identityGuidance(input.identity, input.codeResult)}\n` : ""}
+${identityGuidance(input.identity, input.codeResult) ? `\n${identityGuidance(input.identity, input.codeResult)}\n` : ""}${input.researchBlock?.trim() ? `\n${input.researchBlock.trim()}\nThis is about their market in general, not about this visitor: never present it as something you know about them or their organisation, and it does not add to what you may claim about us.\n` : ""}
 Conversation so far:
 ${transcriptText(input.messages, input.displayName)}
 

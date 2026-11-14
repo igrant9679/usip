@@ -18,19 +18,23 @@ const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8").r
 const passesResearch = (args: string) => /\bresearch\b\s*[:,}]/.test(args);
 
 const INTERNAL = "Internal: classifies, scores, extracts or summarises for the rep; it does not write for or about a prospect's market.";
-const ANON = "Website visitors are anonymous: no title or record to match, and the chat agent's own knowledge covers the product.";
+// 2026-11-14: a visitor who has proven their email is no longer anonymous.
+// routers/chatAgents renders their market's block and hands it to the turn
+// (researchBlock), so the call still passes no `research` option: the option
+// cannot tell a proven address from a typed one, and the router can.
+const ANON = "Website visitors are anonymous until they prove their email; for a proven one the router places the block in the prompt (researchBlock), not this option.";
 
 const EXCLUDED: Record<string, string> = {
   "server/llmStreamRoute.ts::/api/llm/stream": "Generic passthrough with no client callers; a caller can pass research in its own body.",
   "server/services/chatAgent.ts::runChatTurn": ANON,
-  "server/services/chatFollowUp.ts::draftFollowUp": ANON,
   "server/routers/cs.ts::generateQbrPrep": "QBR prep for existing customers, not research on a prospect's market.",
   "server/routers/are/signalEnhancement.ts::runSignalEnhancement": "Its output (prospect_intelligence.enhancedHook) is not read anywhere.",
   "server/services/replyClassifier.ts::classifyAndHandleSocialMessage": "Its suggested reply is generated but never saved or shown; the classification is internal.",
   "server/routers/are/prospects.ts::evaluateSequenceQuality": "Quality score. The research's avoid rules are checked separately, by the brief check in services/research/avoidCheck.",
   "server/services/research/avoidCheck.ts::checkBrief": "The brief check: it is given the avoid rules, pains and lead-with points themselves, not the selling block.",
-  "server/routers/assistant.ts::chat": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
-  "server/routers/assistant.ts::chat#2": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
+  // True since 2026-11-14: the research router is in the assistant's catalog (researchReach.test.ts pins it).
+  "server/routers/assistant.ts::chat": "The assistant answers the rep through its tools; research reaches it through them (research.* in its catalog), not a prompt block.",
+  "server/routers/assistant.ts::chat#2": "The assistant answers the rep through its tools; research reaches it through them (research.* in its catalog), not a prompt block.",
   "server/routers/are/icp.ts::inferIcp": "Takes ALL the workspace's researched sectors as prior knowledge through its own prompt section (phase 4), not the per-prospect block.",
   "server/routers/are/campaigns.ts::generateTargeting": "Turns a typed description into targeting before any campaign or prospect exists; a sector's targeting is used directly by Create campaign from sector instead.",
   "server/services/campaignProposals.ts::proposeForCluster": "Proposes campaigns from clusters of existing people; follow-up: suggest the matching research sector.",
@@ -104,6 +108,8 @@ const WIRED = [
   // Proposals: the client through the proposal's contact, account or client email.
   "server/proposalsStreamRoute.ts::/api/proposals/:id/section/:key/stream",
   "server/routers/proposals.ts::generateSectionContent",
+  // The chat follow-up email (2026-11-14): the address the visitor left, when it belongs to a record.
+  "server/services/chatFollowUp.ts::draftFollowUp",
 ];
 
 describe("every AI writer is wired to research, or excluded with a reason", () => {
@@ -160,6 +166,15 @@ describe("the research option itself", () => {
     expect(relay).toContain('await researchUseFor(wsId, "voice", refFromRelated(row.relatedType, row.relatedId))');
     expect(relay).toMatch(/brand,\n\s+research,\n/);
     expect(read("server/services/voiceCallScript.ts")).toContain("if (s.research?.trim()) parts.push(s.research.trim());");
+  });
+
+  // The scan above reads invokeLLM and streamLLM only. These two talk to a
+  // realtime voice socket and a chat prompt instead, so each is pinned here or
+  // losing its research would go unnoticed (the inbound agent had none until
+  // 2026-11-14 for exactly that reason).
+  it("the writers the scan cannot see are wired too", () => {
+    expect(read("server/services/voiceBridge.ts")).toContain("brand, research].filter(Boolean)");
+    expect(read("server/services/chatAgent.ts")).toContain("${input.researchBlock?.trim() ?");
   });
 
   it("background writers name their workspace, or the option would do nothing there", () => {

@@ -49,6 +49,16 @@ Hub with tabs:
 - **Data Health** (`?tab=data-health-center`) — duplicates, gaps, import-mapping audits, what missing data costs in reach. Three duplicate surfaces, each naming its table: **Duplicate People** (the KPI card), **Duplicate contacts** (mergeable — the loser row is deleted), and **Split across People & Contacts** (2026-09-20): one human with a People row and a CRM contact that are not linked, or linked to the wrong People row. The repair LINKS — **Link** / **Re-link** per row, **Link all unlinked** for the batch — and also merges the contact’s own values onto the People record. It never deletes a row and never merges two People rows, so pairs marked *Needs a merge* (two People rows holding one address) stay until someone edits them by hand. Re-linking an already-linked contact needs manager.
 - The **Enrichment sweep** and **Company backfill** cards: backlog email-finding (Reoon credits) and LinkedIn company backfill (~100 lookups/day), each with its own dial and daily cap.
 
+### ★ Research — `/research` (tabs: Markets · Personas `/personas` · ICP `/are/icp`)
+What the workspace knows about the markets it sells into. This is the "who THEY are" input to every AI writer; brand voice and the knowledge base are "who WE are".
+- **Markets** hold **sectors**. A sector has buyers and pains, targeting (titles, industries, never-target words), messaging (lead with, **never say**, vocabulary, a sample opening) and optional market facts. Typed by hand, drafted by an **AI research run** (a manager starts it; nothing is saved until a person accepts the parts), or imported from Downstream by an admin.
+- **Only a Researched or Verified sector reaches a writer.** A Draft reaches nothing.
+- **Which research a writer uses, first match wins:** a sector or persona named directly (Email Builder's "Write for"); the person's Revenue Engine campaign (its sector, then its persona), which follows them into sequences, invites, replies and calls unless the campaign rejected them; the sector their company is tagged with; a persona whose titles match their job title; a sector whose targeting titles, then industries, match. No match means the writer behaves as if Research did not exist.
+- **Who reads it:** campaign fit scores, dossiers and copy; sequence steps; subject lines; Email Builder; the editor assistant; mailbox replies and forwards; suggested replies; proposals; account briefs; deal intelligence; meeting invites; workflow drafts; LinkedIn openers; the voice agent on calls it places and answers; the website chat for a visitor who has verified their email, and its follow-up email. The AI Assistant reads markets and sectors through its tools.
+- **Beyond wording:** a sector's never-say rules can **hold** campaign copy before enrolment; its never-target words reject people in screening; researched sectors fill blank campaign targeting and seed the ICP agent; results count replies by sector, persona, pain and opener.
+- **What the AI writers read** (on each sector page) shows the exact text a writer is given, per kind of writing. **Check what a writer would use** (on the Research page) takes an email address, or a title and industry, and says which research applies and why. Use these before guessing why copy reads the way it does.
+- Research never crosses workspaces.
+
 ### Saved People / Saved Companies — `/v2/lists?type=people|companies`
 Bookmarks from sourcing, before deciding whether to work them. Same page as Lists with a filter.
 
@@ -211,7 +221,7 @@ Multiple named pipelines per workspace, each with its own stages (key, label, or
 Fit and engagement models with grade thresholds (install defaults, set primary, **Recalculate** after enrichment waves); assignment rules for new leads (round-robin, territory, owner rules).
 
 ### Brand Voice — `/brand-voice` · Personas — `/personas` · ICP Agent — `/are/icp`
-How the AI sounds; who it writes to; the living ideal-customer profile (current version, history, regenerate, override, restore). There is **one** brand voice profile per workspace, edited here or at Settings → Branding, and every AI writer reads it — ARE Settings has no voice picker of its own (the one that was there wrote a column nobody read; removed 2026-09-20). **Apply to AI** off here silences branding for all of them.
+(Personas and ICP are also tabs of **Research**, above.) How the AI sounds; who it writes to; the living ideal-customer profile (current version, history, regenerate, override, restore). There is **one** brand voice profile per workspace, edited here or at Settings → Branding, and every AI writer reads it — ARE Settings has no voice picker of its own (the one that was there wrote a column nobody read; removed 2026-09-20). **Apply to AI** off here silences branding for all of them.
 
 ### Prompt Templates — `/prompt-templates`
 Versioned prompts behind the AI generators (sequence writer, reply drafts, QBR prep). Edit with care; the campaign's own **sequence prompt** (voice + do-not list) overrides per campaign.

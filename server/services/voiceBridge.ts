@@ -19,6 +19,8 @@ import { linkedKey } from "./keyShares";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
+import { researchContextFor } from "./research/context";
+import { refFromRelated, researchUseFor } from "./research/recipient";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
 import { historyBlock, knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult, VOICE_REASONING } from "./voiceCallScript";
 import { buildPersonHistory, personIdForRecord } from "./personHistory";
@@ -128,6 +130,11 @@ export function answerInboundCall(opts: BridgeOpts): void {
     const [callRow] = await db.select({ relatedType: voiceCalls.relatedType, relatedId: voiceCalls.relatedId }).from(voiceCalls).where(eq(voiceCalls.id, opts.callRowId)).limit(1);
     const personId = await personIdForRecord(agent.workspaceId, callRow?.relatedType, callRow?.relatedId);
     const history = personId ? await buildPersonHistory(agent.workspaceId, personId) : "";
+    // The caller's market, when their number matched a record (2026-11-14):
+    // the same short spoken brief the outbound agent gets (voiceRelay). An
+    // unmatched caller matches nothing, so the agent behaves as before.
+    const researchUse = await researchUseFor(agent.workspaceId, "voice", refFromRelated(callRow?.relatedType, callRow?.relatedId));
+    const research = (await researchContextFor(agent.workspaceId, researchUse)).block;
 
     const startedAtMs = Date.now();
     const transcript: string[] = [];
@@ -176,7 +183,7 @@ export function answerInboundCall(opts: BridgeOpts): void {
 
     sock.on("open", () => {
       opened = true;
-      const instructions = [agent.instructions?.trim() || defaultInstructions(agent.name, ownerName), brand].filter(Boolean).join("\n\n");
+      const instructions = [agent.instructions?.trim() || defaultInstructions(agent.name, ownerName), brand, research].filter(Boolean).join("\n\n");
       const session: Record<string, unknown> = {
         voice: agent.voice || "eve",
         // The brand block carries the knowledge base's overview; with

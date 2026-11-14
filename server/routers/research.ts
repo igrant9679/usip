@@ -29,7 +29,8 @@ import { workspaceAnthropicKey } from "../_core/llm";
 import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchDraft } from "../services/research/engine";
 import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
 import { commitDownstream, previewDownstream } from "../services/research/downstreamImport";
-import { __clearResearchContextCache, forgetResearchContext } from "../services/research/context";
+import { RESEARCH_BUDGET, RESEARCH_SURFACES, __clearResearchContextCache, forgetResearchContext, researchContextFor, type ResearchUse } from "../services/research/context";
+import { recipientRefByEmail, researchUseFor } from "../services/research/recipient";
 import { personaResultSummaries, researchResults, sectorTallies } from "../services/research/results";
 import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
 import { isAdminRole } from "@shared/roleRank";
@@ -1107,6 +1108,72 @@ export const researchRouter = router({
       .query(({ ctx, input }) => researchResults(ctx.workspace.id, { personaId: input.id })),
     /** Contacted, replied and meetings per persona, for the persona lists. */
     personas: workspaceProcedure.query(({ ctx }) => personaResultSummaries(ctx.workspace.id)),
+  }),
+
+  /* ── What the writers read (2026-11-14) ─────────────────────────────── */
+
+  // Which research a writer would use for a recipient, why, and the exact
+  // text it is given. It calls the composer every writer calls, so this
+  // screen cannot say one thing while a writer is handed another. Read by
+  // everyone, like the research itself; it holds no personal data beyond the
+  // job title and industry the workspace already has on the record.
+  writers: router({
+    view: workspaceProcedure
+      .input(z.object({
+        surface: z.enum(RESEARCH_SURFACES).default("outreach"),
+        sectorId: Id.optional(),
+        personaId: Id.optional(),
+        title: z.string().trim().max(160).optional(),
+        industry: z.string().trim().max(160).optional(),
+        email: z.string().trim().max(320).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const ws = ctx.workspace.id;
+        let use: ResearchUse = { surface: input.surface };
+        let recordFound: boolean | null = null;
+        if (input.email) {
+          const ref = await recipientRefByEmail(ws, input.email);
+          recordFound = Object.values(ref).some((v) => v != null);
+          if (recordFound) use = await researchUseFor(ws, input.surface, ref);
+        }
+        // What the person typed wins over the record: they are asking "what if".
+        if (input.title) use.prospectTitle = input.title;
+        if (input.industry) use.industry = input.industry;
+        if (input.sectorId != null) use.sectorId = input.sectorId;
+        if (input.personaId != null) use.personaId = input.personaId;
+        const c = await researchContextFor(ws, use);
+
+        // A sector asked for by name and not used: say why, or the page shows
+        // an empty box and the reader blames the writer.
+        let sectorNotUsed: "draft" | "paused" | "missing" | null = null;
+        if (input.sectorId != null && c.sectorId !== input.sectorId) {
+          const db = await requireDb();
+          const [s] = await db
+            .select({ status: researchSectors.status })
+            .from(researchSectors)
+            .where(and(eq(researchSectors.id, input.sectorId), eq(researchSectors.workspaceId, ws)))
+            .limit(1);
+          sectorNotUsed = !s ? "missing" : s.status === "draft" ? "draft" : "paused";
+        }
+        return {
+          surface: input.surface,
+          matchedBy: c.matchedBy,
+          sector: c.sectorId != null ? { id: c.sectorId, name: c.sectorName ?? "", marketName: c.marketName ?? "" } : null,
+          persona: c.personaId != null ? { id: c.personaId, name: c.personaName ?? "" } : null,
+          block: c.block,
+          chars: c.block.length,
+          budget: RESEARCH_BUDGET[input.surface],
+          avoidRules: c.avoid.length,
+          recordFound,
+          known: {
+            title: use.prospectTitle ?? null,
+            industry: use.industry ?? null,
+            inCampaign: use.campaignId != null,
+            companyHasSector: use.accountSectorId != null,
+          },
+          sectorNotUsed,
+        };
+      }),
   }),
 
   /* ── Downstream imports (phase 5) ───────────────────────────────────── */

@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { toast } from "sonner";
 import { Plus, Sparkles, Telescope } from "lucide-react";
 import { RecentRuns, ResearchSettingsButton, StartRunDialog } from "@/components/usip/research/ResearchRuns";
+import { RecipientCheck } from "@/components/usip/research/WritersView";
 import { DownstreamSection } from "@/components/usip/research/DownstreamSection";
 import { ResearchSubNav, StatusBadge, reportDropped, useResearchRoles } from "@/components/usip/research/ResearchFields";
 
@@ -115,6 +116,7 @@ export default function ResearchHome() {
           ))}
         </div>
       )}
+      {rows.length > 0 && <div className="mt-4"><RecipientCheck /></div>}
       <div className="mt-4"><RecentRuns /></div>
       <div className="mt-4"><DownstreamSection /></div>
       </div>

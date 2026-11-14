@@ -10,8 +10,10 @@
  * Which research applies, first match wins:
  *   1. the sector or persona the caller names;
  *   2. the ARE campaign's research sector, then its persona;
- *   3. the persona whose job titles match the prospect's title;
- *   4. the sector whose targeting titles, then industries, match.
+ *   3. the sector the prospect's company is tagged with (2026-11-14: the tag
+ *      was written on import and on approval but no writer read it);
+ *   4. the persona whose job titles match the prospect's title;
+ *   5. the sector whose targeting titles, then industries, match.
  * Only sectors a person marked Researched or Verified are used (owner
  * decision: never a draft). Nothing matches → "" and the writer behaves
  * exactly as it did before Research existed.
@@ -35,11 +37,16 @@ export type ResearchSurface =
   | "voice" // the phone agent: short, spoken, no statistics
   | "judge"; // checking generated copy: the rules it must follow
 
+/** Every surface, for an input gate (research.writers.view). */
+export const RESEARCH_SURFACES = ["outreach", "reply", "research", "voice", "judge"] as const satisfies readonly ResearchSurface[];
+
 export type ResearchUse = {
   surface: ResearchSurface;
   campaignId?: number | null;
   personaId?: number | null;
   sectorId?: number | null;
+  /** The sector the recipient's company is tagged with (accounts.research_sector_id). */
+  accountSectorId?: number | null;
   prospectTitle?: string | null;
   industry?: string | null;
 };
@@ -48,7 +55,11 @@ export type ResearchContext = {
   block: string;
   sectorId: number | null;
   personaId: number | null;
-  matchedBy: "sector" | "campaign" | "persona" | "title" | "industry" | null;
+  matchedBy: "sector" | "campaign" | "account" | "persona" | "title" | "industry" | null;
+  /** Names, for the screens that say which research a writer will use. Never personal data. */
+  sectorName: string | null;
+  marketName: string | null;
+  personaName: string | null;
   /** The sector's avoid rules plus the persona's objections are NOT rules; only avoid rules. */
   avoid: string[];
   /** The pains the writer was given (the sector's, then the persona's), for the brief check to tag (phase 6). */
@@ -57,7 +68,7 @@ export type ResearchContext = {
   leadWith: string[];
 };
 
-const EMPTY: ResearchContext = { block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [], pains: [], leadWith: [] };
+const EMPTY: ResearchContext = { block: "", sectorId: null, personaId: null, matchedBy: null, sectorName: null, marketName: null, personaName: null, avoid: [], pains: [], leadWith: [] };
 
 /* ── What a workspace has (cached briefly: writers run per prospect) ──── */
 
@@ -168,7 +179,7 @@ export function industryRulesOut(sector: SectorContent | null | undefined, indus
 
 type Item = { priority: number; text: string; keep?: boolean };
 
-const BUDGET: Record<ResearchSurface, number> = { outreach: 2600, reply: 1600, research: 3600, voice: 900, judge: 1600 };
+export const RESEARCH_BUDGET: Record<ResearchSurface, number> = { outreach: 2600, reply: 1600, research: 3600, voice: 900, judge: 1600 };
 
 export function formatResearchBlock(args: { surface: ResearchSurface; marketName: string; sector: SectorContent | null; persona: PersonaRow | null }): string {
   const { surface, sector, persona } = args;
@@ -215,7 +226,7 @@ export function formatResearchBlock(args: { surface: ResearchSurface; marketName
     ? "## Rules from your market research"
     : `## The prospect's market (your research${args.marketName ? `: ${args.marketName}` : ""}${sector?.name ? ` › ${sector.name}` : ""})\nUse it to make the writing specific; do not recite it.`;
   // Lowest priority goes first when over budget; avoid rules never go.
-  const budget = BUDGET[surface];
+  const budget = RESEARCH_BUDGET[surface];
   const kept = items.slice().sort((a, b) => a.priority - b.priority);
   const size = () => head.length + kept.reduce((n, i) => n + i.text.length + 2, 0);
   while (size() > budget) {
@@ -256,6 +267,12 @@ export async function researchContextFor(workspaceId: number, use: ResearchUse):
         if (persona == null) { persona = personaById(c.personaId); if (persona) matchedBy ??= "campaign"; }
       }
     }
+
+    // A persona chosen on purpose brings its own sector. Failing that, the
+    // sector the company is tagged with: someone put that company in that
+    // sector, which says more than a job title that exists in every industry.
+    if (sectorId == null && persona?.sectorId != null && snap.sectors.has(persona.sectorId)) { sectorId = persona.sectorId; matchedBy ??= "persona"; }
+    if (sectorId == null && use.accountSectorId != null && snap.sectors.has(use.accountSectorId)) { sectorId = use.accountSectorId; matchedBy ??= "account"; }
 
     // The prospect's title picks the persona (one with research), and through it the sector.
     if (persona == null && use.prospectTitle) {
@@ -300,6 +317,9 @@ export async function researchContextFor(workspaceId: number, use: ResearchUse):
       sectorId: sector?.id ?? null,
       personaId: persona?.id ?? null,
       matchedBy,
+      sectorName: sector?.content.name ?? null,
+      marketName: sector?.marketName ?? null,
+      personaName: persona?.name ?? null,
       avoid: sector?.content.messaging.avoid ?? [],
       pains,
       leadWith: sector?.content.messaging.leadWith ?? [],

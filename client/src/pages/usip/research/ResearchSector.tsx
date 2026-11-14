@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { FileBarChart, Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
 import { RunsForRecord, StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { CreateCampaignFromSector } from "@/components/usip/research/CreateCampaignFromSector";
+import { SectorWritersView } from "@/components/usip/research/WritersView";
 import { PersonaResultsBadge, SectorResults, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
 import {
@@ -336,6 +337,8 @@ export default function ResearchSector() {
             <Textarea aria-label="Sample opening line" rows={3} value={m.sampleOpening} disabled={ro} onChange={(e) => setM({ sampleOpening: e.target.value })} placeholder="An example to adapt, never to copy word for word." />
           </div>
         </Section>
+
+        <SectorWritersView sectorId={id} dirty={draft.dirty} />
 
         <Section title="Market facts" description="All optional. Leave a number blank rather than guess, and cite where each one came from.">
           <RowsEditor

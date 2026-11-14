@@ -51,6 +51,7 @@ import { normalizeRoutingConditions, routingConditionsMatch, routingConditionsPr
 import { takeEngagedLeads, noteLeadEngagement } from "../services/leadRescoreQueue";
 import { activeJob, cancelJob, enqueueJob, getJob as getBulkJob, registerJobKind } from "../services/jobs/runner";
 import { affectedRowsOf } from "../_core/claim";
+import { researchUseFor } from "../services/research/recipient";
 
 /* ───────── helpers ───────── */
 
@@ -248,7 +249,8 @@ async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput 
       // Named: lead scoring also runs from background recalculations.
       workspaceId: lead.workspaceId,
       // Research phase 4: "fit" means fit to the lead's researched market.
-      research: { surface: "research", prospectTitle: lead.title },
+      // Through the lead's record (2026-11-14), so a lead in a campaign is judged against that campaign's market.
+      research: await researchUseFor(lead.workspaceId, "research", { leadId: lead.id }),
       messages: [
         { role: "system", content: "You assess B2B lead/product fit. Output JSON only." },
         {
