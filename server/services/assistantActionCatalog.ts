@@ -72,6 +72,11 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   are: { group: "Revenue Engine", description: "Autonomous campaigns: create, update, status, approve/skip/restore people, push people in, regenerate sequences, routing and proposals, metrics, ICP" },
   recordLists: { group: "Lists", description: "People and company lists: create, add and remove members" },
   personas: { group: "Configuration", description: "Buyer personas and categories" },
+  // 2026-11-14: the assistant could read personas but not the markets and
+  // sectors they belong to, so it could not say what the AI writers know
+  // about a market. Reads, and edits a manager confirms; see DENY_PATH for
+  // what stays a person's click on the Research page.
+  research: { group: "Research", description: "Market and sector research the AI writers read: markets, sectors, versions, research runs and reply results" },
   brandVoice: { group: "Configuration", description: "Brand voice profile" },
   scoring: { group: "Configuration", description: "Fit-scoring models and criteria" },
   leadScoring: { group: "Configuration", description: "Lead scoring thresholds and recalculation" },
@@ -112,7 +117,11 @@ export const DENY_LEAF = /(send|dispatch|message|reply(?!Class)|delete|remove|pu
 // Bulk actions on "all matching" and People's bulk enrich (2026-11-07, F30,
 // R66) are a person's click with a stated count: one can delete thousands of
 // records or spend vendor credits on thousands of people.
-export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume)|(prospects|leads|companies)\.bulkByFilter|prospects\.enrichFullBulk)/;
+// Research (2026-11-14): starting a run spends the workspace's Anthropic key
+// on web research, and accepting one decides what every writer says about a
+// market, so both stay on the Research page where the estimate and the parts
+// are in view. Downstream links and research settings are an admin's.
+export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume)|(prospects|leads|companies)\.bulkByFilter|prospects\.enrichFullBulk|research\.(runs\.(start|accept|redraft|cancel|discard)|downstream\.|settings\.set|revisions\.restore))/;
 
 /**
  * The approval-queue sends (owner decision 2026-09-09: "open the
@@ -261,6 +270,9 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "workflows.toggle": "Enable or disable ONE workflow rule. An enabled rule fires on its trigger with no human in between.",
   "prospects.runSweep": "Run an enrichment sweep now — SPENDS Reoon verification credits immediately, bounded by the limit given.",
   "bookingLinks.update": "Edit your booking link (title, duration, window, timezone).",
+  "research.markets.list": "Read every research market with its sectors and their status (draft, researched, verified).",
+  "research.sectors.get": "Read one research sector in full: buyers and pains, targeting, messaging (lead with, never say, vocabulary) and market facts. Only a Researched or Verified sector reaches the AI writers.",
+  "research.writers.view": "Show which research the AI writers would use for a recipient (by email, or by job title and industry) and the exact text they are given, with the reason it matched.",
 };
 
 type ProcedureLike = { _def?: { type?: string; inputs?: unknown[] } };

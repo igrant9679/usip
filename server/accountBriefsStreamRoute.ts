@@ -153,7 +153,7 @@ Keep each section to 2-3 sentences. Be specific, actionable, and sales-focused.`
           workspaceId,
           userId,
           feature: "stream accountBrief",
-          research: { surface: "research", industry: account.industry, prospectTitle: accountContacts[0]?.title ?? null },
+          research: { surface: "research", accountSectorId: account.researchSectorId ?? null, industry: account.industry, prospectTitle: accountContacts[0]?.title ?? null },
           signal: abort.signal,
         })) {
           if (res.writableEnded) break;

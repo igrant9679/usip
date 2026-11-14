@@ -82,7 +82,7 @@ beforeEach(() => {
 describe("which research applies", () => {
   it("a workspace without research gets nothing, so its writers behave exactly as before", async () => {
     const c = await researchContextFor(2, { surface: "outreach", prospectTitle: "County Administrator" });
-    expect(c).toEqual({ block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [], pains: [], leadWith: [] });
+    expect(c).toEqual({ block: "", sectorId: null, personaId: null, matchedBy: null, sectorName: null, marketName: null, personaName: null, avoid: [], pains: [], leadWith: [] });
   });
 
   it("the campaign's sector wins; then its persona; then the prospect's title; then the industry", async () => {

@@ -44,6 +44,7 @@ import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from 
 import { utcDayStart } from "@shared/timeWindows";
 import { inSendWindow } from "./sendWindow";
 import { isOutboundPaused, OUTBOUND_PAUSED_MESSAGE } from "./outboundPause";
+import { researchUseFor, type RecipientRef } from "./research/recipient";
 
 /**
  * Why Velocity may not message prospects on its own here right now, or null
@@ -73,7 +74,7 @@ interface NewRelationPayload {
 /** Generate a short, human, first-touch LinkedIn opener. Plain text (no JSON). */
 async function generateOpener(
   workspaceId: number,
-  who: { name: string; title?: string | null; company?: string | null },
+  who: { name: string; title?: string | null; company?: string | null; ref?: RecipientRef },
 ): Promise<string> {
   const firstName = who.name.split(/\s+/)[0] || who.name;
   const ctx = [
@@ -92,11 +93,14 @@ Rules:
 
 ${HUMAN_COPY_RULES}`;
 
+  // The record behind the profile, when there is one (2026-11-14): it brings
+  // the person's campaign and their company's sector, not only a job title.
+  const use = await researchUseFor(workspaceId, "outreach", who.ref ?? {});
   try {
     const res = await invokeLLM({
       sendersBrand: true,
       workspaceId,
-      research: { surface: "outreach", prospectTitle: who.title ?? null },
+      research: { ...use, prospectTitle: who.title ?? use.prospectTitle ?? null },
       messages: [{ role: "user", content: prompt }],
       maxTokens: 200,
     } as never);
@@ -256,7 +260,7 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
     }
   }
 
-  const opener = await generateOpener(workspaceId, { name, title, company });
+  const opener = await generateOpener(workspaceId, { name, title, company, ref: { contactId: linkedContactId } });
 
   // Approval mode: draft into a task, let the rep send.
   if (mode === "approval") {
@@ -418,14 +422,15 @@ const INVITE_HARD_CAP = 20; // per workspace/day — LinkedIn throttles invites 
 /** Short, personalized connection-request note (<200 chars, LinkedIn's limit). */
 export async function generateInviteNote(
   workspaceId: number,
-  who: { name: string; title?: string | null; company?: string | null },
+  who: { name: string; title?: string | null; company?: string | null; ref?: RecipientRef },
 ): Promise<string> {
   const firstName = who.name.split(/\s+/)[0] || who.name;
   const ctx = [who.title ? `a ${who.title}` : null, who.company ? `at ${who.company}` : null].filter(Boolean).join(" ");
   const prompt = `Write a LinkedIn connection-request note to ${firstName}${ctx ? ` (${ctx})` : ""}.
 Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links, and NEVER an em dash. Return ONLY the note text.`;
+  const use = await researchUseFor(workspaceId, "outreach", who.ref ?? {});
   try {
-    const res = await invokeLLM({ sendersBrand: true, workspaceId, research: { surface: "outreach", prospectTitle: who.title ?? null }, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
+    const res = await invokeLLM({ sendersBrand: true, workspaceId, research: { ...use, prospectTitle: who.title ?? use.prospectTitle ?? null }, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
     const txt = (res as any)?.choices?.[0]?.message?.content;
     if (typeof txt === "string" && txt.trim()) return humanizeAiCopy(txt.trim().replace(/^["']|["']$/g, "")).slice(0, 195);
   } catch (err) {
@@ -584,7 +589,7 @@ export async function runSocialAutopilotInvitesForWorkspace(
     // Warming touch: like the lead's most recent post just before inviting —
     // best-effort, never blocks the invite (wrong/absent post just no-ops).
     await warmBeforeInvite(workspaceId, ownerAcct, slug);
-    const note = await generateInviteNote(workspaceId, { name, title: lead.title, company: lead.company });
+    const note = await generateInviteNote(workspaceId, { name, title: lead.title, company: lead.company, ref: { leadId: lead.id } });
     try {
       await sendLinkedInInvitation({ accountId: ownerAcct, providerId: slug, message: note });
       await recordLinkedInAction({

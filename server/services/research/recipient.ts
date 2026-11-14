@@ -4,7 +4,7 @@
  * lead, prospect or queue id use this to fill a ResearchUse. Every lookup is
  * scoped to the workspace; a missing row just means less to match on.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, type SQL } from "drizzle-orm";
 import { accounts, contacts, leads, proposals, prospectQueue, prospects } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import type { ResearchSurface, ResearchUse } from "./context";
@@ -17,51 +17,100 @@ export type RecipientRef = {
   accountId?: number | null;
 };
 
+/**
+ * The campaign a person is in: the newest campaign row that names their
+ * People record or their address, and that the campaign did not reject. A plain sequence, a meeting invite or a workflow draft holds a
+ * contact, lead or person, never a campaign row, so before 2026-11-14 the
+ * sector a campaign was given on purpose reached only the campaign's own
+ * writers and the mailbox (which finds the row by address).
+ */
+async function campaignOfPerson(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  who: { prospectId?: number | null; email?: string | null },
+): Promise<number | null> {
+  // One lookup per key, each on its own index (ix_pq_person, ix_pq_email): an
+  // OR across the two would read every campaign row in the workspace, and
+  // this runs once per message written.
+  const newest = (key: SQL) =>
+    db
+      .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+      .from(prospectQueue)
+      .where(and(eq(prospectQueue.workspaceId, workspaceId), isNull(prospectQueue.rejectedAt), key))
+      .orderBy(desc(prospectQueue.id))
+      .limit(1);
+  const e = String(who.email ?? "").trim().toLowerCase();
+  const [byPerson, byEmail] = await Promise.all([
+    who.prospectId ? newest(eq(prospectQueue.personProspectId, who.prospectId)) : [],
+    e.includes("@") ? newest(eq(prospectQueue.email, e)) : [],
+  ]);
+  const rows = [...byPerson, ...byEmail].sort((x, y) => y.id - x.id);
+  return rows[0]?.campaignId ?? null;
+}
+
 export async function researchUseFor(workspaceId: number, surface: ResearchSurface, ref: RecipientRef): Promise<ResearchUse> {
   const use: ResearchUse = { surface };
   try {
     const db = await getDb();
     if (!db) return use;
     let accountId = ref.accountId ?? null;
+    let email: string | null = null;
     if (ref.prospectQueueId) {
       const [q] = await db
-        .select({ title: prospectQueue.title, industry: prospectQueue.industry, campaignId: prospectQueue.campaignId })
+        .select({ title: prospectQueue.title, industry: prospectQueue.industry, campaignId: prospectQueue.campaignId, rejectedAt: prospectQueue.rejectedAt, email: prospectQueue.email })
         .from(prospectQueue)
         .where(and(eq(prospectQueue.id, ref.prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)))
         .limit(1);
-      if (q) { use.prospectTitle = q.title; use.industry = q.industry; use.campaignId = q.campaignId; }
+      if (q) {
+        use.prospectTitle = q.title;
+        use.industry = q.industry;
+        // A campaign that turned someone down does not lend them its sector:
+        // "not a fit" is the opposite of "write to them as this market".
+        if (!q.rejectedAt) use.campaignId = q.campaignId;
+        email ??= q.email;
+      }
     }
     if (!use.prospectTitle && ref.prospectId) {
       const [p] = await db
-        .select({ title: prospects.title, industry: prospects.industry, accountId: prospects.accountId })
+        .select({ title: prospects.title, industry: prospects.industry, accountId: prospects.accountId, email: prospects.email })
         .from(prospects)
         .where(and(eq(prospects.id, ref.prospectId), eq(prospects.workspaceId, workspaceId)))
         .limit(1);
-      if (p) { use.prospectTitle = p.title; use.industry ??= p.industry; accountId ??= p.accountId; }
+      if (p) { use.prospectTitle = p.title; use.industry ??= p.industry; accountId ??= p.accountId; email ??= p.email; }
     }
     if (!use.prospectTitle && ref.contactId) {
       const [c] = await db
-        .select({ title: contacts.title, accountId: contacts.accountId })
+        .select({ title: contacts.title, accountId: contacts.accountId, email: contacts.email })
         .from(contacts)
         .where(and(eq(contacts.id, ref.contactId), eq(contacts.workspaceId, workspaceId)))
         .limit(1);
-      if (c) { use.prospectTitle = c.title; accountId ??= c.accountId; }
+      if (c) { use.prospectTitle = c.title; accountId ??= c.accountId; email ??= c.email; }
     }
     if (!use.prospectTitle && ref.leadId) {
       const [l] = await db
-        .select({ title: leads.title })
+        .select({ title: leads.title, email: leads.email })
         .from(leads)
         .where(and(eq(leads.id, ref.leadId), eq(leads.workspaceId, workspaceId)))
         .limit(1);
-      if (l) use.prospectTitle = l.title;
+      if (l) { use.prospectTitle = l.title; email ??= l.email; }
     }
-    if (!use.industry && accountId) {
+    if (accountId) {
       const [a] = await db
-        .select({ industry: accounts.industry })
+        .select({ industry: accounts.industry, sectorId: accounts.researchSectorId })
         .from(accounts)
         .where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId)))
         .limit(1);
-      if (a) use.industry = a.industry;
+      if (a) {
+        if (!use.industry) use.industry = a.industry;
+        // The sector the company was put in (import, approval): the composer
+        // uses it only if it is still Researched or Verified.
+        if (a.sectorId != null) use.accountSectorId = a.sectorId;
+      }
+    }
+    // Also after a rejected campaign row: they may be in another campaign that kept them.
+    if (use.campaignId == null) {
+      const campaignId = await campaignOfPerson(db, workspaceId, { prospectId: ref.prospectId, email });
+      if (campaignId != null) use.campaignId = campaignId;
     }
   } catch {
     // Less to match on, never a failed writer.
@@ -112,7 +161,7 @@ export async function recipientRefByEmail(workspaceId: number, email: string | n
 }
 
 const isEmpty = (ref: RecipientRef) => !Object.values(ref).some((v) => v != null);
-const knowsSomething = (use: ResearchUse) => !!(use.prospectTitle || use.industry || use.campaignId != null || use.sectorId != null || use.personaId != null);
+const knowsSomething = (use: ResearchUse) => !!(use.prospectTitle || use.industry || use.campaignId != null || use.accountSectorId != null || use.sectorId != null || use.personaId != null);
 
 /**
  * Research for a recipient: the records named first, then the first of the
