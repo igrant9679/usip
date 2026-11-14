@@ -73,6 +73,10 @@ export function ReoonVerifierCard({
           <span>
             Connected <span className="text-muted-foreground">· key {masked}</span>
           </span>
+        ) : source === "linked" ? (
+          <span>
+            Connected <span className="text-muted-foreground">· using {status.data?.sharedFrom ?? "another workspace"}'s key</span>
+          </span>
         ) : source === "env" ? (
           <span>
             Connected <span className="text-muted-foreground">· using the server-wide key ({masked})</span>

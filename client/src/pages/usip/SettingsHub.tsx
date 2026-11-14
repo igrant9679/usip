@@ -49,6 +49,7 @@ import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
 import { KnowledgeSection } from "@/components/usip/settings/KnowledgeSection";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
+import { KeySharingCard, SOURCE_KEY_KINDS } from "@/components/usip/settings/KeySharingCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
@@ -375,6 +376,7 @@ export default function SettingsHub() {
             <ApolloSourceCard />
             <LeadOceanSourceCard />
             <ReoonVerifierCard />
+            <KeySharingCard kinds={SOURCE_KEY_KINDS} />
           </div>
         )}
         {/* Legacy /settings tabs, collapsed into the hub 2026-09-15. */}

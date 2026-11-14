@@ -17,6 +17,7 @@ import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { linkedKey } from "./keyShares";
 import { clampVoiceLimits, DEFAULT_VOICE_LIMITS, type VoiceLimits } from "@shared/voiceCapacity";
 
 const XAI_API_BASE = "https://api.x.ai/v1";
@@ -138,7 +139,8 @@ export async function workspaceXaiKey(workspaceId: number): Promise<string> {
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return tryDecryptSecret(row?.enc);
+  // Its own key, or one another workspace lends it (services/keyShares).
+  return tryDecryptSecret(row?.enc) || (await linkedKey(workspaceId, "xai"));
 }
 
 /**

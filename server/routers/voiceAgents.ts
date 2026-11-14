@@ -25,6 +25,7 @@ import { z } from "zod";
 import { users, voiceAgents, voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
+import { linkedKey, sharedFromName } from "../services/keyShares";
 import { roleRank } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
@@ -57,7 +58,8 @@ async function getXaiKey(workspaceId: number): Promise<string> {
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return tryDecryptSecret(row?.enc);
+  // Its own key, or one another workspace lends it (services/keyShares).
+  return tryDecryptSecret(row?.enc) || (await linkedKey(workspaceId, "xai"));
 }
 
 async function requireDb() {
@@ -120,9 +122,12 @@ export const voiceAgentsRouter = router({
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
     const key = tryDecryptSecret(row?.enc);
+    // A lent key is in use but never shown here, not even its tail.
+    const sharedFrom = key ? null : await sharedFromName(ctx.workspace.id, "xai");
     return {
-      configured: key.length > 0,
+      configured: key.length > 0 || !!sharedFrom,
       masked: maskSecret(key),
+      sharedFrom,
       model: row?.model ?? DEFAULT_VOICE_MODEL,
     };
   }),

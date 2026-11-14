@@ -30,6 +30,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { linkedKey } from "./keyShares";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { timezoneForRegion } from "@shared/callingHours";
 import { formatPhone } from "@shared/phoneFormat";
@@ -394,7 +395,8 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   const [agent] = await db.select().from(voiceAgents).where(and(eq(voiceAgents.id, row.agentId), eq(voiceAgents.workspaceId, wsId))).limit(1);
   if (!agent) return null;
   const [settings] = await db.select({ enc: workspaceSettings.xaiApiKeyEnc }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, wsId)).limit(1);
-  const apiKey = tryDecryptSecret(settings?.enc);
+  // Its own key, or one another workspace lends it (services/keyShares).
+  const apiKey = tryDecryptSecret(settings?.enc) || (await linkedKey(wsId, "xai"));
   if (!apiKey) return null;
   const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
   const companyName = ws?.name?.trim() || "our company";

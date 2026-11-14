@@ -72,6 +72,11 @@ export async function getQuickEnrichKey(workspaceId?: number | null): Promise<st
         .limit(1);
       const key = tryDecryptSecret(row?.enc);
       if (key) return key;
+      // A key another workspace lends this one (services/keyShares): after
+      // its own, before the deployment's.
+      const { linkedKey } = await import("./keyShares");
+      const lent = await linkedKey(workspaceId, "quickenrich");
+      if (lent) return lent;
     }
   } catch (e) {
     // A failed read grants nothing: the shared key is opt-in.

@@ -11,6 +11,7 @@ import { SpendSection } from "@/components/usip/SpendReport";
 import { Link, Redirect, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
+import { AI_KEY_KINDS, KeySharingCard } from "@/components/usip/settings/KeySharingCard";
 import { usePermissions } from "@/hooks/usePermissions";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
@@ -1403,9 +1404,14 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">{p.name}</span>
-                      {cur?.configured && (
+                      {cur?.configured && !cur.sharedFrom && (
                         <span className="text-[10px] font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
                           {cur.masked}
+                        </span>
+                      )}
+                      {cur?.sharedFrom && (
+                        <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                          Shared from {cur.sharedFrom}
                         </span>
                       )}
                       {data?.defaultProvider === p.id && (
@@ -1473,7 +1479,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                           setDraft(p.id, { apiKey: "" });
                         }}
                       >Save</Button>
-                      {cur?.configured && (
+                      {cur?.configured && !cur.sharedFrom && (
                         <Button
                           size="sm" variant="ghost" className="text-destructive"
                           onClick={() => upsertMut.mutate({ provider: p.id, apiKey: "" })}
@@ -1487,6 +1493,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
           })}
         </div>
       )}
+      <div className="mt-4"><KeySharingCard kinds={AI_KEY_KINDS} /></div>
     </Section>
   );
 }

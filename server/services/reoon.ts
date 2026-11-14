@@ -141,6 +141,11 @@ export async function getReoonKey(workspaceId?: number | null): Promise<string> 
         if (row && row.enabled === false) return "";
         const plaintext = tryDecryptSecret(row?.enc);
         if (plaintext) return plaintext;
+        // A key another workspace lends this one (services/keyShares): after
+        // its own, before the deployment's. The toggle above still rules.
+        const { linkedKey } = await import("./keyShares");
+        const lent = await linkedKey(workspaceId, "reoon");
+        if (lent) return lent;
       }
     } catch (e) {
       // A failed read grants nothing: the shared key is opt-in.
