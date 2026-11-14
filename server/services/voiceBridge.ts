@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { users, voiceAgents, voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { linkedKey } from "./keyShares";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
@@ -88,7 +89,8 @@ export function answerInboundCall(opts: BridgeOpts): void {
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, opts.workspaceId))
       .limit(1);
-    const apiKey = tryDecryptSecret(ws?.enc);
+    // Its own key, or one another workspace lends it (services/keyShares).
+    const apiKey = tryDecryptSecret(ws?.enc) || (await linkedKey(opts.workspaceId, "xai"));
     if (!apiKey) {
       await finalizeRow(opts.callRowId, { status: "failed", outcome: "No xAI API key configured — call not answered" });
       return;

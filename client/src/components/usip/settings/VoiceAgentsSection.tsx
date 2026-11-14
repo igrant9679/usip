@@ -15,6 +15,7 @@
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { KeySharingCard, VOICE_KEY_KINDS } from "./KeySharingCard";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -106,8 +107,11 @@ export function VoiceAgentsSection() {
             isAdmin={isAdmin}
             configured={settings.data?.configured ?? false}
             masked={settings.data?.masked ?? ""}
+            sharedFrom={settings.data?.sharedFrom ?? null}
             model={settings.data?.model ?? MODELS[0]}
           />
+
+          <KeySharingCard kinds={VOICE_KEY_KINDS} />
 
           <PlivoCard isAdmin={isAdmin} />
 
@@ -221,9 +225,9 @@ export function VoiceAgentsSection() {
 /* ─────────────────────── xAI connection card ──────────────────────────── */
 
 function ConnectionCard({
-  isAdmin, configured, masked, model,
+  isAdmin, configured, masked, sharedFrom, model,
 }: {
-  isAdmin: boolean; configured: boolean; masked: string; model: string;
+  isAdmin: boolean; configured: boolean; masked: string; sharedFrom: string | null; model: string;
 }) {
   const utils = trpc.useUtils();
   const [key, setKey] = useState("");
@@ -247,7 +251,7 @@ function ConnectionCard({
       <div className="flex items-center gap-2 text-[13px]">
         <ShieldCheck className={cn("size-4", configured ? "text-emerald-600" : "text-muted-foreground")} />
         {configured ? (
-          <span>Connected <span className="text-muted-foreground">· key {masked}</span></span>
+          <span>Connected <span className="text-muted-foreground">· {sharedFrom ? `using ${sharedFrom}'s key` : `key ${masked}`}</span></span>
         ) : (
           <span className="text-muted-foreground">Not connected — add your xAI API key to activate agents.</span>
         )}

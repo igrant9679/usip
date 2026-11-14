@@ -18,6 +18,7 @@ import {
   tryDecryptSecret,
 } from "../_core/crypto";
 import { invokeLLM, type ProviderName } from "../_core/llm";
+import { borrowedKeys } from "../services/keyShares";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -59,22 +60,26 @@ export const aiCredentialsRouter = router({
       .limit(1);
 
     const row = rows[0];
-    const mask = (enc: string | null | undefined) => {
+    // A key another workspace lends this one (services/keyShares) is in use
+    // and named, but never shown here — not even its tail.
+    const borrowed = await borrowedKeys(ctx.workspace.id);
+    const mask = (enc: string | null | undefined, kind: "anthropic" | "openai" | "gemini") => {
       const pt = tryDecryptSecret(enc);
-      return { configured: pt.length > 0, masked: maskSecret(pt) };
+      const lent = pt ? undefined : borrowed.find((b) => b.kind === kind && b.usable);
+      return { configured: pt.length > 0 || !!lent, masked: maskSecret(pt), sharedFrom: lent?.ownerName ?? null };
     };
 
     return {
       anthropic: {
-        ...mask(row?.anthropicApiKeyEnc),
+        ...mask(row?.anthropicApiKeyEnc, "anthropic"),
         model: row?.anthropicModel ?? "",
       },
       openai: {
-        ...mask(row?.openaiApiKeyEnc),
+        ...mask(row?.openaiApiKeyEnc, "openai"),
         model: row?.openaiModel ?? "",
       },
       gemini: {
-        ...mask(row?.geminiApiKeyEnc),
+        ...mask(row?.geminiApiKeyEnc, "gemini"),
         model: row?.geminiModel ?? "",
       },
       defaultProvider: row?.aiDefaultProvider ?? "",

@@ -44,6 +44,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { linkedKey } from "./keyShares";
 import { normalizeDomain } from "./scraper/domain";
 import { utcDayStart } from "@shared/timeWindows";
 
@@ -61,7 +62,8 @@ export async function getApolloKey(workspaceId: number): Promise<string> {
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return tryDecryptSecret(row?.enc);
+  // Its own key, or one another workspace lends it (services/keyShares).
+  return tryDecryptSecret(row?.enc) || (await linkedKey(workspaceId, "apollo"));
 }
 
 export async function getApolloDailyCap(workspaceId: number): Promise<number> {

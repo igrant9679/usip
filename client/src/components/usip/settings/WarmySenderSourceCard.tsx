@@ -102,7 +102,7 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
         {!configured ? (
           <span className="text-muted-foreground">Not connected.</span>
         ) : status === "valid" ? (
-          <span>Connected <span className="text-muted-foreground">· key {cred?.masked}{config.tier ? ` · ${config.tier} plan` : ""}{cred?.lastValidatedAt ? ` · validated ${new Date(cred.lastValidatedAt).toLocaleString()}` : ""}</span></span>
+          <span>Connected <span className="text-muted-foreground">· {cred?.sharedFrom ? `using ${cred.sharedFrom}'s key` : `key ${cred?.masked}`}{config.tier ? ` · ${config.tier} plan` : ""}{cred?.lastValidatedAt ? ` · validated ${new Date(cred.lastValidatedAt).toLocaleString()}` : ""}</span></span>
         ) : status === "invalid" ? (
           <span className="text-rose-700 dark:text-rose-400">Key rejected <span className="text-muted-foreground">· {cred?.validationError ?? "validation failed"}</span></span>
         ) : (

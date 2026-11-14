@@ -22,6 +22,7 @@ import { getWorkspaceSendWindow } from "./sendWindow";
 import { checkLinkedInAction } from "./linkedin/activityGate";
 import { getWorkspaceSentToday } from "../sendLimits";
 import { apolloPulledToday, getApolloDailyCap } from "./apollo";
+import { linkedKey } from "./keyShares";
 import { isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import type { BlockReason } from "@shared/linkedinLimits";
 
@@ -138,7 +139,8 @@ export async function sendingStatus(workspaceId: number, now: Date = new Date())
   try {
     const [configured] = await db.select({ n: sql<number>`count(*)` }).from(workspaceSettings)
       .where(and(eq(workspaceSettings.workspaceId, workspaceId), isNotNull(workspaceSettings.apolloApiKeyEnc)));
-    if (Number(configured?.n ?? 0) > 0) {
+    // Its own Apollo key, or one another workspace lends it (services/keyShares).
+    if (Number(configured?.n ?? 0) > 0 || (await linkedKey(workspaceId, "apollo"))) {
       const [cap, used] = await Promise.all([getApolloDailyCap(workspaceId), apolloPulledToday(workspaceId, now)]);
       if (used >= cap) {
         blocks.push({

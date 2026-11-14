@@ -137,6 +137,31 @@ export const workspaces = mysqlTable("workspaces", {
 });
 export type Workspace = typeof workspaces.$inferSelect;
 
+/**
+ * A key one workspace lends another (owner ask 2026-11-13, migration 0440).
+ * A LIVE LINK, not a copy: the row says "workspace `targetWorkspaceId` may use
+ * workspace `ownerWorkspaceId`'s `keyKind` key"; the key itself stays in the
+ * owner's settings and is read from there each time (services/keyShares), so
+ * rotating or removing it there changes it everywhere, and deleting the row
+ * stops the use at once. One lender per key per borrowing workspace.
+ */
+export const workspaceKeyShares = mysqlTable(
+  "workspace_key_shares",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    ownerWorkspaceId: int("ownerWorkspaceId").notNull(),
+    targetWorkspaceId: int("targetWorkspaceId").notNull(),
+    keyKind: varchar("keyKind", { length: 32 }).notNull(),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    byTarget: uniqueIndex("uq_wks_target_kind").on(t.targetWorkspaceId, t.keyKind),
+    byOwner: index("ix_wks_owner").on(t.ownerWorkspaceId),
+  }),
+);
+export type WorkspaceKeyShare = typeof workspaceKeyShares.$inferSelect;
+
 /** Email-less, role-scoped activation links (migration 0091). A recipient who
  *  opens /join?token=… registers their OWN email + password and is added to
  *  this workspace at `role`. Single-use: `usedAt` is set on the first

@@ -62,6 +62,7 @@ import { helpCenterRouter } from "./routers/helpCenter";
 import { toursRouter } from "./routers/tours";
 import { mindmapsRouter } from "./routers/mindmaps";
 import { aiCredentialsRouter } from "./routers/aiCredentials";
+import { keySharesRouter } from "./routers/keyShares";
 import { apolloRouter } from "./routers/apollo";
 import { reoonRouter } from "./routers/reoon";
 import { quickenrichRouter } from "./routers/quickenrich";
@@ -198,6 +199,7 @@ export const appRouter = router({
   tours: toursRouter,
   mindmaps: mindmapsRouter,
   aiCredentials: aiCredentialsRouter,
+  keyShares: keySharesRouter,
   apollo: apolloRouter,
   reoon: reoonRouter,
   quickenrich: quickenrichRouter,

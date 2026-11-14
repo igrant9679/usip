@@ -5461,6 +5461,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+
+  // ── 0440: Keys one workspace lends another (owner ask 2026-11-13) ────────
+  // "Give admins the ability to share API keys and tokens with other Spaces."
+  // A live link, not a copy: the row names the lender, the borrower and which
+  // key; the key stays in the lender's settings and is read from there. One
+  // lender per key per borrower (the unique index). New table, additive.
+  {
+    name: "0440_workspace_key_shares.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `workspace_key_shares` (`id` int AUTO_INCREMENT PRIMARY KEY, `ownerWorkspaceId` int NOT NULL, `targetWorkspaceId` int NOT NULL, `keyKind` varchar(32) NOT NULL, `createdByUserId` int NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `uq_wks_target_kind` (`targetWorkspaceId`, `keyKind`), KEY `ix_wks_owner` (`ownerWorkspaceId`))",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

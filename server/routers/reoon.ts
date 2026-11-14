@@ -21,6 +21,7 @@ import { z } from "zod";
 import { workspaceSettings } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
+import { sharedFromName } from "../services/keyShares";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getReoonKey, reoonCheckBalance } from "../services/reoon";
@@ -54,14 +55,18 @@ export const reoonRouter = router({
     const envKey = process.env.REOON_API_KEY ?? "";
     // The deployment's key counts only where getReoonKey would hand it out:
     // the platform owner allowed this workspace, and today's cap has room.
-    const shared = !workspaceKey && envKey ? await sharedKeyUsable(ctx.workspace.id, "reoon") : null;
+    // A key another workspace lends this one comes before the deployment's,
+    // as in getReoonKey. It is in use and named, never shown (services/keyShares).
+    const sharedFrom = workspaceKey ? null : await sharedFromName(ctx.workspace.id, "reoon");
+    const shared = !workspaceKey && !sharedFrom && envKey ? await sharedKeyUsable(ctx.workspace.id, "reoon") : null;
     const effective = workspaceKey || (shared?.ok ? envKey : "");
 
     return {
-      configured: effective.length > 0,
+      configured: effective.length > 0 || !!sharedFrom,
       masked: maskSecret(effective),
-      /** "workspace" = this workspace's own key, "env" = the deployment's, which the platform owner allowed here. */
-      source: workspaceKey ? ("workspace" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      /** "workspace" = this workspace's own key, "linked" = one another workspace lends it, "env" = the deployment's, which the platform owner allowed here. */
+      source: workspaceKey ? ("workspace" as const) : sharedFrom ? ("linked" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      sharedFrom,
       /** Why the deployment's key is not in use, when it exists and this workspace has none of its own. */
       sharedKeyNote: shared && !shared.ok ? shared.detail : null,
       /** Reoon = the optional FINAL verification step (migration 0157). */

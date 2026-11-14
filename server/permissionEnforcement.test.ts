@@ -478,7 +478,7 @@ const ENFORCEMENT: Record<string, { enforced: boolean; files?: string[]; reason?
   export_data: { enforced: true, files: ["server/routers/admin.ts", "server/routers/are/prospects.ts", "server/routers/crm.ts", "server/routers/operations.ts", "server/routers/prospects.ts", "server/routers/reports.ts"] },
   manage_sequences: { enforced: true, files: ["server/routers/sequences.ts"] },
   manage_integrations: { enforced: true, files: ["server/routers/integrations.ts"] },
-  manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },
+  manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/keyShares.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },
   // 2026-10-27 (audit Phase 3): the cost report is billing too.
   access_billing: { enforced: true, files: ["server/routers/admin.ts", "server/routers/spend.ts"] },
   // view_all_leads was here as "enforced: false" with its reason (read-scoping

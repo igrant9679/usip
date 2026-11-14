@@ -15,6 +15,7 @@ import { z } from "zod";
 import { workspaceSettings } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
+import { sharedFromName } from "../services/keyShares";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { apolloPulledToday, apolloTestKey } from "../services/apollo";
@@ -47,9 +48,12 @@ export const apolloRouter = router({
       .limit(1);
 
     const plaintext = tryDecryptSecret(row?.enc);
+    // A lent key (services/keyShares) is in use and named, never shown.
+    const sharedFrom = plaintext ? null : await sharedFromName(ctx.workspace.id, "apollo");
     return {
-      configured: plaintext.length > 0,
+      configured: plaintext.length > 0 || !!sharedFrom,
       masked: maskSecret(plaintext),
+      sharedFrom,
       dailyPullCap: row?.cap ?? 50,
       pulledToday: await apolloPulledToday(ctx.workspace.id),
     };

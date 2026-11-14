@@ -38,6 +38,7 @@ export function ApolloSourceCard({
   const status = trpc.apollo.get.useQuery();
   const configured = !!status.data?.configured;
   const masked = status.data?.masked ?? "";
+  const sharedFrom = status.data?.sharedFrom ?? null;
   const savedCap = status.data?.dailyPullCap ?? 50;
   const pulledToday = status.data?.pulledToday ?? 0;
 
@@ -67,7 +68,7 @@ export function ApolloSourceCard({
         <ShieldCheck className={cn("size-4", configured ? "text-emerald-600" : "text-muted-foreground")} />
         {configured ? (
           <span>
-            Connected <span className="text-muted-foreground">· key {masked}</span>
+            Connected <span className="text-muted-foreground">· {sharedFrom ? `using ${sharedFrom}'s key` : `key ${masked}`}</span>
           </span>
         ) : (
           <span className="text-muted-foreground">

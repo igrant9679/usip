@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
+import { linkedKey, linkedKeys } from "../services/keyShares";
 import { ENV } from "./env";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
@@ -392,6 +393,13 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       openai: tryDecryptSecret(row.openaiApiKeyEnc),
       gemini: tryDecryptSecret(row.geminiApiKeyEnc),
     };
+    // A key another workspace lends this one counts as its own for every
+    // purpose here (services/keyShares): own first, then lent, then the env.
+    const missing = (["anthropic", "openai", "gemini"] as const).filter((p) => !own[p]);
+    if (missing.length > 0) {
+      const lent = await linkedKeys(workspaceId, missing);
+      for (const p of missing) if (lent[p]) own[p] = lent[p]!.key;
+    }
     return {
       anthropicApiKey: own.anthropic || ENV.anthropicApiKey,
       openaiApiKey: own.openai || ENV.openaiApiKey,
@@ -1198,7 +1206,8 @@ export async function workspaceAnthropicKey(workspaceId: number): Promise<string
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return tryDecryptSecret(row?.enc);
+  // Its own key, or one another workspace lends it — still never the server's.
+  return tryDecryptSecret(row?.enc) || (await linkedKey(workspaceId, "anthropic"));
 }
 
 /**

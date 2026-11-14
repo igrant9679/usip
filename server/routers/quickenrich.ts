@@ -16,6 +16,7 @@ import { z } from "zod";
 import { workspaceSettings } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
+import { sharedFromName } from "../services/keyShares";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getQuickEnrichKey, quickenrichPulledToday, quickenrichTestKey } from "../services/quickenrich";
@@ -51,14 +52,18 @@ export const quickenrichRouter = router({
     const workspaceKey = tryDecryptSecret(row?.enc);
     const envKey = process.env.QUICKENRICH_API_KEY ?? "";
     // The deployment's key counts only where getQuickEnrichKey would hand it out.
-    const shared = !workspaceKey && envKey ? await sharedKeyUsable(ctx.workspace.id, "quickenrich") : null;
+    // A key another workspace lends this one comes before the deployment's,
+    // as in getQuickEnrichKey. It is in use and named, never shown (services/keyShares).
+    const sharedFrom = workspaceKey ? null : await sharedFromName(ctx.workspace.id, "quickenrich");
+    const shared = !workspaceKey && !sharedFrom && envKey ? await sharedKeyUsable(ctx.workspace.id, "quickenrich") : null;
     const effective = workspaceKey || (shared?.ok ? envKey : "");
 
     return {
-      configured: effective.length > 0,
+      configured: effective.length > 0 || !!sharedFrom,
       masked: maskSecret(effective),
-      /** "workspace" = this workspace's own key, "env" = the deployment's, which the platform owner allowed here. */
-      source: workspaceKey ? ("workspace" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      /** "workspace" = this workspace's own key, "linked" = one another workspace lends it, "env" = the deployment's, which the platform owner allowed here. */
+      source: workspaceKey ? ("workspace" as const) : sharedFrom ? ("linked" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      sharedFrom,
       /** Why the deployment's key is not in use, when it exists and this workspace has none of its own. */
       sharedKeyNote: shared && !shared.ok ? shared.detail : null,
       dailyPullCap: row?.cap ?? 50,
