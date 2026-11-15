@@ -16,7 +16,7 @@
 | Proposals cluster badly | People lack industry/country | Enrich companies; backfill industry; then regenerate proposals |
 | Attention panel shows thousands of "replies" | A query lost `genuineReplyScope()` | Bug: report it; the badge must scope to genuine replies |
 | Dial snaps back when a rep changes it | Setters are admin-only | Ask an admin |
-| Help article edits vanish after a deploy | Seeded slugs are overwritten at boot | Create a new slug for custom content |
+| A help article an admin edited stops changing on deploys | Since 2026-11-06 the seed leaves alone any article or tour an admin edited or deleted (`help_seed_overrides`), so shipped updates no longer reach it | Expected. Leave shipped articles alone and write custom content under a new slug if you want both |
 | Import puts the wrong column in email | Header mapping must be exact; two columns cannot claim one field | Fix headers; re-map |
 | Contact names contain credentials (PMP, MBA) | LinkedIn suffixes | Name stripper runs on import/enrich; fix legacy rows via Data Health |
 | Company shows as wrong brand | Enrichment guessed from a mailbox domain or slug | Pin the brand/domain on the company; pins beat every provider |

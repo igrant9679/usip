@@ -29,7 +29,7 @@ The idea that makes the CRM click: **separate the who from the deal.** Accounts 
 | Object | Table | Page | What it is | How it is created |
 |---|---|---|---|---|
 | **Person / Prospect** | `prospects` | People (`/v2/people`) | The master record for a human: name, title, email + verification status, LinkedIn, company link, confidence tier, fit score, provenance ledger. Everything else links to it. | Find Prospects, CSV import, campaign discovery, Add existing wizard, "push" from other objects |
-| **Lead** | `leads` | Leads (`/leads`) | An inbound or engaged person awaiting qualification. Scored 0–100, routed to an owner. | Forms, landing pages, chat agent, booking links, "Convert to lead" from a prospect |
+| **Lead** | `leads` | Leads (`/leads`) | An inbound or engaged person awaiting qualification. Scored 0–100, routed to an owner. | Forms, landing pages, chat agent, booking links, **New lead** on the Leads page (the server's `prospects.promoteToLead` turns a person into a lead, but no page calls it) |
 | **Contact** | `contacts` | Companies → people, People drawer | The durable person on an Account. Has `personProspectId` back-link to the People row. A contact whose back-link is null, or points at a different People row than the one holding its email, is detectable and repairable from Data Health → Split across People & Contacts (the repair links, never deletes). Two People rows holding one email are resolved by the People merge instead — see below. | Lead conversion, import, campaign reply promotion |
 | **Campaign prospect** | `prospect_queue` | Revenue Engine campaign → Prospects tab | A person *inside one campaign*: enrichment status, sequence status, ICP score for that campaign. One human can be in several campaigns → several queue rows, all pointing at one People row. | Discovery, Add existing wizard, routing, push |
 
@@ -88,7 +88,7 @@ Whatever key the deal's pipeline defines. The SEEDED DEFAULT pipeline uses `disc
 - Enrollment `status`: `active` | `paused` | `finished` | `exited`. A reply auto-pauses the enrollment.
 
 ### Revenue Engine campaign (`are_campaigns`)
-- `status`: `draft` | `active` | `paused` | `completed`. Only `active` campaigns are ticked by the engine; pausing also pauses enrichment spend.
+- `status`: `draft` | `active` | `paused` | `completed`. Only `active` campaigns are ticked by the engine; pausing also pauses enrichment spend. The page offers no way to set `completed`: a finished campaign is **archived** (`archivedAt`; an active one is paused first; Unarchive restores it, never re-activated), and **Clone** copies the setup, not the people, into a new draft.
 - `autonomyMode`: `full` (discover → send with no human) | `batch_approval` (a human approves enriched batches; default) | `review_release` (approve each person)
 - `copyMode`: `per_person` (the model writes each sequence from the dossier) | `fixed` (one template, merge tags)
 - `sequenceTemplate`: `standard_7step` (7 steps) | `aggressive_3step` (3) | `nurture_14step` (14) | `custom` (5). Free text at the API, so an unknown value falls back to 5 (`shared/areSequenceTemplates.ts`). Only read on the `per_person` path — a `fixed` campaign's step count comes from its own `fixedSteps`.

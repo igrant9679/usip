@@ -348,7 +348,7 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "leads.convert": "Convert a lead into an account and a contact (an existing match is used unless told otherwise), and a deal only when createOpportunity is set, at the value given.",
   "prospects.create": "Create a person record.",
   "prospects.update": "Update a person's fields.",
-  "prospects.convertToLead": "Turn a person into a lead.",
+  "prospects.promoteToLead": "Turn a person into a lead.",
   "reports.run": "Run a report spec (object, columns, filters, groupBy, aggregate, sort, limit) and get rows.",
   "reports.save": "Save a report spec under a name.",
   "reports.setSchedule": "Email a saved report daily / weekly / monthly to recipients.",

@@ -14,8 +14,10 @@
  *
  * Articles are markdown; HelpArticle.tsx renders headings, lists, fenced code,
  * **bold**, `code`, [links](/path) and simple pipe tables. Seeded slugs are
- * overwritten on every boot (see seedHelpContent.ts), so an admin who wants to
- * customise one of these should copy it to a new slug.
+ * re-applied on every boot (see seedHelpContent.ts), except an article an
+ * admin has edited or deleted: that one is left as they made it
+ * (services/helpSeedOverrides, 2026-11-06), and stops receiving shipped
+ * updates.
  */
 
 export type OperatorArticle = {
@@ -39,7 +41,8 @@ export const OPERATOR_ARTICLES: OperatorArticle[] = [
     summary: "The five ideas behind every page: meeting engines, the Off/Approve/Auto dial, the attention panel, who-vs-deal, and the three things called sequences.",
     readingTimeMinutes: 6,
     tags: ["operator-manual", "overview", "model", "getting-started"],
-    pageKey: "home",
+    // 2026-11-15: was "home", which no route resolves to; /v2/home resolves to "dashboard".
+    pageKey: "dashboard",
     bodyMarkdown: `Velocity has one job: **get sales meetings booked**. The People database, sequences, scoring and the autonomous engine exist to feed that. If you hold five ideas in your head, every page in the product becomes obvious.
 
 ## 1. Meetings arrive five ways
@@ -56,7 +59,7 @@ Each is an independent engine. You do not need all five, and most teams should s
 
 ## 2. One dial everywhere: Off / Approve / Auto
 
-Every autonomous feature has the same three-way switch, and they all live on **Daily → Autonomy Center**.
+Every autonomous feature has the same three-way switch, and they all live on the **Autonomy Center**. It has no row in the sidebar sections: click **Search…** at the top of the sidebar (Ctrl+K) and type Autonomy, or open **Library — all tools** and find it under Daily.
 
 - **Off** — nothing happens.
 - **Approve** — the AI does the work and then stops. It arrives as a draft task, a draft email, a proposed meeting or a suggestion. Nothing reaches a prospect.
@@ -66,7 +69,7 @@ Approve is not a half-measure. It is a dry run on your real data. Learn on Appro
 
 ## 3. Home is where the machines confess
 
-**Daily → Home** carries the attention panel: the single list of everything waiting on a human — AI drafts, engine approvals, unhandled replies, proposed meetings, draft tasks, paused campaigns, routing suggestions, campaign proposals — plus a 24-hour digest of what was sent, discovered, replied and booked. An empty panel is the system working, not something you missed. Every routine in this manual starts there.
+**Home** (the first quick link in the sidebar) carries the attention panel: the single list of everything waiting on a human — AI drafts, engine approvals, unhandled replies, proposed meetings, draft tasks, paused campaigns, routing suggestions, campaign proposals — plus a 24-hour digest of what was sent, discovered, replied and booked. An empty panel is the system working, not something you missed. Every routine in this manual starts there.
 
 ## 4. Separate the who from the deal
 
@@ -96,7 +99,7 @@ When someone says "add them to the sequence", ask which page they mean.
     readingTimeMinutes: 14,
     tags: ["operator-manual", "pages", "navigation", "reference"],
     pageKey: "library",
-    bodyMarkdown: `The sidebar shows the daily loop; **Ctrl+K** (the Library) lists every tool. Hover any sidebar item for its one-line help; the **?** in the top bar opens the Help drawer for the page you are on. Pages marked *admin* are hidden from reps.
+    bodyMarkdown: `The sidebar shows the daily loop: quick links at the top, then the sections Prospecting, CRM, Outreach, Proposals, Dialer, Customer Success and Analytics. **Search…** (Ctrl+K) and **Library — all tools** list every page, including the ones with no sidebar row. The headings below follow the Library's groups. Hover any sidebar item for its one-line help; the **?** in the top bar opens the Help drawer for the page you are on. Pages marked *admin* are hidden from reps.
 
 ## Daily
 
@@ -104,13 +107,13 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Dashboard** (/v2/home?view=pipeline, the Pipeline view of Home) — pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only.
 
-**AI Assistant** (/v2/ai-assistant) — chat over your own data. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. Admins can also confirm an Off / Approve / Auto dial change from chat; the card names the dial and says what Auto does unattended. Two things it will not do: fully unattended campaign autonomy (a human sets that on the campaign's Settings tab behind the acknowledgement), and composing mail — it can only send what an approval queue already holds (an approved draft, a proposed meeting, a chat follow-up), and the card says so.
+**Elsie** (/v2/ai-assistant, or the Elsie button in the top bar, or Ctrl+J) — the guide and assistant in one; she was called the AI Assistant before 2026-11-15. Chat over your own data. She also reads settings, usage, the team, key sharing and the sending mailboxes (never a key or password, and she changes none of them), knows which record you have open, and hands back a guided tour when asked to show something. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. Admins can also confirm an Off / Approve / Auto dial change from chat; the card names the dial and says what Auto does unattended. Two things it will not do: fully unattended campaign autonomy (a human sets that on the campaign's Settings tab behind the acknowledgement), and composing mail — it can only send what an approval queue already holds (an approved draft, a proposed meeting, a chat follow-up), and the card says so.
 
 **Inbox** (/v2/inbox) — everything that came back, in tabs. **Replies**: genuine replies to sequences and Revenue Engine campaigns, classified, each naming its sequence or campaign and the next thing to do; opening one marks it read, and Unread and Mine (your own mailbox) narrow the list. **Mailbox** (?tab=mailbox): your connected email account, with Reply, Reply all, Forward and Compose; a reply's "Open the thread in Mailbox" lands here. **LinkedIn & social** (?tab=social): replies to our outreach, and All chats to read and answer live. **Calls** (?tab=calls): the voice agents' calls. **Notifications** (?tab=notifications): mentions, tasks, deals, renewals, approvals, workflow and engine events. The old Inbox, My Mailbox, Conversations and Unified Inbox addresses open the matching tab.
 
 **My Calendar** (/calendar) — your schedule synced from your calendar provider, including meetings the AI booked.
 
-**Autonomy Center** (/v2/workflows) — every Off / Approve / Auto dial on one screen, plus AI-suggested workflow rules. Admin-only to change.
+**Autonomy Center** (/v2/workflows) — every Off / Approve / Auto dial on one screen, grouped by what each does (Sends to people, Spends credits, Changes records), plus AI-suggested workflow rules. Admin-only to change. It has no sidebar row: open it with Search (Ctrl+K) or from the Library.
 
 ## Prospecting
 
@@ -138,7 +141,7 @@ The **Forecast** tab beside the board gives the weighted forecast with AI commen
 
 **Revenue Engine** (/are) — the hub: funnel from discovered to meetings, per-campaign status, engine logs, ICP link, routing suggestions and campaign proposals.
 
-**Campaigns** (/are/campaigns) — the engine's campaigns. Detail tabs: Prospects (queue, approve, reject, restore, Add existing), Sequences (each person's written steps with a quality score), Step performance (sends, opens, replies and meetings per step, table and funnel), A/B (variants and winners), Signals (opens, clicks, replies, bounces), Rejections (auto-screened people with reasons), Sources, Logs, Settings. See [The Revenue Engine, end to end](/help/articles/om-revenue-engine-lifecycle).
+**Campaigns** (/are/campaigns) — the engine's campaigns. **Clone** copies a campaign's setup into a new draft; **Archive** takes it out of the list and keeps everything (the **Archived** button shows them, **Unarchive** brings one back). **Approvals** (/are/approvals, in the Revenue Engine's sub-nav) is one queue of every campaign's waiting prospects. Detail tabs: Prospects (queue, approve, reject, restore, Add existing), Sequences (each person's written steps with a quality score), Step performance (sends, opens, replies and meetings per step, table and funnel), A/B (variants and winners), Signals (opens, clicks, replies, bounces), Rejections (auto-screened people with reasons), Sources, Logs, Settings. See [The Revenue Engine, end to end](/help/articles/om-revenue-engine-lifecycle).
 
 **Sequences** (/v2/sequences) — fixed multi-step flows with merge tags, delays and subject tests; enroll people or lists; drafts land in Email Drafts when review is required.
 
@@ -152,25 +155,25 @@ The **Forecast** tab beside the board gives the weighted forecast with AI commen
 
 ## Marketing, Proposals, Dialer, Customer Success
 
-**Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page. (The Broadcasts page that prepared one message to a segment was retired on 2026-10-27; a fixed-copy Revenue Engine campaign does that job.)
+**Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from the people in People (they read Contacts until November 7, 2026); to put a lead into outreach use Add to… on the Leads page. (The Broadcasts page that prepared one message to a segment was retired on 2026-10-27; a fixed-copy Revenue Engine campaign does that job.)
 
 **Proposals** (/proposals) are client-facing documents with sections, milestones, a portal link and an e-signature on accept; their **Pricing** section is a versioned quote priced from the **Products** (/products) catalog, and saving it can set the deal's value.
 
-**Calls** (/v2/calls) is the call queue and log, plus AI voice agents that answer call-backs and log transcripts.
+**Calls** (/v2/calls) is the call queue and log, plus the AI voice agents: they answer calls to their numbers, and place the outbound calls a manager or admin approved under AI calls → To approve. Every call is logged with its transcript.
 
 **Customers** (/customers) are won accounts with health tiers; **Renewals** (/renewals) track contract stages from 90 days out; **QBRs** (/qbrs) hold AI-drafted prep and history.
 
 ## Analytics
 
-**Analytics** (/v2/analytics) is the one cross-channel funnel: five bands over ONE population — the people the engine sourced — all time, every campaign, stated on the page. A campaign's Step performance tab answers a narrower question (one campaign's journeys, step by step) and is not expected to match band for band. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards. **Engine Performance** (/are/performance) shows what the engine sent, booked and learned. **Forecast** (/forecast) projects revenue from the open pipeline. **Email Analytics** (/email-analytics) shows sends, opens, clicks, replies and bounces, with sequence, CRM and AI-draft email and Revenue Engine campaign email counted apart, reply rates from matched replies only, and the same numbers as the Emails page. Campaign links are not click-tracked, so a campaign's clicks show as site visits from its links.
+**Analytics** (/v2/analytics) is the one cross-channel funnel: five bands over ONE population — the people the engine sourced — all time, every campaign, stated on the page. A campaign's Step performance tab answers a narrower question (one campaign's journeys, step by step) and is not expected to match band for band. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards, with a filter bar for date range, owner, stage and source. **Engine Performance** (/are/performance; the page is titled What's Working) shows what the engine sent, booked and learned, filtered by campaign and dates, with a CSV export. **Forecast** (/forecast) shows Closed, Commit, Best case and Pipeline for this quarter, next quarter or this year, on the workspace's fiscal quarters, with quota pacing; the Quota page holds the targets. **Mindmaps** (/mindmaps) are freeform planning canvases. **Email Analytics** (/email-analytics) shows sends, opens, clicks, replies and bounces, with sequence, CRM and AI-draft email and Revenue Engine campaign email counted apart, reply rates from matched replies only, and the same numbers as the Emails page. Campaign links are not click-tracked, so a campaign's clicks show as site visits from its links.
 
 ## Configuration
 
-**Settings** (/v2/settings/profile) — personal (profile, mailboxes, phone numbers, notifications, social accounts, MFA) and workspace (overview, users and teams, security, integrations, voice agents, data sources, email delivery, branding, billing and credits, data management, danger zone). **Security** enforces two of its three controls: **session timeout** is the absolute age of a sign-in (not idle time) and applies at each member's next sign-in, and **Enforce 2FA** blocks members without an authenticator app from the workspace entirely — a super admin is never blocked, and an admin cannot switch it on before connecting their own. The **IP allowlist** stores a list and deliberately enforces nothing until a trusted-proxy hop count is configured; the page says so. An admin of two workspaces can share a key between them: on Integrations, Voice agents and Data sources, under "Share keys with other workspaces", tick the workspace that should use this one's key. The other workspace never sees the key, its own key always comes first, and unticking stops the sharing at once. Plivo, SendGrid and mailboxes cannot be shared.
+**Settings** (/v2/settings/profile) — personal (profile with MFA, appearance, email signature, notifications, social accounts), workspace (overview, users and teams, mailboxes, voice agents and numbers, security, notification policy, integrations, knowledge base, data sources, email delivery, branding, proposals, billing and credits, audit log, tour builder, danger zone) and data management (custom fields, imports and exports, data enrichment, enrichment sweep). Users and teams, Audit log, Custom fields and Notifications open inside Settings. **Security** enforces two of its three controls: **session timeout** is the absolute age of a sign-in (not idle time) and applies at each member's next sign-in, and **Enforce 2FA** blocks members without an authenticator app from the workspace entirely — a super admin is never blocked, and an admin cannot switch it on before connecting their own. The **IP allowlist** stores a list and deliberately enforces nothing until a trusted-proxy hop count is configured; the page says so. An admin of two workspaces (with the Manage API keys permission) can share a key between them: on Integrations (Anthropic, OpenAI, Gemini), Voice agents and numbers (xAI) and Data sources (Apollo, QuickEnrich, WarmySender, LeadOcean, Reoon), under "Share keys with other workspaces", tick the workspace that should use this one's key. It is a live link, not a copy: the other workspace never sees the key, a change to the key applies there too, its own key always comes first, and it cannot pass the key on. Unticking stops the sharing at once, and the borrowing workspace can press Stop using. Plivo, SendGrid and mailboxes cannot be shared. See [Running multiple workspaces](/help/articles/multiple-workspaces).
 
 **Email Sending** (/sending-accounts) with **Sender Pools**, **Deliverability** and **Suppressions** — set a display name on every sender; it is the From header and the signature.
 
-**Connected Accounts**, **LinkedIn Limits**, **Lead Scoring** (recalculate after enrichment waves), **Lead Routing**, **Brand Voice**, **Prompt Templates**, **Workflow Rules**, **Custom Fields**, **Team**, **Audit Log**, **Help Center**.
+**Connected Accounts**, **LinkedIn Limits**, **Lead Scoring** (press **Recompute all** after enrichment waves), **Lead Routing**, **Brand Voice**, **Prompt Templates**, **Workflow Rules**, **Custom Fields**, **Team** (with **SCIM Provisioning** in its sub-nav), **Audit Log**, **Engine Status** (admin: is every engine running), **Territories** (in the Lead Scoring and Lead Routing sub-nav), **Help Center**.
 
 ## Public pages
 
@@ -201,7 +204,7 @@ Find Prospects / Import / Campaign discovery
 | Record | Page | What it is | Created by |
 |---|---|---|---|
 | Person | People | The master record: email and its status, LinkedIn, company, confidence, fit score, provenance | Find Prospects, import, discovery, wizard |
-| Lead | Leads | Engaged or inbound, awaiting qualification; scored and routed | Forms, pages, chat, booking, Convert to lead |
+| Lead | Leads | Engaged or inbound, awaiting qualification; scored and routed | Forms, pages, chat, booking, New lead |
 | Contact | Companies → people | The durable person on an account | Lead conversion, import |
 | Campaign prospect | Campaign → Prospects | That person inside one campaign, with its own enrichment and sequence status | Discovery, Add existing, routing, proposals |
 
@@ -211,7 +214,7 @@ One human can be in several campaigns; each membership is its own row pointing b
 
 **Lead**: new → working → qualified or unqualified → converted.
 
-**Opportunity stage**: free text, defined per pipeline under Settings → Pipelines. The seeded default pipeline uses discovery → qualified → proposal → negotiation → won → lost, but any stage can be renamed or replaced. What decides revenue, losses and open forecast is the **Won** / **Lost** tickbox on the stage, not its name. Each deal has value, win probability, close date, days in stage and an AI next step.
+**Opportunity stage**: free text, defined per pipeline behind the **Configure pipelines** button on Sales Pipeline. The seeded default pipeline uses discovery → qualified → proposal → negotiation → won → lost, but any stage can be renamed or replaced. What decides revenue, losses and open forecast is the **Won** / **Lost** tickbox on the stage, not its name. Each deal has value, win probability, close date, days in stage and an AI next step.
 
 **Customer**: tier enterprise / midmarket / smb; health healthy / watch / at risk / critical; renewal stage early → 90 days → 60 → 30 → past due → renewed or churned. The stage is **derived from the contract end date**, not set by hand: more than 90 days out is Early, then the 90 / 60 / 30 day buckets, and **past due** (stored as at_risk) means the end date has passed with no outcome recorded — it is a statement about the DATE, not about the health score beside it. **Renewed** and **churned** are outcomes, and the only thing that records one is a contract amendment (Customers → a customer → Add amendment, type renewal or termination); nothing derived ever overwrites them.
 
@@ -221,7 +224,7 @@ One human can be in several campaigns; each membership is its own row pointing b
 
 **Sequence**: draft, active, paused, archived. **Enrollment**: active, paused, finished, exited; a reply pauses.
 
-**Campaign**: draft → active → paused or completed. Only active campaigns run; pausing also stops enrichment spend. Autonomy: full, batch approval (default), review and release.
+**Campaign**: draft → active → paused. Only active campaigns run; pausing also stops enrichment spend. A campaign can be **archived** (paused if it was active, out of the list, everything kept, Unarchive brings it back) and **cloned** into a new draft. The page has no button that marks a campaign completed: when every prospect has finished, the owner gets a notice and archives it. Autonomy: full, batch approval (default), review and release.
 
 **Campaign prospect**: enrichment pending → enriching → complete or failed; sequence sourcing (discovered without an email — staged outside the queue, shown only as "finding email", admitted to pending when the AI lands an address, rejected if it can't) → pending → approved → enrolled → completed, replied, paused, canceled, or skipped (rejected; restorable from the Rejections tab). A prospect without an email is never in a campaign's queue. Each has a dossier, an ICP score and, once written, a sequence with a quality score out of 40. Each step becomes a scheduled row that turns into sent (with opens) or skipped.
 
@@ -277,11 +280,11 @@ The Logs tab shows each phase per tick. A paused campaign runs none of this and 
 - **Add existing** (Prospects tab): a three-step wizard. *Select* from a table with search, filters and select-all, or from a list. *Verify* shows duplicates already in this campaign and where each person is in other campaigns and sequences. *Add* pushes in batches; pushed people are enriched one at a time in the background.
 - **Campaign routing** (Autonomy Center dial): every 30 minutes, people in no campaign are matched to the best-fit active campaign — suggested in Approve, enrolled in Auto, within a daily cap.
 - **Campaign proposals** (same dial): hourly, people no active campaign fits are clustered into proposed new campaigns with a name, targeting, a drafted brief and the people. Create (born as a draft with its people pending), redraft, or reject from the hub.
-- **The AI Assistant** can draft a campaign or propose enrollments; both wait for your confirm.
+- **Elsie** can draft a campaign or propose enrollments; both wait for your confirm.
 
 ## The human gates
 
-In batch approval, the engine enriches and then waits. On the Prospects tab, select the rows and press **Approve**; that is the gate every send waits behind. Approve exactly the people you looked at: discovery may have added strangers since, so check the count before you press. Reject sends a row to Rejections with a reason; Restore brings it back. The Home attention panel counts pending approvals per campaign.
+In batch approval, the engine enriches and then waits. On the Prospects tab, select the rows and press **Approve**; that is the gate every send waits behind. Approve exactly the people you looked at: discovery may have added strangers since, so check the count before you press. Reject sends a row to Rejections with a reason; Restore brings it back. The Home attention panel counts pending approvals per campaign, and the **Approvals** page (Revenue Engine sub-nav) lists every campaign's waiting prospects in one queue, with filters and an approve-by-score that counts before it approves.
 
 ## Reading a campaign
 
@@ -295,7 +298,7 @@ In batch approval, the engine enriches and then waits. On the Prospects tab, sel
 
 ## Replies and the sender
 
-A reply marks the person replied, stops their remaining steps and lands in Conversations classified. Mailboxes are polled every minute. **SendGrid senders have no inbox**: set their Reply-To to a mailbox that is connected under Settings → Mailboxes, or replies will never appear. Set a **display name** on every sender; it is the From header and fills the signature.
+A reply marks the person replied, stops their remaining steps and lands in Inbox → Replies, classified. Mailboxes are polled every minute. **SendGrid senders have no inbox**: set their Reply-To to a mailbox that is connected under Settings → Mailboxes, or replies will never appear. Set a **display name** on every sender; it is the From header and fills the signature.
 
 ## Workspace limits and notices (ARE Settings)
 
@@ -303,7 +306,7 @@ A reply marks the person replied, stops their remaining steps and lands in Conve
 
 **Notification Preferences** are three switches: meeting booked (on), prospect auto-approved (off — one digest per campaign per engine pass, only in full autonomy), and ICP profile updated or restored (on, and it covers the automatic re-inference as well as the buttons). Two ARE notices are **not** covered by them and always arrive: engagement signals (every open, click and LinkedIn accept) and the weekly rejection digest.
 
-**Brand voice is not set here.** ARE writes in the one workspace Brand Voice profile (Configuration → Brand Voice, or Settings → Branding). Turning **Apply to AI** off there stops every AI writer using it, ARE included — check that first when copy ignores the tone you set.
+**Brand voice is not set here.** ARE writes in the one workspace Brand Voice profile (the Brand Voice page, or Settings → Branding). Turning **Apply to AI** off there stops every AI writer using it, ARE included — check that first when copy ignores the tone you set.
 
 ## Before you set a campaign active
 
@@ -327,7 +330,7 @@ See the process [Launch a Revenue Engine campaign](/help/articles/om-process-lau
     pageKey: "workflows",
     bodyMarkdown: `## The dials
 
-All on **Daily → Autonomy Center**; admin-only. Everything defaults to Off except Optimisation, which defaults to Approve.
+All on the **Autonomy Center** (open it with Search, Ctrl+K, or from the Library); admin-only. Everything defaults to Off except Optimisation, which defaults to Approve.
 
 | Dial | Approve produces | Auto does |
 |---|---|---|
@@ -371,7 +374,7 @@ Archived workspaces are excluded from every job.
 
 ## Workflow rules
 
-**Configuration → Workflow Rules** are deterministic if-this-then-that automations, separate from the AI dials. Triggers (six, and only six — *field equals* and *schedule* were retired; a saved rule on either is flagged "never fires"): record created and record updated, each scoped on the rule to leads, contacts, opportunities or any; stage changed (all five stage-writing paths, including an accepted proposal); task overdue; signal received (job change); deal stuck (nightly, and its conditions apply). Accounts are not a scope yet. The conditions a record rule offers are the fields that event carries and nothing else, so "why did my rule never fire?" is usually a condition on a field the payload does not have — a lead has no score yet when it is created (scoring runs afterwards), and a contact has no stage. Actions: webhook, Slack, Teams, create task, notify, update field, enroll in sequence, AI email draft. Bulk paths — imports, prospect imports, ARE bulk approval — never fire rules, and a burst of public form submissions is capped per minute. **Test (sends nothing)** lists what each action would do and runs none of them. The Autonomy Center also suggests rules from what it observes; adopt the ones that describe something you actually do.
+**Workflow Rules** (open the page with Search, Ctrl+K, or from the Library under Configuration) are deterministic if-this-then-that automations, separate from the AI dials. Triggers (six, and only six — *field equals* and *schedule* were retired; a saved rule on either is flagged "never fires"): record created and record updated, each scoped on the rule to leads, contacts, opportunities or any; stage changed (all five stage-writing paths, including an accepted proposal); task overdue; signal received (job change); deal stuck (nightly, and its conditions apply). Accounts are not a scope yet. The conditions a record rule offers are the fields that event carries and nothing else, so "why did my rule never fire?" is usually a condition on a field the payload does not have — a lead has no score yet when it is created (scoring runs afterwards), and a contact has no stage. Actions: webhook, Slack, Teams, create task, notify, update field, enroll in sequence, AI email draft. Bulk paths — imports, prospect imports, ARE bulk approval — never fire rules, and a burst of public form submissions is capped per minute. **Test (sends nothing)** lists what each action would do and runs none of them. The Autonomy Center also suggests rules from what it observes; adopt the ones that describe something you actually do.
 
 ## Budgets and caps
 
@@ -388,19 +391,20 @@ Archived workspaces are excluded from every job.
     summary: "The ten-minute loop everyone runs from Home, plus the SDR, AE, customer-success and admin blocks, and the end-of-day close.",
     readingTimeMinutes: 7,
     tags: ["operator-manual", "routine", "daily", "playbook"],
-    pageKey: "home",
+    // 2026-11-15: was "home", which no route resolves to; /v2/home resolves to "dashboard".
+    pageKey: "dashboard",
     bodyMarkdown: `The pattern under every routine: the machines act, the attention panel confesses, a human reads the confession. Daily is for sends and replies.
 
 ## Everyone: the ten-minute loop
 
 1. **Home → attention panel**, top to bottom. Each row is a queue; empty the queue, not the row.
    - **AI drafts** (Emails → AI Pipeline): approve, edit or discard. Read at least two in full every day; you are training your own trust.
-   - **Engine approvals** (campaign → Prospects): release the batch if the campaign runs batch approval. Nothing sends until you do.
-   - **Unhandled replies** (Conversations): answer within one business day. A human reply beats any sequence step, and handling one stops the sequence for that person.
+   - **Engine approvals** (campaign → Prospects, or the Approvals page for every campaign at once): release the batch if the campaign runs batch approval. Nothing sends until you do.
+   - **Unhandled replies** (Inbox → Replies): answer within one business day. A human reply beats any sequence step, and handling one stops the sequence for that person.
    - **Proposed meetings** (Meetings): confirm or decline the candidate times.
    - **Draft tasks** (Tasks): accept or dismiss the next-best actions.
    - **Routing suggestions and campaign proposals** (Revenue Engine hub): decide; the engine keeps proposing until you do.
-2. **Inbox**: read the engine events. Anything red (bounce spike, failed send, expired credential) is fixed before noon.
+2. **Inbox → Notifications**: read the engine events. Anything red (bounce spike, failed send, expired credential) is fixed before noon.
 3. **Today's meetings** (Meetings or My Calendar): open each record for the prep note; afterwards set the disposition and log the activity.
 4. **Tasks due today**: work them or reschedule with a reason.
 
@@ -415,7 +419,7 @@ If the panel is empty, you are done with this block.
 
 ## AE block (about 30 minutes)
 
-1. **Deals**: every open deal has a dated next step and an owner; move stages honestly.
+1. **Sales Pipeline**: every open deal has a dated next step and an owner; move stages honestly.
 2. **Pipeline Alerts**: clear each alert by acting or by acknowledging with a note.
 3. **Proposals**: anything sent more than five days ago without an open gets a call task.
 4. Log every touch on the record; it feeds the Deal Autopilot and the forecast.
@@ -446,15 +450,17 @@ If the panel is empty, you are done with this block.
     summary: "The 45-minute review of what is working: engine performance, campaign health, sequences, replies, data, pipeline, leads, inbound, dials and reports.",
     readingTimeMinutes: 6,
     tags: ["operator-manual", "routine", "weekly", "playbook"],
-    pageKey: "are-performance",
+    // 2026-11-15: was "are-performance", which no route resolves to (every /are page
+    // resolves to "are"). Analytics had no article, and this is the weekly numbers review.
+    pageKey: "analytics",
     bodyMarkdown: `Same day every week, 30 to 60 minutes. Weekly is for trends: what to double down on and what to retire.
 
-1. **Engine Performance** and each active campaign's **Step performance**: which steps and variants get opens and replies. Retire losers, promote winners on the A/B tab. The optimisation dial tunes within limits; retiring a whole angle is your call.
+1. **Engine Performance** (the What's Working page; filter it by campaign and by dates) and each active campaign's **Step performance**: which steps and variants get opens and replies. Retire losers, promote winners on the A/B tab. The optimisation dial tunes within limits; retiring a whole angle is your call.
 2. **Campaign health** (Campaigns): per campaign — working count against target, enrichment backlog, the quality-score spread (open two low-twenties sequences and read them), Rejections for false negatives (restore real fits), sources still what you intend, daily cap sane, status as expected — nothing active that should be paused.
 3. **Sequences**: enrollment counts, stuck steps, drafts sitting in Email Drafts.
-4. **Conversations**: classification quality. Correct anything misclassified. If "needs classify" grows, the classifier is starved or a mailbox is disconnected.
+4. **Inbox → Replies**: classification quality. Correct anything misclassified. If "needs classify" grows, the classifier is starved or a mailbox is disconnected.
 5. **Data health** (Data Enrichment → Data Health, the sweep and backfill cards): what the sweeps found, credits spent, how many people still lack an email or a company. You are checking for a stall, not doing the work.
-6. **Pipeline** (Deals and Forecast): stage by stage; slipped close dates; deals with no activity in 14 days; forecast against quota. Update win probabilities honestly.
+6. **Pipeline** (Sales Pipeline and Forecast): stage by stage; slipped close dates; deals with no activity in 14 days; forecast against quota. Update win probabilities honestly.
 7. **Leads**: anything still new after two days is a routing problem (Lead Routing) or a capacity problem.
 8. **Inbound**: the high-intent visitor list, form submissions, three chat transcripts (promote the agent's dial if you approved everything unchanged), landing-page views against submits.
 9. **Autonomy Center**: adopt or dismiss the suggested workflow rules; confirm every dial is still where you meant it.
@@ -470,13 +476,15 @@ Close the week when: performance read, losers retired, pipeline honest, leads ro
     summary: "Budgets, scoring, ICP, pruning, promoting one dial, deliverability, prompts, customer health, hygiene, access, backup — and the quarterly strategy half-day.",
     readingTimeMinutes: 6,
     tags: ["operator-manual", "routine", "monthly", "quarterly", "playbook"],
-    pageKey: "settings",
+    // 2026-11-15: was "settings", which only LinkedIn Limits and Pipeline settings
+    // resolve to. The Settings hub resolves to "admin-setup".
+    pageKey: "admin-setup",
     bodyMarkdown: `Monthly is for budgets and trust. Calendar 60 to 90 minutes.
 
 1. **Budgets** (Settings → Billing and credits): AI token usage against the monthly budget; verification and QuickEnrich credit cycles have no rollover — if a cycle ended with credits unspent raise the sweep's daily cap, if it ran dry early lower it; LinkedIn lookup usage.
-2. **Recalculate lead scoring** (Lead Scoring → Recalculate) and confirm the primary model is still right. A month of enrichment changed the fields it reads.
+2. **Recalculate lead scoring** (Lead Scoring → **Recompute all**) and confirm the primary model is still right. A month of enrichment changed the fields it reads.
 3. **ICP review** (ICP Agent): read this month's profile against last month's. If won deals moved it, adjust campaign targeting and consider running campaign proposals. If you Restore an older version, it now holds — the automatic pass dates itself from the newest version generated, not from whichever is active — and setting ARE Settings → ICP Re-inference Schedule to Manual Only stops the pass entirely.
-4. **Prune**: complete or archive finished campaigns; archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
+4. **Prune**: archive finished campaigns (Archive on the campaign's row or header; there is no complete button, and Unarchive brings one back); archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
 5. **Autonomy review**: any dial that spent a clean month on Approve with everything approved unchanged is a candidate for Auto. Promote one per month and write down the date.
 6. **Deliverability month-end**: warmup graduations, suppression growth, unsubscribes by campaign; retire any sender with rising bounces. Bounce and spam are a rolling 30-day window counted per RECIPIENT, shown only once a mailbox has reached enough recipients to rate, so a quiet sender stays blank rather than looking clean.
 7. **Brand voice and personas**: update avoid-words from what replies complained about; add personas for segments that converted.
@@ -503,7 +511,8 @@ Close the month when: budgets set, scores recalculated, ICP reviewed, pruned, on
     summary: "The repeatable eight-step launch, from a one-sentence audience to a widened daily cap, with the definition of done.",
     readingTimeMinutes: 5,
     tags: ["operator-manual", "process", "campaign", "are"],
-    pageKey: "are-campaigns",
+    // 2026-11-15: was "are-campaigns", which no route resolves to; every /are page resolves to "are".
+    pageKey: "are",
     bodyMarkdown: `1. **Define the audience in one sentence** — who, and why now. Check the ICP profile agrees; add a persona if one is missing.
 2. **Create the campaign** (Campaigns → New): name; goal; targeting; **sources** as an explicit list (choose existing people only for a curated campaign — an empty list means no discovery); target count; copy mode per person; the **sequence prompt** with one plain sentence of what you do, the voice, and the do-not list (no invented programs or numbers, one meaning across steps, no credentials in names); the **sequence template** (3, 7 or 14 steps, or custom) and the campaign's step gap, one week by default; channels (email and LinkedIn — SMS and AI Voice are shown disabled because no provider is connected); daily cap of 20 to 30; autonomy batch approval.
 3. **Sender**: choose the pool or sender; confirm display names are set; make sure the reply mailbox is connected (for SendGrid, point Reply-To at a connected mailbox); set your booking link timezone.
@@ -522,12 +531,13 @@ Definition of done: sender display names set, reply mailbox connected, sources i
     summary: "Build, enrich, verify, score, enroll, handle the reply, book, convert.",
     readingTimeMinutes: 3,
     tags: ["operator-manual", "process", "sequences", "prospecting"],
-    pageKey: "people",
+    // 2026-11-15: was "people"; the Lists page had no article, and this process starts from a list.
+    pageKey: "lists",
     bodyMarkdown: `1. **Build the list**: Find Prospects or People filters → Add to ▾ → List.
 2. **Enrich fully**; verify emails; clear Needs Review for the list.
 3. **Score**: recalculate fit; keep good and excellent with a valid email.
 4. **Enroll**: People → Add to ▾ → Sequence, or a campaign through the Add existing wizard. Drafts appear in Email Drafts if the sequence requires review.
-5. **Replies** land in Conversations; handle them. Willing to meet gets the booking link or proposed times (the reply Autopilot in Auto sends the link inside the send window; the Meeting Autopilot in Autonomous sends invites). A meeting counts as booked only when the prospect accepts the invite.
+5. **Replies** land in Inbox → Replies; handle them. Willing to meet gets the booking link or proposed times (the reply Autopilot in Auto sends the link inside the send window; the Meeting Autopilot in Autonomous sends invites). A meeting counts as booked only when the prospect accepts the invite.
 6. **Meeting held**: set the disposition, log the activity, convert the lead, work the opportunity.
 
 Every step is visible on the person's drawer: memberships, timeline, and where each fact came from.`,
@@ -539,7 +549,8 @@ Every step is visible on the person's drawer: memberships, timeline, and where e
     summary: "What happens when a form, page, chat or booking creates a lead, the same-day SLA, and the per-class playbook for replies.",
     readingTimeMinutes: 4,
     tags: ["operator-manual", "process", "inbound", "replies", "conversations"],
-    pageKey: "conversations",
+    // 2026-11-15: was "conversations", a page folded into the Inbox on 2026-11-07.
+    pageKey: "inbox",
     bodyMarkdown: `## Inbound leads
 
 1. A form, landing page, chat session or booking creates a **Lead** (auto-create) and routes it (Lead Routing). Check routing weekly.
@@ -547,7 +558,7 @@ Every step is visible on the person's drawer: memberships, timeline, and where e
 3. **Qualify → Convert** (account, contact and opportunity in one step) or unqualify with a reason.
 4. Chat-qualified visitors: in Approve the agent raises a high-priority task; in Auto it books the meeting. Read the transcript before the meeting either way.
 
-## Replies (Conversations)
+## Replies (Inbox → Replies)
 
 Newest first. Read the class, the sentiment and the suggested reply, then act:
 
@@ -570,10 +581,11 @@ Handling a reply marks it handled and stops the sequence for that person. Correc
     summary: "Deals by stage, alerts, autopilot suggestions, forecast honesty, and proposal follow-ups.",
     readingTimeMinutes: 3,
     tags: ["operator-manual", "process", "pipeline", "forecast", "deals"],
-    pageKey: "deals",
-    bodyMarkdown: `1. **Deals** by stage, sorted by days in stage. Every deal: a dated next step, a named champion, a realistic close date. Move stages honestly; stage history is kept.
+    // 2026-11-15: was "deals", a page folded into /pipeline on 2026-11-08.
+    pageKey: "pipeline",
+    bodyMarkdown: `1. **Sales Pipeline** by stage, sorted by days in stage. Every deal: a dated next step, a named champion, a realistic close date. Move stages honestly; stage history is kept.
 2. **Pipeline Alerts** cleared; Deal Autopilot suggestions accepted or dismissed.
-3. **Forecast**: commit against best case; adjust win probabilities; note slips with reasons.
+3. **Forecast** (Analytics → Forecast): pick the fiscal quarter, set each deal's category (Commit, Best case, Pipeline or Omitted), read Commit against Best case and the quota pacing table; adjust win probabilities; note slips with reasons.
 4. **Proposals**: follow up on anything sent more than five days ago; check portal opens.
 5. **Log** every call, meeting and note on the record; the autopilot and the forecast read them.
 
@@ -613,7 +625,7 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
 2. Flip one dial; write the date somewhere you will see it next month.
 3. Watch Home's digest and the feature's page for three days; revert if quality drops.
 
-Dials are admin-only wherever you change them: the Autonomy Center, the feature's own page, or by confirming an AI Assistant card (the card names the dial and what Auto does). Three are Autonomy-Center-only and the assistant cannot touch them at all — Social Autopilot, Job-change Autopilot and Email AI auto-send. Fully autonomous Revenue Engine campaigns are set on the campaign's Settings tab behind the acknowledgement, never from chat.`,
+Dials are admin-only wherever you change them: the Autonomy Center, the feature's own page, or by confirming a card from Elsie (the card names the dial and what Auto does). Three are Autonomy-Center-only and the assistant cannot touch them at all — Social Autopilot, Job-change Autopilot and Email AI auto-send. Fully autonomous Revenue Engine campaigns are set on the campaign's Settings tab behind the acknowledgement, never from chat.`,
   },
   {
     slug: "om-glossary",
@@ -631,7 +643,9 @@ Dials are admin-only wherever you change them: the Autonomy Center, the feature'
 - **Booking link** — your public /b/slug scheduling page.
 - **Brand pin** — a manual company logo or domain that overrides every enrichment provider.
 - **Brand voice** — tone, vocabulary and avoid-words every AI-written message reads.
-- **Broadcast** — one message to a segment (Marketing); not yet sending.
+- **Approvals** — the one queue of every campaign's prospects waiting for a decision.
+- **Archive (campaign)** — take a campaign out of the list without deleting it; an active one is paused, and Unarchive brings it back.
+- **Broadcast** — a page retired on October 27, 2026. It prepared one message to a segment and never sent; a fixed-copy Revenue Engine campaign does that job.
 - **Campaign proposal** — an engine-suggested new campaign for people no active campaign fits.
 - **Campaign routing** — matching unenrolled people to the best-fit active campaign.
 - **Chat agent** — the website widget that qualifies visitors and can book meetings without sending.
@@ -645,9 +659,11 @@ Dials are admin-only wherever you change them: the Autonomy Center, the feature'
 - **Enrichment** — filling missing emails, titles and companies from providers, reconciled with provenance.
 - **Fit gate** — the score a person must reach before the campaign spends enrichment on them.
 - **Fit score** — how well a person or company matches your primary scoring model.
+- **Forecast category** — Commit, Best case, Pipeline or Omitted: the call on whether an open deal closes in the fiscal period.
 - **Full mode** — a campaign that discovers and sends with no human gate.
 - **ICP** — the ideal customer profile, regenerated from wins and engagement on the workspace's ICP Re-inference Schedule (daily by default).
 - **Job change** — a detected move to a new company; triggers re-engagement.
+- **Key sharing** — an admin letting another workspace use this workspace's vendor key as a live link; the other workspace never sees the key.
 - **Lead** — an engaged or inbound person awaiting qualification.
 - **List** — a hand-picked static set of people or companies.
 - **Merge tag** — a placeholder such as first name or company filled at send time.
@@ -660,7 +676,9 @@ Dials are admin-only wherever you change them: the Autonomy Center, the feature'
 - **Quality score** — the judge's score out of 40 for a written sequence.
 - **Rejections** — people a campaign screened out, with reasons; restorable.
 - **Review and release** — a campaign mode where each person's sequence is approved individually.
-- **Segment** — a saved rule-based audience that stays current.
+- **Sector** — a group of organizations that buy alike, inside a market on the Research page.
+- **Segment** — a saved rule-based audience of people in People that stays current.
+- **Send window** — the hours and days Velocity may send to prospects on its own.
 - **Sender display name** — the From name and the signature on every send.
 - **Sender pool** — a group of senders campaigns rotate through.
 - **Sequence** — a fixed multi-step flow you enroll people into.
@@ -692,14 +710,14 @@ Dials are admin-only wherever you change them: the Autonomy Center, the feature'
 | Campaign proposal says "Model draft unavailable" | rate limit during drafting | press Redraft |
 | Proposals cluster badly | people lack industry or country | enrich companies first |
 | A dial snaps back | dials are admin-only | ask an admin |
-| Help article edits vanish after a deploy | seeded articles are rewritten at boot | create your own article with a new slug |
+| A help article I edited no longer changes when Velocity is updated | an article or tour an admin has edited or deleted is kept as they made it, so shipped updates stop reaching it | expected; to keep getting shipped updates, leave the shipped article alone and write your own article beside it |
 | Import put the wrong column in email | headers must match exactly; two columns cannot claim one field | fix headers and re-map |
 | Names carry PMP, MBA and the like | LinkedIn suffixes | the name cleaner runs on import and enrichment; fix legacy rows via Data Health |
 | Company shows the wrong brand | enrichment guessed from a mailbox domain or slug | pin the brand on the company |
 | LinkedIn actions fail | disconnected or caps reached | Connected Accounts; LinkedIn Limits |
-| AI features stop mid-day | monthly AI budget exhausted or provider key missing | Billing and credits; Integrations |
+| AI features stop mid-day | monthly AI budget exhausted, provider key missing, or the workspace that shared its key removed the key or stopped sharing | Billing and credits; Integrations |
 | A campaign is active that should be paused | someone resumed it | check the Audit Log; pause it; do not trust a note that says paused |
 
-Still stuck: Ask AI in the Help Center searches every article, and the AI Assistant can read your live data to see what a queue actually contains.`,
+Still stuck: Ask AI in the Help Center searches every article, and Elsie can read your live data to see what a queue actually contains.`,
   },
 ];

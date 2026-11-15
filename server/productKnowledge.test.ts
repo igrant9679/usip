@@ -45,7 +45,13 @@ describe("assistant product knowledge digest", () => {
   });
 
   it("stays a digest, not a manual", () => {
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(9000);
+    // 2026-11-15: 9000 → 10500. The digest sat at 8,968 of 9,000 and named none
+    // of three areas shipped since October: Research (what the AI writers read),
+    // AI phone calls, and key sharing between workspaces. Each got one terse
+    // paragraph, and the routines were cut down to pay for part of it (10,158
+    // now). The headroom is for the assistant's own paragraph, not for prose:
+    // depth still belongs in the Operator's Manual articles, which help_lookup reads.
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(10500);
   });
 
   it("is inside BOTH AI system prompts", () => {

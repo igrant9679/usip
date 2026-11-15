@@ -135,6 +135,8 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/calendar", "calendar"],
   ["/v2/companies", "companies"],
   ["/v2/lists", "lists"],
+  // "Every page, explained" and "Navigating the app" are filed under this key.
+  ["/v2/library", "library"],
   ["/v2/data-enrichment", "data-enrichment"],
   // Research had no key, so its Help drawer was empty and the assistant was
   // told the user was on an unknown page (2026-11-15).
