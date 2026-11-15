@@ -79,7 +79,9 @@ describe("the app shell's loose ends (G66)", () => {
 
   it("the top-bar search opens the palette; there is no inert search box", () => {
     expect(shell).not.toMatch(/<input aria-label="Search"[^>]*placeholder="Search…"/);
-    const top = shell.slice(shell.indexOf("<ElsieToggle />"), shell.indexOf("{actions}"));
+    // 2026-11-15: the toggle became <ElsieButton /> when Elsie and the assistant merged; same spot.
+    expect(shell.indexOf("<ElsieButton />")).toBeGreaterThan(-1);
+    const top = shell.slice(shell.indexOf("<ElsieButton />"), shell.indexOf("{actions}"));
     expect(top).toContain("onClick={openCommandPalette}");
   });
 

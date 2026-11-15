@@ -81,8 +81,10 @@ export const TOOLS: Tool[] = [
   // One home since 2026-11-08 (U33): the Dashboard is Home's Pipeline view.
   { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
     description: "Pipeline at a glance — revenue, win/loss, stage funnel, top reps, recent deals.", keywords: ["overview", "kpi", "home screen", "revenue"] },
-  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, group: "Daily", primary: true,
-    description: "Ask anything about your pipeline in plain language." },
+  // One helper since 2026-11-15: the page is Elsie's. "AI Assistant" stays a
+  // keyword so the palette still finds her by the old name.
+  { href: "/v2/ai-assistant", label: "Elsie", icon: Sparkles, group: "Daily", primary: true,
+    description: "Your guide and assistant: ask anything, get shown around a page, or have a job done after you confirm.", keywords: ["ai assistant", "assistant", "chat", "guide", "help"] },
   // One reply workspace (audit 2026-10-20, F25): Inbox, My Mailbox,
   // Conversations and Unified Inbox were four entries for four pages; they
   // are tabs of this one now, and their old paths redirect to it.

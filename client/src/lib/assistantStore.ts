@@ -20,6 +20,8 @@ export type AssistantMessage = {
   body: string;
   toolEvents?: Array<{ tool: string; summary: string }>;
   navigations?: Array<{ href: string; label: string }>;
+  /** Guided tours Elsie found for the question; each renders as a "Show me" button. */
+  tours?: Array<{ id: number; name: string; estimatedMinutes?: number | null }>;
   pendingActions?: PendingAction[];
   /** Per-nonce outcome once a card was confirmed/declined, so it disarms. */
   resolved?: Record<string, "done" | "declined">;

@@ -41,6 +41,8 @@ export interface CatalogEntry {
   parse: (input: unknown) => unknown;
   /** True for the approval-queue sends — the card and the model are told email goes out. */
   sends: boolean;
+  /** True for the settings-class reads (READ_ONLY_PATHS): the result is passed through redactForModel. */
+  readOnly: boolean;
 }
 
 /** Router prefix → group label + what it is for (the model reads these). */
@@ -147,6 +149,105 @@ export const SEND_ALLOWLIST: Record<string, string> = {
   "tasks.sendSocialInvite": "SENDS A LINKEDIN INVITE NOW: approve one Social Autopilot invite task (within LinkedIn limits).",
   "tasks.sendAllSocialInvites": "SENDS LINKEDIN INVITES NOW: approve every pending Social Autopilot invite task (stops at the LinkedIn limit).",
 };
+
+/**
+ * Settings-class READS (owner decision 2026-11-15: "widen reads"). The
+ * assistant could not answer "which keys are set up", "who is on the team",
+ * "what have we spent this month" or "is anything shared with another
+ * workspace", because none of those routers is in ALLOWED_GROUPS. They stay
+ * out of it: nothing here can be changed from chat.
+ *
+ * This is a list of PATHS, not routers, on purpose. Opening a whole router
+ * would also open every query added to it later, and these routers sit next
+ * to credentials. Each path below was read on 2026-11-15 and returns flags,
+ * names, counts or settings, never a secret (the 2026-10-20 audit's safe
+ * projections: settingsForMember, safeSendingAccount, redactIntegrationConfig,
+ * maskSecret). redactForModel still runs over every result as a second line.
+ *
+ * Only queries are taken from this list (buildCatalogFrom skips a path whose
+ * procedure is a mutation), and each still runs through createCaller under
+ * the user's own role, so an admin-only read stays admin-only.
+ */
+export const READ_ONLY_GROUP = "Settings (read only)";
+export const READ_ONLY_PATHS: Record<string, string> = {
+  // Workspace and settings
+  "workspace.current": "READ ONLY: this workspace's name and the caller's role in it.",
+  "workspace.summary": "READ ONLY: record counts for this workspace (people, companies, leads, deals).",
+  "workspace.getBranding": "READ ONLY: the workspace's branding (logo, colours, sender name).",
+  "settings.get": "READ ONLY: workspace settings: time zone, fiscal year, currency, send window, notification policy, security switches. Changed on Settings (/v2/settings).",
+  "settings.getAreSettings": "READ ONLY: Revenue Engine defaults: autonomy mode, daily send cap, auto-approve threshold, channels, source order.",
+  "settings.revenue": "READ ONLY: revenue settings (which deal stages count as won or closed).",
+  "sendingStatus.current": "READ ONLY: whether outbound is paused for this workspace, and why.",
+  "emailAutoSend.getAutoSendSettings": "READ ONLY: the Email AI auto-send dial and its limits.",
+  "crmPipelines.list": "READ ONLY: the deal pipelines and their stages.",
+  "territories.list": "READ ONLY: sales territories.",
+  "crmTerritoryRules.list": "READ ONLY: territory assignment rules.",
+  "promptTemplates.list": "READ ONLY: the saved AI prompt templates.",
+  "quota.list": "READ ONLY: quotas set per person and period.",
+  "quota.teamSummary": "READ ONLY: the team's quota attainment.",
+  "quota.myPacing": "READ ONLY: the caller's own quota pacing.",
+  "linkedinLimits.overview": "READ ONLY: LinkedIn daily limits and how much of each is used.",
+  "pipelineAlerts.summary": "READ ONLY: pipeline alert counts.",
+  "pipelineAlerts.list": "READ ONLY: pipeline alerts (stuck or at-risk deals).",
+  "audit.list": "READ ONLY (admin): the audit log: who changed what, and when.",
+  // Usage and spend
+  "usage.currentMonth": "READ ONLY: this month's AI tokens, emails sent and seats in use.",
+  "spend.month": "READ ONLY: this month's AI and vendor spend against the budget.",
+  "spend.budgets": "READ ONLY: the monthly budgets set for AI and each vendor.",
+  "spend.report": "READ ONLY: spend by vendor and feature over a period.",
+  // Keys and connections: which are set up, never the keys
+  "keyShares.overview": "READ ONLY (admin): which keys this workspace shares with other workspaces, and which it borrows. An admin changes sharing on Settings.",
+  "aiCredentials.get": "READ ONLY: which AI providers are set up, the model each uses and the default provider. Never the key.",
+  "integrations.list": "READ ONLY: which integrations are connected. Never their credentials.",
+  "apollo.get": "READ ONLY: whether Apollo is set up, and its daily pull cap.",
+  "reoon.get": "READ ONLY: whether Reoon email verification is set up and enabled.",
+  "quickenrich.get": "READ ONLY: whether QuickEnrich is set up, and its daily pull cap.",
+  "prospectSources.describe": "READ ONLY: the data sources (Apollo, LeadOcean and the rest), which are connected and what each can do.",
+  // Team
+  "team.list": "READ ONLY: team members: name, email, role, title, last active, invitation and two-factor status.",
+  "team.myPermissions": "READ ONLY: what the caller is permitted to do.",
+  "team.getPermissions": "READ ONLY (admin): one member's permissions (memberId from team.list).",
+  "team.mfaCoverage": "READ ONLY (admin): how many members have no authenticator app.",
+  "workspace.members": "READ ONLY: the workspace's members, for picking an owner or assignee.",
+  // Mailboxes and calendars
+  "sendingAccounts.list": "READ ONLY: the sending mailboxes: address, status, daily limit, warm-up. Never their passwords.",
+  "sendingAccounts.deliverability": "READ ONLY: deliverability by sending mailbox.",
+  "senderPools.list": "READ ONLY: sender pools and how many mailboxes each has.",
+  "emailSuppressions.summary": "READ ONLY: how many addresses are suppressed, by reason.",
+  "calendar.listAccounts": "READ ONLY: the caller's connected calendars and their sync status.",
+  // Guidance
+  "tours.list": "READ ONLY: the guided tours (find_tours is the tool that offers one).",
+};
+
+/**
+ * Second line of defence for the settings-class reads: any STRING sitting
+ * under a key that names a secret is replaced before the model (and the
+ * stored tool digest) sees it. Numbers and booleans pass (`llmTokens` is a
+ * count, `hasPassword` a flag), and so do nulls. `masked` is the "••••1234"
+ * tail the settings pages show; the model has no use for even that.
+ */
+const SECRET_KEY = /(password|passwd|secret|token|api_?key|private_?key|signing|masked|encrypted|enc$|hash$|salt|cookie|otp)/i;
+/** Keys whose STRING value is hidden but whose object is still walked: a data
+ *  source's `credential` is an object saying whether it is connected. */
+const SECRET_STRING_KEY = /(credential|webhook|openid)/i;
+export function redactForModel(value: unknown, depth = 0): unknown {
+  if (depth > 12 || value == null) return value;
+  if (Array.isArray(value)) return value.map((v) => redactForModel(v, depth + 1));
+  if (typeof value !== "object" || value instanceof Date) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (SECRET_KEY.test(k)) {
+      if (typeof v === "string") out[k] = v ? "[hidden]" : v;
+      else if (v != null && typeof v === "object") out[k] = "[hidden]";
+      else out[k] = v;
+    } else if (SECRET_STRING_KEY.test(k) && typeof v === "string") {
+      out[k] = v ? "[hidden]" : v;
+    } else {
+      out[k] = redactForModel(v, depth + 1);
+    }
+  }
+  return out;
+}
 
 /**
  * The Autonomy Center's Off / Approve / Auto dials that the catalog exposes
@@ -290,10 +391,15 @@ export function buildCatalogFrom(router: RouterLike): CatalogEntry[] {
     if (type !== "query" && type !== "mutation") continue;
     const root = path.split(".")[0];
     const sends = path in SEND_ALLOWLIST;
-    const allow = ALLOWED_GROUPS[root] ?? (sends ? { group: "Outreach", description: "Approval-queue sends" } : undefined);
+    // A settings-class read: by exact path, a query, in a router that is not otherwise open.
+    const readOnly = !ALLOWED_GROUPS[root] && !sends && path in READ_ONLY_PATHS;
+    if (readOnly && type !== "query") continue;
+    const allow = ALLOWED_GROUPS[root]
+      ?? (sends ? { group: "Outreach", description: "Approval-queue sends" } : undefined)
+      ?? (readOnly ? { group: READ_ONLY_GROUP, description: "Settings, usage, keys, team and mailboxes, read only" } : undefined);
     if (!allow) continue;
     const leaf = path.split(".").pop() ?? "";
-    if (!sends && (DENY_LEAF.test(leaf) || DENY_PATH.test(path))) continue;
+    if (!sends && !readOnly && (DENY_LEAF.test(leaf) || DENY_PATH.test(path))) continue;
     const zodInput = (proc._def?.inputs ?? [])[0] as z.ZodTypeAny | undefined;
     let inputSchema: Record<string, unknown> = { type: "object", additionalProperties: true, description: "Untyped input — pass what the page would" };
     if (zodInput) {
@@ -310,10 +416,11 @@ export function buildCatalogFrom(router: RouterLike): CatalogEntry[] {
       kind: type,
       group: allow.group,
       title: titleFor(path),
-      description: SEND_ALLOWLIST[path] ?? AUTONOMY_DIALS[path] ?? ACTION_DESCRIPTIONS[path] ?? `${allow.description}.`,
+      description: SEND_ALLOWLIST[path] ?? AUTONOMY_DIALS[path] ?? ACTION_DESCRIPTIONS[path] ?? (readOnly ? READ_ONLY_PATHS[path] : undefined) ?? `${allow.description}.`,
       inputSchema,
       parse: (input: unknown) => (zodInput ? zodInput.parse(input ?? {}) : input),
       sends,
+      readOnly,
     });
   }
   return out;
@@ -348,7 +455,7 @@ export function searchCatalog(catalog: CatalogEntry[], query: string | undefined
     // their description words carry real signal; a router-group boilerplate
     // description ("Autonomous campaigns: create, update, …") matches every
     // sibling procedure equally and must not outrank them.
-    const described = !!ACTION_DESCRIPTIONS[a.path] || !!AUTONOMY_DIALS[a.path] || a.sends;
+    const described = !!ACTION_DESCRIPTIONS[a.path] || !!AUTONOMY_DIALS[a.path] || a.sends || a.readOnly;
     let score = 0;
     for (const t of tokens) {
       if (path.includes(t)) score += 4;
