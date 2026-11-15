@@ -58,6 +58,9 @@ describe("a dialog's contents stay inside it", () => {
     expect(cls).toContain("*:data-[slot=select-value]:truncate");
     expect(cls).not.toContain("*:data-[slot=select-value]:flex");
     expect(cls).not.toContain("*:data-[slot=select-value]:line-clamp-1");
+    // The classes after it are still their own words (an edit once ran "truncate" into the next class).
+    expect(cls).toContain("[&_svg]:pointer-events-none");
+    expect(cls).toContain("[&_svg]:shrink-0");
   });
 
   it("the AI research settings dropdown fills the dialog, which is wide enough for its longest label", () => {
