@@ -75,7 +75,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ElsieToggle, adoptServerElsiePref } from "@/components/usip/Elsie";
+import { ElsieButton, adoptServerElsiePref } from "@/components/usip/Elsie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -318,7 +318,7 @@ const TOP_LINKS: NavLink[] = [
   // Back on the rail (owner, 2026-09-04): the pipeline dashboard. Since the two
   // homes became one page (U33, 2026-11-08) it is that page's Pipeline view.
   { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
-  { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
+  { href: "/v2/ai-assistant", label: "Elsie", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
   // One reply workspace (F25): Inbox and My Mailbox are its tabs now.
   { href: "/v2/inbox", label: "Inbox", icon: Inbox, color: "#1D4ED8", darkColor: "#93C5FD" },
   { href: "/calendar", label: "My Calendar", icon: CalendarDays },
@@ -524,8 +524,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   usePageTitle(title);
   const currentSearch = useSearch().replace(/^\?/, "");
   const embedded = useContext(ShellEmbedContext);
-  // The AI Assistant sends "the page the user came from" with each turn.
-  useEffect(() => { rememberPage(location); }, [location]);
+  // Elsie is told "the page the user came from" with each turn, query included
+  // (the record's tab and the page's filters are in it).
+  useEffect(() => { rememberPage(location, currentSearch); }, [location, currentSearch]);
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
@@ -537,7 +538,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const [newWsOpen, setNewWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  // AI Assistant from anywhere (owner ask 2026-09-08): Ctrl/Cmd+J toggles the
+  // Elsie from anywhere (owner ask 2026-09-08): Ctrl/Cmd+J toggles her
   // drawer on every page. Ctrl+K is the Library; J sits next to it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -918,7 +919,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           {title && <div className="hidden sm:block text-sm text-muted-foreground truncate">/ {title}</div>}
           <div className="flex-1" />
 
-          <ElsieToggle />
+          {/* Elsie: one helper (2026-11-15). This button opens her drawer (also
+              Ctrl+J); the sparkles button that used to open "AI Assistant"
+              beside the theme toggle is gone, because it was the same thing. */}
+          <ElsieButton />
 
           {/* Opens the palette. It was a text box with no handler: typing in it
               did nothing at all (G66). */}
@@ -947,19 +951,6 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
           )}
-
-          {/* AI Assistant — the conversational operator, from any page. Anchored
-              in the topbar (with Ctrl+J), NOT a floating FAB. */}
-          <button
-            type="button"
-            data-tour-id="assistant-button"
-            onClick={() => assistantStore.toggle()}
-            className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-            title="AI Assistant (Ctrl+J)"
-            aria-label="Open the AI Assistant"
-          >
-            <Sparkles className="size-4" />
-          </button>
 
           {/* Help Center — opens the contextual drawer (articles for this page,
               Ask AI, guided tours). Anchored in the topbar, NOT a floating FAB. */}

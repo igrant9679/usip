@@ -1,11 +1,13 @@
 /**
- * AssistantChat — the conversational operator, shared by the full page
- * (/v2/ai-assistant) and the Shell drawer (Ctrl+J / the sparkles button).
+ * AssistantChat — Elsie's conversation, shared by her full page
+ * (/v2/ai-assistant) and the Shell drawer (Ctrl+J / the Elsie button).
  *
  * What it renders per assistant turn:
  *   - the tool chips (what it looked up on the way),
  *   - the answer,
  *   - in-app links it handed out,
+ *   - guided tours she found, each a "Show me" button that starts the
+ *     on-screen walkthrough (find_tours),
  *   - up to three PROPOSED ACTION cards, each confirmed or declined on its
  *     own (assistant.confirmAction / declineAction consume the nonce), and
  *   - a QUESTION with option buttons when the assistant needs a decision —
@@ -13,7 +15,9 @@
  *
  * The conversation lives in lib/assistantStore so it follows the user from
  * page to page. `pageKey` is the page the user is on right now; the server
- * uses it to interpret "this page" and to pick suggestions.
+ * uses it to interpret "this page" and to pick suggestions. `pagePath` is the
+ * address itself (path and query): it names the record on screen, so "this
+ * person" needs no explaining (shared/assistantScreen).
  */
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
@@ -22,8 +26,42 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { useAccentColor } from "@/components/usip/Shell";
 import { assistantStore, useAssistantStore, type AssistantMessage, type PendingAction } from "@/lib/assistantStore";
-import { Sparkles, Send, Loader2, RotateCcw, Wrench, ArrowRight, ShieldCheck, X, Compass } from "lucide-react";
+import { useTourEngine, type Tour } from "@/components/usip/TourEngine";
+import { Send, Loader2, RotateCcw, Wrench, ArrowRight, ShieldCheck, X, Compass, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
+
+type TourOffer = { id: number; name: string; estimatedMinutes?: number | null };
+
+/**
+ * Start a guided tour from the chat. The drawer closes first: it covers the
+ * right-hand side of the page, which is where a tour's spotlight often lands.
+ */
+function TourButton({ tour, accent }: { tour: TourOffer; accent: string }) {
+  const utils = trpc.useUtils();
+  const { startTour } = useTourEngine();
+  const [busy, setBusy] = useState(false);
+  const begin = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const full = await utils.tours.get.fetch({ id: tour.id });
+      assistantStore.close();
+      startTour(full as unknown as Tour);
+    } catch (e: any) {
+      toast.error(e?.message ?? "That tour could not be started");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" onClick={begin} disabled={busy}
+      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[12px] font-medium hover:bg-background transition-colors disabled:opacity-60"
+      style={{ borderColor: `${accent}55`, color: accent }}>
+      {busy ? <Loader2 className="size-3 animate-spin" /> : <PlayCircle className="size-3" />}
+      Show me: {tour.name}{tour.estimatedMinutes ? ` (about ${tour.estimatedMinutes} min)` : ""}
+    </button>
+  );
+}
 
 /** Page-aware starters, so the drawer is useful the moment it opens. */
 export function suggestionsFor(pageKey: string | undefined): string[] {
@@ -47,7 +85,7 @@ export function suggestionsFor(pageKey: string | undefined): string[] {
   return [...base, ...(byPage[pageKey ?? ""] ?? ["Explain this page", "Recommend my next action here"])].slice(0, 4);
 }
 
-export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; compact?: boolean }) {
+export function AssistantChat({ pageKey, pagePath, compact = false }: { pageKey?: string; pagePath?: string; compact?: boolean }) {
   const accent = useAccentColor();
   const { conversationId, messages, loading } = useAssistantStore();
   const [input, setInput] = useState("");
@@ -56,6 +94,12 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
   const chat = trpc.assistant.chat.useMutation({ onError: (e) => toast.error(e.message) });
   const confirm = trpc.assistant.confirmAction.useMutation({ onError: (e) => toast.error(e.message) });
   const decline = trpc.assistant.declineAction.useMutation({ meta: { silentError: true } });
+  // The tour for the page the user is on, offered before they have typed anything.
+  const pageTours = trpc.tours.list.useQuery(
+    { pageKey: pageKey ?? "", status: "published", type: "all" },
+    { enabled: !!pageKey && messages.length === 0, staleTime: 5 * 60_000, retry: false, meta: { silentError: true } },
+  );
+  const pageTour = (pageTours.data as TourOffer[] | undefined)?.[0];
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, loading]);
 
@@ -75,13 +119,14 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
         convId = res.conversationId;
         assistantStore.setConversationId(convId);
       }
-      const res = await chat.mutateAsync({ conversationId: convId, message: userMsg, pageKey });
-      const r = res as typeof res & { pendingActions?: PendingAction[]; question?: { text: string; options: string[] } | null };
+      const res = await chat.mutateAsync({ conversationId: convId, message: userMsg, pageKey, pagePath });
+      const r = res as typeof res & { pendingActions?: PendingAction[]; question?: { text: string; options: string[] } | null; tours?: TourOffer[] };
       assistantStore.push({
         role: "assistant",
         body: r.answer,
         toolEvents: r.toolEvents,
         navigations: r.navigations,
+        tours: r.tours ?? [],
         pendingActions: r.pendingActions ?? (r.pendingAction ? [r.pendingAction] : []),
         question: r.question ?? null,
       });
@@ -120,12 +165,17 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
           {messages.length === 0 ? (
             <div className={`text-center ${compact ? "py-4" : "py-10"}`}>
               <div className="mx-auto size-11 rounded-xl text-white flex items-center justify-center mb-3 shadow-sm" style={{ backgroundColor: accent }}>
-                <Sparkles className="size-5" />
+                <Compass className="size-5" />
               </div>
-              <h2 className="text-base font-semibold">{compact ? "What can I do for you?" : "Ask the Velocity Assistant"}</h2>
+              <h2 className="text-base font-semibold">{compact ? "I'm Elsie. What do you need?" : "I'm Elsie, your guide and assistant"}</h2>
               <p className="text-[13px] text-muted-foreground mt-1">
-                Ask anything, or tell me what you want done — I look things up, recommend, ask when I need a decision, and run actions only when you confirm.
+                Ask me anything, ask to be shown around, or tell me what you want done. I look things up, recommend, ask when I need a decision, and run actions only when you confirm.
               </p>
+              {pageTour && (
+                <div className="mt-3 flex justify-center">
+                  <TourButton tour={pageTour} accent={accent} />
+                </div>
+              )}
               <div className={`mt-4 grid ${compact ? "grid-cols-1" : "sm:grid-cols-2"} gap-2 text-left`}>
                 {suggestions.map((p) => (
                   <button key={p} onClick={() => send(p)} className="rounded-lg border bg-card px-3 py-2 text-[13px] hover:bg-muted transition-colors flex items-center gap-2" style={{ borderColor: `${accent}3a` }}>
@@ -158,7 +208,7 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
       </div>
       <div className="shrink-0 border-t border-border bg-card/40 px-3 py-2.5">
         <div className={`${compact ? "" : "max-w-2xl mx-auto"} flex items-end gap-2`}>
-          <textarea aria-label="Message the assistant"
+          <textarea aria-label="Message Elsie"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -204,6 +254,11 @@ function MessageRow({ m, index, accent, loading, onConfirm, onDecline, onPick }:
                 {n.label} <ArrowRight className="size-3" />
               </Link>
             ))}
+          </div>
+        )}
+        {m.role === "assistant" && (m.tours?.length ?? 0) > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {m.tours!.map((t) => <TourButton key={t.id} tour={t} accent={accent} />)}
           </div>
         )}
         {m.role === "assistant" && (m.pendingActions ?? []).map((a) => {

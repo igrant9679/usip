@@ -83,9 +83,10 @@ export const ARTICLES: ArticleSeed[] = [
     summary: "When Velocity may send to prospects on its own, what waits for it, and what never does.",
     readingTimeMinutes: 3,
     tags: ["send window", "sending", "schedule", "settings", "timezone", "weekends"],
+    pageKey: "admin-setup",
     bodyMarkdown: `**The send window** is when Velocity may send to prospects **on its own**. It lives in **Settings → Workspace overview → Send window**, one per workspace, and uses the workspace time zone set just above it in **General**. The default is **6:00 AM–5:00 PM, Monday to Friday**. Choose the hours with **From** and **Until**, toggle the days, and **Save**; the card says in plain words what the window is and whether it is open right now. A change applies at once.
 
-**Pause all outbound.** The switch at the top of the card stops everything Velocity sends on its own, in that workspace, until you switch it off: the window simply stays closed. Held work goes once you switch it off (inside the window), with two exceptions: a Social Autopilot opener held by the pause becomes a task for the rep and is not sent later, and a booking-link reply still held after a week is dropped. The card says since when it has been paused.\n\n**While paused, what a person clicks is held too.** Nothing goes to prospects, whoever presses the button: meeting **Approve & send** (one or all), an email from a contact or lead, the **mailbox** (new, reply, forward), sending an approved draft (one or all), a **proposal** to its client and the extension decisions mailed to the client, **chat follow-up** and **Social Autopilot invite** tasks, LinkedIn **messages, InMail, invites, comments and reactions**, and calendar events with outside attendees. The button says outbound is paused instead of sending. **Find meetings** in Autonomous drafts the proposals for approval instead of sending them. The assistant (Elsie) runs the same checks. Still allowed: mail and calendar invites that go only to your own team, cancelling a meeting, a post on your own LinkedIn feed, what prospects do themselves (booking a time on your page, the chat widget's email code), and AI phone calls, which have their own switch (Settings → Voice agents).\n\n**What waits for the window.** Everything Velocity sends without a person clicking a send button:
+**Pause all outbound.** The switch at the top of the card stops everything Velocity sends on its own, in that workspace, until you switch it off: the window simply stays closed. Held work goes once you switch it off (inside the window), with two exceptions: a Social Autopilot opener held by the pause becomes a task for the rep and is not sent later, and a booking-link reply still held after a week is dropped. The card says since when it has been paused.\n\n**While paused, what a person clicks is held too.** Nothing goes to prospects, whoever presses the button: meeting **Approve & send** (one or all), an email from a contact or lead, the **mailbox** (new, reply, forward), sending an approved draft (one or all), a **proposal** to its client and the extension decisions mailed to the client, **chat follow-up** and **Social Autopilot invite** tasks, LinkedIn **messages, InMail, invites, comments and reactions**, and calendar events with outside attendees. The button says outbound is paused instead of sending. **Find meetings** in Autonomous drafts the proposals for approval instead of sending them. The assistant (Elsie) runs the same checks. Still allowed: mail and calendar invites that go only to your own team, cancelling a meeting, a post on your own LinkedIn feed, what prospects do themselves (booking a time on your page, the chat widget's email code), and AI phone calls, which have their own switch (Settings → Voice agents and numbers).\n\n**What waits for the window.** Everything Velocity sends without a person clicking a send button:
 - Revenue Engine campaign emails
 - sequence **AI auto-send**, and sequence **LinkedIn DM** and **LinkedIn invite** steps
 - **Social Autopilot** in Autonomous: its connection invites (and the like on the person's latest post before each), and the opener when someone accepts. A held opener becomes a task for the rep instead, so the accept is not lost; held invites go at the next hourly run inside the window
@@ -108,6 +109,7 @@ export const ARTICLES: ArticleSeed[] = [
     summary: "Proposals go by email with one-click times; nothing goes on the calendar until the prospect confirms one.",
     readingTimeMinutes: 5,
     tags: ["meetings", "invites", "teams", "calendar", "booked", "acceptance", "proposals", "pick", "confirm"],
+    pageKey: "meetings",
     bodyMarkdown: `**Nothing goes on your calendar until the prospect accepts.** When you click **Approve & send** (or, with the Meeting Autopilot on **Autonomous**, as soon as a proposal is drafted), the prospect gets an **email** from the proposal owner's mailbox: the invite text, then each offered time as a link. A link opens a short page showing that time; nothing is booked until they press **Confirm**. Only then is the meeting put on the owner's calendar with the prospect invited, and counted as booked. (Mail scanners that open every link book nothing, because opening the page does not confirm.)
 
 **Who it sends from.** The email goes from the **proposal owner's own mailbox** (Connected Accounts), or the workspace's sending account when they have none. The confirmed meeting goes on the **owner's calendar**, so the owner needs a connected calendar too. Each proposal card shows **Sends from** with the owner, a picker to change them, and whether their calendar is connected. **Reassign all…** moves every open proposal to another member (it sends nothing). **New proposals go to** on the Autopilot strip (admins) makes one member the owner of every new proposal.
@@ -136,6 +138,7 @@ A time the prospect picked themselves through your **booking link** is booked st
     summary: "Everything that changed this month, in one place, with the article for each.",
     readingTimeMinutes: 4,
     tags: ["whats new", "release notes", "changes", "september"],
+    pageKey: "help",
     bodyMarkdown: `A summary of what changed in Velocity during September 2026, newest first. Each item names the article with the details.
 
 **Sending and meetings (late September)**
@@ -161,8 +164,83 @@ A time the prospect picked themselves through your **booking link** is booked st
 **Workspace and settings**
 - **Every Settings section has a workspace switcher**, so you can edit another workspace without leaving the page. See "The Settings hub".
 - The old Settings page folded into the **Settings hub**; draft editors moved into the Emails drawer.
-- **Elsie**, the AI assistant, can look up, recommend and propose actions from any page, and renders formatted answers. See "Elsie, the in-app guide".
+- **Elsie is one helper now.** The guide who offered tours and the AI Assistant are the same Elsie: one button in the top bar (or Ctrl+J). She answers, hands back a guided tour when you ask to be shown something, and proposes actions you confirm. She can also read settings, usage, the team and key sharing (never a key itself), and she knows which record you are looking at. See "Elsie, your guide and assistant".
 - The **Operator's Manual** in the Help Center explains the whole product end to end.`,
+  },
+  // 2026-11-15: what shipped after the September notes, read from the commit
+  // log (late September to 2026-11-15) and checked against the pages.
+  {
+    slug: "whats-new-2026-11",
+    categorySlug: "getting-started",
+    title: "What's new: October and November 2026",
+    summary: "What changed since the September notes, grouped by area, with the article for each.",
+    readingTimeMinutes: 6,
+    tags: ["whats new", "release notes", "changes", "october", "november"],
+    pageKey: "help",
+    bodyMarkdown: `A summary of what changed in Velocity between late September and mid November 2026, grouped by area. Each item names the article with the details where there is one.
+
+**One page for each job (November 7 and 8)**
+- **One Inbox.** Replies, Mailbox, LinkedIn & social, Calls and Notifications are tabs of **Inbox**. The old Inbox, My Mailbox, Conversations and Unified Inbox links open the matching tab. See "The Inbox: replies, mailbox, social chats, calls and notifications".
+- **One home page.** Home has a **Today** view and a **Pipeline** view. **Dashboard** in the sidebar opens the Pipeline view, and **Set as home** chooses which one opens first.
+- **One deal board.** The Deals page folded into **Sales Pipeline**, which gained the Deal Autopilot dial, a move menu on every card, **Owner** and **Close date** filters and folding closed columns. See "Managing your pipeline".
+- **One task page.** **Tasks** has Queue, Today, Overdue, Upcoming, Done and All views. A task can be assigned to a teammate, and the queue filters by assignee.
+- **One sequence editor.** The canvas was retired. The editor has A/B tests, Add contacts, the daily send cap and the reply pause. See "Build a sequence".
+- **Quotes live inside proposals**, as the proposal's versioned Pricing section. Old Quotes links open Proposals.
+- **Retired:** the Broadcasts page, and the separate Prospects list. People is the one list of people.
+- **Settings.** Users and teams, Audit log, Custom fields and Notifications open inside Settings. Mailboxes moved under Workspace settings, the email signature has its own section, and the search box finds a setting by keyword. See "The Settings hub".
+- **On a phone**, header actions fold into a **More** menu and list tables become stacked cards.
+
+**Research (new in October)**
+- **Research** (Prospecting → Research) holds the markets you sell into and the sectors inside them: buyers, pains, targeting, messaging and sources, with version history.
+- **AI research runs** search the web and draft a market or a sector. Nothing is saved until you review it.
+- **Every AI writer reads your research** for the prospect's market. A sector page shows **What the AI writers read**, and **Check what a writer would use** on the Research page shows which sector and persona apply to a person.
+- **Research drives targeting.** Create a draft campaign from a sector, and never-target words rule people out.
+- **Also:** importing from Downstream, reports for each market and sector, and results by sector, persona and opening line.
+
+See "Research: markets, sectors and personas".
+
+**Prospecting and data**
+- **LeadOcean** is a prospect source each workspace turns on with its own key. See "Source search: vendors, the waterfall and the budget ledger".
+- **Share keys between workspaces.** An admin of two workspaces can let one use the other's vendor keys, as a live link. See "Running multiple workspaces".
+- **Imports** have one importer, a complete error report, and an undo. See "Import prospects from CSV".
+- **Select all matching** on People, Companies and Leads acts on everyone the filter matches, not only the page on screen.
+- **Lists** can be renamed, described and deleted, one at a time or several together.
+- **Paid lookups** say how many and what they cost, and ask before they run.
+- **Suppressions** import and export as CSV, and an opt-out follows the person to any of their addresses.
+- **Segments** read People now (they used to read Contacts), and an auto-enroll rule has a **Dry run**.
+
+**Revenue Engine**
+- **Approvals** is one queue for every campaign's waiting prospects. See "The Approvals queue: every campaign in one list".
+- **Clone and Archive** a campaign. **Activate** checks the campaign before it starts, and its owner is told when it has finished. See "Tuning an ARE campaign".
+- **Campaign Settings** save every field with one Save, and the campaign header shows what was sent today against the cap, and the send window.
+- **What's Working** filters by campaign and by dates and exports a CSV. See "What's Working: measured results".
+- **Rejections** say who or what rejected each person, and a stalled campaign says why.
+- **The Autonomy Center** groups its dials by what they do: Sends to people, Spends credits, Changes records. See "The Autonomy Control Center".
+
+**Meetings, calls and sending**
+- **Pause all outbound** is one switch per workspace. It holds everything Velocity sends, including what a person clicks. See "The send window".
+- **Meeting proposals go by email with times to pick.** Nothing goes on the calendar until the prospect confirms one, and an owner gets at most 3 meetings a day. See "Meeting invites: who sends them, the link, and when it counts as booked".
+- **AI phone calls.** Voice agents place the calls a manager approves and book meetings on the call. An agent can have several numbers, and AI calls have their own on/off switch and calling capacity. See "AI voice agents (Grok)".
+- **The knowledge base** gives every AI writer and the phone agent your product and pricing facts. See "The knowledge base".
+- **Website chat** can discuss a visitor's history once they prove their email with a code. See "The website chat agent".
+- **Bookings.** Someone who books can move or cancel from their own link, and cancelling or moving a meeting in Velocity cancels or moves its calendar invite.
+- **Sequences** can choose review or auto-send for themselves, send in each person's time zone, and show when their steps will go out.
+
+**CRM and analytics**
+- **Forecast** runs on your fiscal quarters, with Commit, Best case and Pipeline categories, manager overrides and quota pacing. See "The Forecast page".
+- **Lost deals** ask for a reason when you move them.
+- **Renewals.** Record a renewal or a churn in one step from the customer's card.
+- **Reports** group dates by day, week or month and can be opened by link. See "The Reports builder".
+- **Dashboards** filter by date range, owner, stage and source. See "Dashboards and their filters".
+- **Lead Routing** can cap a rep's open leads and has **Test a lead**. **Workflow rules** have **Test (sends nothing)**.
+- **QBRs** download as a calendar invite.
+
+**Security and admin**
+- **Sign-in.** Ten backup codes for a lost phone, a list of where you are signed in with **Sign out everywhere**, and a lockout after repeated failed sign-ins. See "Multi-factor authentication".
+- **The audit log** records every change made in the app, and exports to CSV.
+- **Confirmations.** Every send, spend, delete and bulk change asks first and says how many.
+- **Engine status** (admins) shows whether the background engines are running. See "Engine status: is everything running?".
+- **Help.** An admin's edits to a help article or a tour are kept when Velocity is updated.`,
   },
   // Articles for what shipped in the 0130-0134 range. Written against the
   // measured behaviour of this workspace, not the intended behaviour.
@@ -177,7 +255,7 @@ A time the prospect picked themselves through your **booking link** is booked st
     tourName: "Your Website Chat Agent",
     bodyMarkdown: `The chat agent is the only meeting source in Velocity that sends nothing at all. A visitor lands on a page carrying the widget, the agent talks to them, and if they are a fit it captures a routed lead and — in **Autonomous** mode — offers your real calendar slots and books one.
 
-**Set it up** at *Inbound → Chat* (admin only). Give it a display name, an opening line, and the questions it should work into the conversation. The **extra instructions** field is where guardrails go: never quote a price, never promise a savings figure, do not claim named clients. Those are read on every turn.\n\n**Visitors you already know.** Anyone can type any email, so until a visitor proves an address is theirs the agent is told nothing about them, and behaves the same whether or not the address is in your CRM: otherwise the chat would tell a stranger who your customers are. If they ask about their account or earlier conversations, it offers to verify their email. A 6-digit code goes from your workspace's own mailbox (Settings → Email delivery) only to an address your CRM knows; the visitor is told a code is on its way if the address is in your records, either way. Once they type it back the agent has what your team knows about them (emails, deals, meetings, research) and can discuss it with them. Codes expire after 10 minutes and allow 5 tries, with at most 3 per chat and 5 per address a day. A visitor who reloads the page keeps the same conversation for a week, and someone who chats again within 30 days is the same lead.
+**Set it up** at *Prospecting → Chat Agents* in the sidebar (admin only). Give it a display name, an opening line, and the questions it should work into the conversation. The **extra instructions** field is where guardrails go: never quote a price, never promise a savings figure, do not claim named clients. Those are read on every turn.\n\n**Visitors you already know.** Anyone can type any email, so until a visitor proves an address is theirs the agent is told nothing about them, and behaves the same whether or not the address is in your CRM: otherwise the chat would tell a stranger who your customers are. If they ask about their account or earlier conversations, it offers to verify their email. A 6-digit code goes from your workspace's own mailbox (Settings → Email delivery) only to an address your CRM knows; the visitor is told a code is on its way if the address is in your records, either way. Once they type it back the agent has what your team knows about them (emails, deals, meetings, research) and can discuss it with them. Codes expire after 10 minutes and allow 5 tries, with at most 3 per chat and 5 per address a day. A visitor who reloads the page keeps the same conversation for a week, and someone who chats again within 30 days is the same lead.
 
 **Autonomy.** *Off* means the widget refuses to serve. *Approve* means it chats and captures the lead, but a qualified visitor becomes a high-priority task for a human instead of a booking. *Autonomous* means it shows genuine availability and books unattended. Start on Approve and read a few transcripts.
 
@@ -207,7 +285,7 @@ A time the prospect picked themselves through your **booking link** is booked st
     pageKey: "sending-accounts",
     bodyMarkdown: `SendGrid is an alternative to sending through a mailbox. Instead of connecting an inbox, you paste an API key and Velocity posts your campaign email to SendGrid, which delivers it.
 
-**Set it up** at *Settings → Mailboxes → SendGrid*, or from the full form at *Engage → Sending Accounts*. You need three things: the **From address**, which must already be a verified sender inside SendGrid; a **Reply-To**; and an **API key** with **Mail Send** permission. Press **Test key** — it checks both that the key works and that it is allowed to send, because a key that authenticates but lacks that permission looks fine right up until your first campaign fails.
+**Set it up** at *Settings → Mailboxes → SendGrid*, or from the full form on the **Email Sending** page (click **Search…** at the top of the sidebar and type Email Sending, or open **Library — all tools**, under Configuration). You need three things: the **From address**, which must already be a verified sender inside SendGrid; a **Reply-To**; and an **API key** with **Mail Send** permission. Press **Test key** — it checks both that the key works and that it is allowed to send, because a key that authenticates but lacks that permission looks fine right up until your first campaign fails.
 
 Once saved it joins the same sending pool as your mailboxes, so sequences and campaigns can use it immediately with no further wiring.
 
@@ -272,54 +350,81 @@ This is inherent to sending by API, not a gap in Velocity. Plan for it: set Repl
   {
     slug: "meet-elsie",
     categorySlug: "getting-started",
-    title: "Elsie, the in-app guide",
-    summary: "What the compass in the top bar does.",
-    readingTimeMinutes: 1,
-    tags: ["getting-started", "help", "tours"],
+    title: "Elsie, your guide and assistant",
+    summary: "One helper in the top bar: she answers, shows you around, and does the work when you confirm.",
+    readingTimeMinutes: 2,
+    tags: ["getting-started", "help", "tours", "ai", "assistant"],
     pageKey: "dashboard",
     tourName: "Meet Elsie",
-    bodyMarkdown: `**Elsie** is the guide built into Velocity by LSI Media. When you open a page she has a walkthrough for, she offers it — once per page per session, never repeatedly.
+    bodyMarkdown: `**Elsie** is the helper built into Velocity. There used to be two: a guide called Elsie who offered page tours, and a separate AI Assistant behind a sparkles button. They are one now. The **Elsie** button in the top bar opens her on any page, and so does **Ctrl+J**.
 
-Accepting one starts a guided tour: the relevant control is spotlighted, a card explains it, and the tour moves between pages on its own where it needs to.
+## What she does
 
-**The compass in the top bar switches her on and off.** Off genuinely means off — she stops offering and stops looking anything up. The setting lives on your account, so turning her off on one machine turns her off everywhere you sign in.
+- **Answers.** Ask about your own workspace: people, companies, deals, campaigns, replies, what is waiting on you. She reads the real records before she answers.
+- **Shows you around.** Ask "show me how to launch a campaign" and she hands back a **Show me** button. It starts a guided tour: the control is spotlighted, a card explains it, and the tour moves between pages by itself.
+- **Does the work.** Ask for something to be done and she proposes it as a card. Nothing runs until you press **Confirm**, and afterwards she says what happened.
+- **Knows where you are.** She is told which page you opened her from and, on a record's page, which record. "What is this person's status?" works from a person's page without naming them.
 
-**Nothing is lost by dismissing a tour.** Every walkthrough stays available in the Help Center under Tours, so you can run any of them whenever you like.`,
+She cannot see everything on your screen. Filters you have set and a form you are halfway through are invisible to her unless they are in the page's address, so she will ask.
+
+## Tour offers
+
+When you open a page she has a tour for, a small card offers it, once per page per session. The card has three buttons: **Show me** starts the tour, **Ask Elsie** opens her panel, **Not now** closes the card.
+
+To stop the offers, open Elsie and switch **Tour offers** off at the top of her panel. The setting lives on your account, so it follows you to every device. Off stops only the unprompted card. She still answers when you open her.
+
+**Nothing is lost by dismissing a tour.** Every tour stays in the Help Center under Tours.
+
+For exactly what she can read, do and never do, see "What Elsie can look up, what she can do, and what she never will".`,
   },
   {
     slug: "ai-assistant",
     categorySlug: "getting-started",
-    title: "The AI Assistant: what it looks up, what it can do, and what it never will",
-    summary: "Ask about your own data, have it propose real actions behind a confirm card, and know exactly where the line is.",
+    title: "What Elsie can look up, what she can do, and what she never will",
+    summary: "Ask about your own data, have her propose real actions behind a confirm card, and know exactly where the line is.",
     readingTimeMinutes: 4,
-    tags: ["ai", "assistant", "actions", "campaigns", "sequences", "lists", "tasks"],
+    tags: ["ai", "assistant", "elsie", "actions", "campaigns", "sequences", "lists", "tasks", "settings"],
     pageKey: "ai-assistant",
-    tourName: "Ask the AI Assistant",
-    bodyMarkdown: `The **AI Assistant** is a conversational operator for the whole product. Open it from the sparkles button in the top bar or with **Ctrl+J** on any page, or go to the full page under Daily → AI Assistant. One conversation follows you from page to page.
+    tourName: "Ask Elsie",
+    bodyMarkdown: `**Elsie** is Velocity's guide and assistant in one (she was called the AI Assistant before the two were merged). Open her from the **Elsie** button in the top bar or with **Ctrl+J** on any page, or use her full page: **Elsie** in the quick links at the top of the sidebar. One conversation follows you from page to page.
 
-## What it does
+## What she does
 
-- **Looks things up** in your own workspace: people, companies, sequences, lists, campaigns, the pipeline, what is waiting on you, and read-only queries over every core table.
+- **Looks things up** in your own workspace: people, companies, sequences, lists, campaigns, the pipeline, research, what is waiting on you, and read-only queries over every core table.
+- **Reads settings, but never changes them.** She can tell you which AI providers and data sources are set up, which keys this workspace shares with or borrows from another, who is on the team and their roles, this month's usage and spend against the budget, the sending mailboxes and their limits, quotas, territories, pipelines and the workspace's settings. She is shown whether a key is set, never the key or a password.
 - **Runs reports** on the spot (deals, leads, people, contacts, activities, emails) and can save one to the Reports page for scheduling.
-- **Recommends.** Ask "what should I do next", "which campaign should I prioritise", "should I raise the cap" and it reads the real numbers first, then gives a recommendation with the reason and one alternative.
-- **Asks when it needs a decision.** If a request could go two ways (which campaign, which criteria, draft or active, how many), it asks one focused question with buttons; your pick continues the conversation.
-- **Does almost anything you can do in the app**, always as a proposed action you confirm in the chat: create or edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas and reports; add batches of people to campaigns, sequences or lists by criteria ("all the CFOs in Texas with valid emails"); queue or log calls; approve, restore, move, update. It searches a catalog of every allowed app action, reads that action's own input rules, looks up the ids it needs, and proposes it.
-- **Walks you through** what it does: the plan up front, what each lookup told it, what happened after you confirmed, and the sensible next step.
+- **Recommends.** Ask "what should I do next", "which campaign should I prioritise", "should I raise the cap" and she reads the real numbers first, then gives a recommendation with the reason and one alternative.
+- **Asks when she needs a decision.** If a request could go two ways (which campaign, which criteria, draft or active, how many), she asks one focused question with buttons; your pick continues the conversation.
+- **Shows you around.** Ask to be shown or walked through something and she hands back a **Show me** button that starts the guided tour for it.
+- **Does almost anything you can do day to day**, always as a proposed action you confirm in the chat: create or edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas and reports; add batches of people to campaigns, sequences or lists by criteria ("all the CFOs in Texas with valid emails"); queue or log calls; approve, restore, move, update. She searches a catalog of every allowed app action, reads that action's own input rules, looks up the ids she needs, and proposes it.
+- **Walks you through** what she does: the plan up front, what each lookup told her, what happened after you confirmed, and the sensible next step.
+
+## What she knows about your screen
+
+She is told the page you opened her from. On a record's page (a person, company, lead, deal, campaign, sequence, list, proposal, or a research market, sector or run) she is also told which record, so "this person" or "this campaign" needs no explaining. A tab or a filter that shows in the page's address reaches her too.
+
+She cannot see anything else on the screen: not filters the page keeps to itself, not a half-filled form, not which rows you have ticked. When that matters she asks.
 
 ## How an action runs
 
-1. You describe what you want. For batches, it previews the criteria first and tells you the real count and a few names.
-2. It proposes up to three actions as cards.
-3. You press **Confirm** on each card (or **Not now**). Only then does anything run, and it runs as you — the same role checks the pages apply. The one place it is *wider* than a page is the read side: the assistant's data lookups are scoped to your workspace rather than to the records you personally own, so it can read across the workspace even where a per-member override is set.
-4. It reports what happened and what to do next.
+1. You describe what you want. For batches, she previews the criteria first and tells you the real count and a few names.
+2. She proposes up to three actions as cards.
+3. You press **Confirm** on each card (or **Not now**). Only then does anything run, and it runs as you: the same role checks the pages apply. The one place she is *wider* than a page is the read side: her data lookups are scoped to your workspace rather than to the records you personally own, so she can read across the workspace even where a per-member override is set.
+4. She reports what happened and what to do next.
 
-## What it will not do
+## What she will not do
 
-It sends email only from the approval queues: it can send drafts you have already approved and send the invites for meetings already proposed, and those cards say "Sends email now" before you confirm. It never composes and sends arbitrary email or LinkedIn messages, and it cannot place outbound calls (voice agents answer inbound call-backs only; "call these people" becomes call tasks with the numbers). It never deletes records, changes team members, passwords, credentials, billing or workspace settings. Those stay on their pages.
+She sends email only from the approval queues: she can send drafts you have already approved and send the invites for meetings already proposed, and those cards say "Sends email now" before you confirm. She never composes and sends arbitrary email or LinkedIn messages. She cannot place calls: AI calls are queued from People and each one is approved by a manager on the Calls page, so "call these people" becomes call tasks with the numbers.
+
+She never deletes records. She never changes team members, passwords, keys, key sharing, billing or workspace settings, and she never starts a paid research run. She can read most of those and tell you what is set, then she points you at the page that changes it. Admins can confirm a change to most Off / Approve / Auto dials from chat; fully unattended campaign autonomy is set only on the campaign's own Settings tab.
 
 ## Try it
 
 - "What should I do next?"
+- "What is this person's status?" (from a person's page)
+- "Show me how to launch a campaign."
+- "Which keys are set up, and is any shared with another workspace?"
+- "How much have we spent on AI this month?"
 - "Add everyone at Acme with a valid email to the Nonprofit campaign."
 - "Create a 5-step sequence for grants directors and enroll the Texas list."
 - "Which deals are stuck, and what would you do about each?"
@@ -329,18 +434,34 @@ It sends email only from the approval queues: it can send drafts you have alread
     slug: "multiple-workspaces",
     categorySlug: "settings-account",
     title: "Running multiple workspaces",
-    summary: "One workspace per client, and what does not carry across.",
-    readingTimeMinutes: 2,
-    tags: ["settings", "workspaces", "admin"],
-    pageKey: "settings",
+    summary: "One workspace per client, what does not carry across, and how an admin shares a key between workspaces.",
+    readingTimeMinutes: 3,
+    tags: ["settings", "workspaces", "admin", "api keys", "share keys", "key sharing"],
+    // 2026-11-15: was "settings", a key only LinkedIn Limits and Pipeline
+    // settings resolve to. The Settings hub's pages resolve to "admin-setup".
+    pageKey: "admin-setup",
     tourName: "Working With Multiple Workspaces",
-    bodyMarkdown: `A workspace is a complete, separate world: its own members, prospects, mailboxes, API keys, autopilot settings and branding. Nothing crosses between them.
+    bodyMarkdown: `A workspace is a separate world: its own members, prospects, mailboxes, API keys, autopilot settings and branding. Records, mailboxes and settings never cross between workspaces. One thing can be shared: a vendor key, and only when an admin chooses to share it (see below).
 
-**Switching** is the control at the top of the sidebar, which lists every workspace you belong to.
+**Switching.** Click the workspace name at the left of the top bar. The menu lists every workspace you belong to and any invitation waiting for you.
 
-**Creating one** is a super-admin action, from the same menu. You become its super admin, and it starts empty. Sample data is opt-in and off by default — a client workspace pre-filled with invented accounts is worse than an empty one, and some engines read those rows as real.
+**Creating one** is a super-admin action: **New workspace** in the same menu. You become its super admin, and it starts empty. Sample data is opt-in and off by default. A client workspace filled with invented accounts is worse than an empty one, and some engines read those rows as real.
 
-**What a new workspace does not inherit** is the part that surprises people: no Apollo key, no verification key, no connected mailbox, no brand voice. Each has to be set up per workspace. That is correct when each one is a different client, but it does mean enrichment and sending will not work in a new workspace until they are configured.`,
+**What a new workspace does not inherit:** no Apollo key, no verification key, no connected mailbox, no brand voice. Set each one up in the new workspace, or share a key from a workspace that already has one. Enrichment and sending will not work in a new workspace until a key and a mailbox are in place.
+
+## Sharing keys between workspaces
+
+An admin can let another workspace use this workspace's key. It is a live link, not a copy.
+
+- **Where.** Open **Settings** in the workspace that owns the key. The panel **Share keys with other workspaces** is in three sections: **Integrations** (Anthropic, OpenAI and Google Gemini keys), **Voice agents and numbers** (the xAI key) and **Data sources** (Apollo, QuickEnrich, WarmySender, LeadOcean and Reoon).
+- **Who.** You must be an admin or super admin of both workspaces, and have the **Manage API keys** permission. The panel lists only the other workspaces you are an admin of. Other members do not see the panel.
+- **How.** Tick the box under the other workspace's name and confirm **Share key**. The workspace must have a key of its own to share.
+- **What the other workspace gets.** It uses the key while the box is ticked, and the vendor's card in its Settings reads "Connected · using [workspace]'s key". Nobody there can see the key. If you change or remove the key here, that applies there too. What it uses is charged to the key's own vendor account.
+- **Its own key comes first.** A shared key is used only where the workspace has no key of its own. A workspace can use one shared key of each kind, and it cannot pass a borrowed key on to a third workspace.
+- **Stopping.** Either side can stop it, and it stops at once. In the workspace that owns the key, untick the box and confirm **Stop sharing**. In the workspace that uses it, press **Stop using** beside the key.
+- **What cannot be shared.** Plivo, SendGrid and mailboxes are not in the panel. Set those up in each workspace.
+
+Starting and stopping a share is written to the audit log of both workspaces. An archived workspace shares nothing.`,
   },
   {
     slug: "meetings-without-outbound",
@@ -349,7 +470,8 @@ It sends email only from the approval queues: it can send drafts you have alread
     summary: "Three inbound paths that work while campaigns are paused.",
     readingTimeMinutes: 3,
     tags: ["meetings", "inbound", "playbook"],
-    pageKey: "chat",
+    // 2026-11-15: was "chat", which has the chat agent's own article; Landing Pages had none.
+    pageKey: "landing-pages",
     tourName: "Booked Without Sending",
     bodyMarkdown: `If your outbound is paused — or you have not started it — three paths still produce booked meetings.
 
@@ -386,7 +508,7 @@ Each one is an independent engine. You do not need all five, and most people sho
 
 ## The one control that matters: Off / Approve / Autonomous
 
-Every engine has the same three-way switch, and they all live on one screen — **Automation → Autonomy Control Center**.
+Every engine has the same three-way switch, and they all live on one screen: the **Autonomy Center**. It has no row in the sidebar sections. Click **Search…** at the top of the sidebar (Ctrl+K) and type Autonomy, or open **Library — all tools** and find it under Daily.
 
 - **Off** — nothing happens.
 - **Approve** — the AI does the work and then *stops*. It arrives as a task for you to read. Nothing is sent, nobody is contacted.
@@ -397,14 +519,14 @@ Every engine has the same three-way switch, and they all live on one screen — 
 ## Your first hour
 
 1. **Connect a mailbox** — *Settings → Mailboxes*. Without one, nothing can send.
-2. **Turn everything to Approve** — Autonomy Control Center, "All: Approve". Now the AI starts showing its work.
-3. **Set up the chat agent** — *Inbound → Chat*. Give it a persona, add a few facts under **What it knows**, publish it, and switch on "Show on my Velocity-hosted pages". You now have a meeting source that costs nothing to run.
-4. **Import or find some contacts** — *Import contacts* for a CSV, or *Find Prospects* to search.
+2. **Turn everything to Approve** — Autonomy Center, "All: Approve". Now the AI starts showing its work.
+3. **Set up the chat agent** — *Prospecting → Chat Agents* (admins). Give it a persona, add a few facts under **What it knows**, publish it, and switch on "Show on my Velocity-hosted pages". You now have a meeting source that costs nothing to run.
+4. **Import or find some contacts** — *Prospecting → Data Enrichment*: the **Import contacts** tab for a CSV, or the **Find prospects** tab to search.
 5. **Leave campaigns off** until you have watched the rest for a few days.
 
 ## When you are lost
 
-**Hover anything.** Every item in the sidebar explains itself on hover, and the ⓘ icons next to settings explain that specific field. **Elsie** (top bar) runs guided tours of whatever page you are on. This Help Center has articles for every area, and **Ask AI** searches them in plain English.`,
+**Hover anything.** Every item in the sidebar explains itself on hover, and the ⓘ icons next to settings explain that specific field. **Elsie** (top bar, or Ctrl+J) answers questions about your own data, runs a guided tour of whatever page you are on, and does jobs for you once you confirm. This Help Center has articles for every area, and **Ask AI** searches them in plain English.`,
   },
   {
     slug: "navigating-the-app",
@@ -413,7 +535,9 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "Sidebar, global search, and command bar.",
     readingTimeMinutes: 2,
     tags: ["getting-started", "navigation"],
-    bodyMarkdown: `The **sidebar** is your map — collapse it with the toggle, and it remembers your scroll position between pages. **Global search** (top bar, or ⌘K) jumps to any record or page by name. Page headers carry the primary action button on the right and a **sub-nav strip** beneath for related pages (e.g. Sequences → Email Drafts / Email Analytics). The **? button in the top bar** opens the Help drawer — articles for the page you're on, Ask AI, and guided tours — and the ? in the sidebar footer opens the full Help Center. Personal and workspace configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*, or head to /v2/settings. You can also pick a **colour theme** from the palette icon in the top bar; it syncs to your account. Tip: most list pages support inline filters and CSV export from the header.`,
+    // 2026-11-15: the Library page. Like om-page-directory, this matches only once /v2/library has a ROUTE_PAGE_KEYS entry; today that route falls back to the key v2.
+    pageKey: "library",
+    bodyMarkdown: `The **sidebar** is your map, and it has three parts.\n\n- **Top:** **Search…** (Ctrl+K, or ⌘K on a Mac) and the quick links, including **Home**, **Dashboard**, **Inbox** and **My Calendar**.\n- **Middle:** the sections **Prospecting**, **CRM**, **Outreach**, **Proposals**, **Dialer**, **Customer Success** and **Analytics**. Click a section name to fold or unfold it. Below them, **Library — all tools** lists every page, grouped and searchable. Pages that have no row in a section, such as the Autonomy Center, Segments, Workflow Rules and Lead Scoring, are found there or through Search.\n- **Bottom:** **Deliverability suite**, **Help Center** and **Admin Settings**. Members who are not admins see **Settings** instead.\n\nThe sidebar remembers your scroll position between pages. **Search** jumps to any page by name; to find a person or a company, use the search box on People or Companies. Page headers carry the primary action button on the right, and some have a **sub-nav strip** beneath for related pages (for example Lead Scoring, Lead Routing and Territories). The **? button in the top bar** opens the Help drawer — articles for the page you're on, Ask AI, and guided tours — and the ? in the sidebar footer opens the full Help Center. Personal and workspace configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*, or head to /v2/settings. You can also pick a **colour theme** from the palette icon in the top bar; it syncs to your account. Tip: most list pages support inline filters and CSV export from the header.`,
   },
   {
     slug: "connect-email-linkedin",
@@ -423,7 +547,7 @@ Every engine has the same three-way switch, and they all live on one screen — 
     readingTimeMinutes: 3,
     tags: ["getting-started", "deliverability", "linkedin", "email"],
     pageKey: "connected-accounts",
-    bodyMarkdown: `Before you send, connect your channels. **Email:** the guided way is **Settings → Mailboxes → Link mailbox** — a step-by-step wizard that connects your account (SMTP/IMAP single account or CSV bulk import), then walks you through signature, sending limits, and an opt-out link (see "Mailboxes & the guided setup wizard"). Power users can also manage sending accounts under **Connected Accounts**. **LinkedIn:** bridge your account at *My LinkedIn* for profile lookups, LinkedIn discovery, and social outreach — each team member connects their **own** LinkedIn. Watch the deliverability signals on each mailbox: setup completeness and daily send caps protect your sender reputation. **Never blast** — Velocity enforces per-account daily caps and a suppression list (unsubscribes + verified bounces) so you stay out of spam folders. A mailbox's daily cap is **one shared allowance**: campaign, sequence, CRM, Inbox and warmup sends all draw from it, so "sent today" on the Mailboxes table is everything that mailbox sent, not just campaign mail. If a LinkedIn search returns nothing, your bridge session may have expired — reconnect it.`,
+    bodyMarkdown: `Before you send, connect your channels. **Email:** the guided way is **Settings → Mailboxes → Link mailbox** — a step-by-step wizard that connects your account (SMTP/IMAP single account or CSV bulk import), then walks you through signature, sending limits, and an opt-out link (see "Mailboxes & the guided setup wizard"). Power users can also manage sending accounts under **Connected Accounts**. **LinkedIn:** connect your account under **Settings → Social accounts** for profile lookups, LinkedIn discovery, and social outreach. Each team member connects their **own** LinkedIn. Watch the deliverability signals on each mailbox: setup completeness and daily send caps protect your sender reputation. **Never blast** — Velocity enforces per-account daily caps and a suppression list (unsubscribes + verified bounces) so you stay out of spam folders. A mailbox's daily cap is **one shared allowance**: campaign, sequence, CRM, Inbox and warmup sends all draw from it, so "sent today" on the Mailboxes table is everything that mailbox sent, not just campaign mail. If a LinkedIn search returns nothing, your LinkedIn connection may have expired. Reconnect it under Settings → Social accounts.`,
   },
   {
     slug: "find-prospects-discovery",
@@ -432,9 +556,10 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "Use Find Prospects to discover net-new contacts.",
     readingTimeMinutes: 3,
     tags: ["prospecting", "discovery", "icp"],
-    pageKey: "find-prospects",
+    // 2026-11-15: Find Prospects is a tab of Data Enrichment, whose page key this is.
+    pageKey: "data-enrichment",
     tourName: "Find Prospects",
-    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. The **Sources for this run** row picks which sources this run searches (Person: LinkedIn, News, Apollo, QuickEnrich; Account: Google Business, News, Apollo). A source switched off in Settings stays off, and at least one must be ticked. Click **Run discovery** — results fan out across the ticked sources, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
+    bodyMarkdown: `**Find Prospects** (sidebar: *Prospecting → Data Enrichment*, then the **Find prospects** tab) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. The **Sources for this run** row picks which sources this run searches (Person: LinkedIn, News, Apollo, QuickEnrich; Account: Google Business, News, Apollo). A source switched off in Settings stays off, and at least one must be ticked. Click **Run discovery** — results fan out across the ticked sources, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
   },
   {
     slug: "research-markets-sectors",
@@ -443,7 +568,8 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "Write down the markets you sell into and the sectors inside them: who buys, their pains, targeting, messaging and sources.",
     readingTimeMinutes: 3,
     tags: ["research", "markets", "sectors", "personas", "icp", "targeting", "messaging", "industries"],
-    bodyMarkdown: `**Research** (sidebar: *Prospecting → Research*) is where a workspace writes down the markets it sells into and the sectors inside them. It has three tabs: **Markets**, **Personas** and **ICP**.\n\n**Markets and sectors.** A *market* is an industry or area you sell into, like regional authorities or K-12 education. Inside it, a *sector* is a group of organizations that buy alike, like school districts or county governments. ("Segments" already means saved contact audiences in Velocity, which is why these have their own names.) One workspace can research as many markets as it likes, in any industry.\n\n**What a sector holds:**\n- **Overview**: summary, status, the date the research describes, and five 1 to 5 scores (reach, money, pain, fit against what you sell, and access).\n- **Buyers and pains**: the roles that buy or sign off, and the problems they have.\n- **Personas**: the buyers in this sector. A new persona starts from the sector's saved targeting and pains.\n- **Targeting**: job titles, industries, geographies, keywords, organization types, company size, and **never target** words.\n- **Messaging**: what to lead with, what to avoid, the sector's vocabulary, and a sample opening line.\n- **Market facts**, all optional: market size, where the money comes from, programs and budget lines, how they buy, what they must report or comply with, who helps them today, and policy changes to watch.\n- **Open questions and sources**. Leave a number blank rather than guess, and add the link it came from.\n\nA market holds an overview, open questions, suggested sectors (each one not yet added gets a one-click button), a glossary, competitors and sources.\n\n**Status.** Every market and sector is **Draft**, **Researched** or **Verified**. Only Researched and Verified sectors will be used by the AI writers once they start reading research, so a half-finished draft never reaches a prospect.\n\n**Personas** now say what each buyer cares about, their pains and objections, and the angle that works, and can belong to a sector. Describe the role, never a named person.\n\n**Who can do what.** Everyone in the workspace can read research. Managers and admins create and edit it. Only admins delete a market or sector; deleting one removes its sectors and history, and keeps its personas (unlinked). The confirmation lists the campaigns and accounts that use it, which lose it; while an active campaign uses it, it can't be deleted until that campaign is paused or given another sector.\n\n**Version history.** Every save is a version: who saved it, when, and which parts changed. **History** shows the latest 50; pick one to read it, and **Restore** saves its content as a new version, so nothing is lost. If someone else saves while you are editing, your save is refused instead of overwriting theirs; the page checks for a newer version while you have unsaved changes, and tells you before you press Save.\n\n**Private to the workspace.** Research is never shared between workspaces, and it holds organizations, never people: a value that looks like an email address or phone number is removed when you save, and the page tells you it was.\n\n**AI research.** Managers and admins can have AI research a market or a sector on the web: **Research a market with AI** on the Research page, **Research a sector with AI** (or a suggested sector) on a market, and **Refresh with AI** on any market or sector. Add a focus if you want one, such as US only, or how they budget for software.\n\n- A run searches the web (up to 12 searches) and reads the most useful pages (up to 8), framed by your company profile and knowledge base so fit is judged against what you sell. It writes a research brief with the source of every figure, then a draft of the market or sector, with suggested personas for a sector.\n- Every link in the draft must be a page the run actually searched or opened; a link it could not back up is removed, and so is anything that looks like an email address or phone number. The review lists what was removed.\n- **Nothing changes until you review it.** The run page shows each part; tick what to keep and **Save selected**. A refresh shows what you have now next to what it proposes, and saving makes a new version, so the old one can be restored. A new market or sector is saved as a Draft for you to check.\n- **Cost.** Runs bill this workspace's own Anthropic key, never Velocity's, and count toward the monthly AI budget. The run page shows the cost as it goes; web search is $10 per 1,000 searches plus the model's tokens. Admins choose the model (Claude Opus 5.5 by default) and how many runs each person gets per day (10 by default) under **AI research settings**. One run at a time per person, and a run can be stopped.\n- **What a run learned.** Each run's page has **The research brief**: everything it found, with the source of every figure. Every market and sector page lists its **Research runs** (the one that created it and each refresh), so the briefs stay one click away.\n- **Removing runs.** On the Research page, the bin on a run's row, or **Remove failed runs**, takes runs off the list. The person who started a run, or an admin, can remove it once it has stopped. A removed run stays on record: what it cost still counts toward the day's runs, a draft nobody saved is set aside, and its page still opens, read-only.\n\n**How the AI uses your research.** Every AI writer that writes to or about a prospect gets a short block of your research on that prospect's market: what to never say, the buyer persona (what they care about, pains, objections, the angle that works), the sector's pains and words, what to lead with, and a sourced fact or two that it may cite as sector-wide, never as the prospect's own figures. That covers Revenue Engine dossiers, sequence skeletons and per-prospect copy, the AI Pipeline (research and drafts), the Research Pipeline, account briefs, deal intelligence, composed and AI-dynamic sequence emails, subject lines, LinkedIn openers and invite notes, workflow emails, meeting invites, referral intros, suggested replies, and the AI voice agent, on calls it places and calls it answers when the caller's number matches a record (a short spoken brief with no statistics).\n\n- **Mailbox, the email editor and proposals** find the recipient first. AI replies and forwards in the Mailbox look up the other person's email address among your contacts, leads, people and campaign prospects. A forward uses whoever it is going to, else whoever wrote it. The editor's AI assistant uses the contact, lead, draft or campaign prospect it was opened for, or the address in the To field. Proposal sections use the proposal's contact, account or client email, and get the facts view: how they buy and what they must comply with, without opening lines.\n- **Email Builder and snippets** go to many people, so you choose: pick a sector under **Write for** (in AI Generate, the builder's top bar, and Snippets), and the AI writes for that sector. The builder remembers the choice for each template in your browser. The choice only appears once the workspace has a Researched or Verified sector.\n- **Which research applies:** a campaign's own sector and persona first (set them under **Research for this campaign** on the campaign's Sequences tab). This follows the person: a sequence step, meeting invite, reply or call to someone who is in that campaign uses its research too, unless the campaign rejected them. Next, the sector their company is tagged with (set when a company is imported from Downstream or approved in a campaign with a sector). Then the persona whose job titles match the prospect's title, then the sector whose targeting titles or industries match. A title alone never picks a sector whose industries the person's known industry is none of: an IT Director at a software company does not get your county-government research. A sector chosen for a campaign, a company or a template always applies.\n- **Website chat:** the chat agent uses a visitor's market research only after they have verified their email with a code and the address is on one of your records. Before that it is told nothing that depends on who they are. Its follow-up email uses the research when the address the visitor left belongs to a record.\n- **The AI Assistant** can read your markets, sectors, results and research runs, and can tell you which research a writer would use for someone. It can draft edits to a market or sector for you to confirm. It never starts or accepts a research run.\n- **See what a writer reads.** Each sector page has **What the AI writers read**: the exact text given to a writer, for each kind of writing. On the Research page, **Check what a writer would use** takes an email address, or a job title and industry, and shows which sector and persona apply and why.\n- **Only Researched or Verified sectors are used.** A Draft sector is never given to the writers.\n- **Nothing matches, nothing changes.** A workspace without research, or a prospect who matches none of it, gets exactly the copy it got before.\n\n**Avoid rules are checked.** When the research behind a sequence has avoid rules, the AI checks each newly written sequence against them. A sequence that breaks one is **held**: it is saved, marked **Held: avoid rule** on the campaign's Sequences tab, and not enrolled until someone opens it and either releases it (after editing, or as it is) or regenerates it, which checks the new copy again. This applies in every autonomy mode, since no mode has a person read the copy before it goes out.\n\n**Research drives targeting.**\n\n- **Create campaign** (on a sector's page) makes a **draft** Revenue Engine campaign that searches with the sector's titles (or a chosen persona's own titles), industries, places, keywords and company size, keeps its never-target words, and writes with the sector's research. Nothing starts until you start it.\n- **Never-target words** (sector Targeting) rule people out wherever they come from: discovery does not queue someone whose title, company name or industry contains one (the campaign's Logs say who and why), the ICP score is 0 without an AI call, and screening rejects anyone left, in every autonomy mode, with the word named on the **Rejections** tab. Words are matched as whole words, so *intern* never catches *International*. A campaign uses the words copied when it was made plus its sector's current words while the sector is Researched or Verified.\n- **Find Prospects** has **Start from a research sector**: pick a sector, then click one of its titles to fill the search with that title and the sector's industry, place and keywords.\n- **The ICP** reads your Researched and Verified sectors as prior knowledge when it is inferred from your deals. On the ICP page, admins choose what discovery uses when a campaign has no targeting of its own: this ICP (the default), your researched sectors, or both.\n\n**Reports.** Every market has **Reports**: the button on its page, or the link on its card on the Research page. They read the research rather than edit it, and are worked out from it each time, so they always match it:\n\n- **Overview**: the market's headline, its figures (sectors, personas, programs, sources, AI runs and their cost) and a card for each sector.\n- **Sector scorecard**: the five 1 to 5 scores side by side, with a weight for each; change the weights to see how priorities shift (kept in your browser).\n- **Side by side**: where each sector's money comes from, who helps its organizations today, and what to lead with.\n- **Messaging by sector**: each sector's opening line, what to lead with and what never to say, and each persona's angle.\n- **Funders & programs**: who passes the money on, and every program the sectors name, once each, by agency.\n- **Competitive landscape**, **Glossary**, **Sources & accuracy** (what is Verified and what is still a lead to check), **Open questions**, **Research briefs** (what each AI run found, removed runs included) and **Results** (replies and meetings by sector).\n\nEach sector also has a **Report**: its figures, money flow, programs, how its organizations buy and what they must report, buyers and who helps them, pains, personas, messaging, targeting, policy watch, open questions and sources.\n\n**Importing from Downstream.** Downstream researches funding markets (who receives public money, and from which programs) and exports them as a file. Admins import it on the Research page with **Import from Downstream**: choose the file, check the preview, then **Import**. Nothing is saved until you import.\n\n- **Each workspace links its own.** The first import asks you to link the Downstream workspace to this one; its files then import only into workspaces that linked it. Another Velocity workspace sees the same file as not linked, and if it links it too, it gets its own copy: nothing is shared between workspaces. Admins can **Pause** a link (its research, personas and organizations' awards are kept but not used by the writers or targeting), change its **Settings**, or **Unlink** it (the research stays, and linking again finds the same market, sectors and personas instead of copying them).\n- **What it brings.** The Downstream workspace becomes a market (overview, glossary, competitors, market statistics and the funders' public rules). Each segment you tick becomes a Researched sector, its buyer personas join a persona category named after it, and its organizations become accounts, matched to ones you already have by website, then by name and state. A segment left unticked is listed as a suggested sector.\n- **Your settings narrow it.** For this workspace only: territory and company size replace the segment's, and you can add or remove job titles and add never-target words.\n- **The seller's layer.** A seller export also says how the seller's product fits each segment and organization (what to lead with, a sample opening, a fit score, flags). It is used only when the file was made for this workspace's own company and an admin says so; otherwise only the market research is imported.\n- **Importing again is safe.** The preview marks every item new, updated, unchanged or **edited here**. Unchanged items are not touched. Anything edited in Velocity since the last import is kept unless you tick **Use Downstream's version**, and every change is a new version with history. Statistics and funders always take the newest file, since they are not edited in Velocity.\n- **Awards become hooks.** When a prospect works at an imported organization, the Revenue Engine's research of that prospect leads with the organization's public award (funder, amount, purpose, program, year, and its source link), so the copy can open with it. Downstream lists an organization once per award; the company keeps every one (its page lists them, newest first) and the copy leads with the newest award that has not ended (in the same year, the one ending soonest); if all have ended, the newest, then the largest. With the seller's layer, an organization flagged as in financial distress is not contacted now; screening rejects it with that reason.\n\n**Results: what gets replies.** Each sector page has a **Results** section. A persona with results shows a badge such as *3 of 12 replied (25%)* on its sector page and on the Personas tab; click it for that persona's results.\n\n- When the Revenue Engine writes a prospect's sequence, it records the sector and persona it used, which of the research's pains the copy speaks to, which lead-with points the first message opens on, the hook it opened on, and its opening line. The pains and lead-with points come from the brief check, in the same AI call that checks the avoid rules.\n- Results count, for each persona, pain, lead-with point and hook: prospects written, contacted (at least one step sent), replied (on any channel; an out-of-office alone is not a reply) and meetings. They are listed best first by reply rate. A rate shows once 10 or more were contacted; below that, only the counts.\n- **Opening lines that got replies** shows the first sentence of the first message actually sent, with the prospect's role and organization, never their name. Meetings come first, then positive replies.\n- **Brief check** says how many sequences passed the avoid rules and how many were held.\n- Results count Revenue Engine campaign prospects whose sequences were written after results were added. A pain no longer in the research is marked, and pains no copy has used yet are listed last.`,
+    pageKey: "research",
+    bodyMarkdown: `**Research** (sidebar: *Prospecting → Research*) is where a workspace writes down the markets it sells into and the sectors inside them. It has three tabs: **Markets**, **Personas** and **ICP**.\n\n**Markets and sectors.** A *market* is an industry or area you sell into, like regional authorities or K-12 education. Inside it, a *sector* is a group of organizations that buy alike, like school districts or county governments. ("Segments" already means saved contact audiences in Velocity, which is why these have their own names.) One workspace can research as many markets as it likes, in any industry.\n\n**What a sector holds:**\n- **Overview**: summary, status, the date the research describes, and five 1 to 5 scores (reach, money, pain, fit against what you sell, and access).\n- **Buyers and pains**: the roles that buy or sign off, and the problems they have.\n- **Personas**: the buyers in this sector. A new persona starts from the sector's saved targeting and pains.\n- **Targeting**: job titles, industries, geographies, keywords, organization types, company size, and **never target** words.\n- **Messaging**: what to lead with, what to avoid, the sector's vocabulary, and a sample opening line.\n- **Market facts**, all optional: market size, where the money comes from, programs and budget lines, how they buy, what they must report or comply with, who helps them today, and policy changes to watch.\n- **Open questions and sources**. Leave a number blank rather than guess, and add the link it came from.\n\nA market holds an overview, open questions, suggested sectors (each one not yet added gets a one-click button), a glossary, competitors and sources.\n\n**Status.** Every market and sector is **Draft**, **Researched** or **Verified**. Only Researched and Verified sectors are used by the AI writers, so a half-finished draft never reaches a prospect.\n\n**Personas** now say what each buyer cares about, their pains and objections, and the angle that works, and can belong to a sector. Describe the role, never a named person.\n\n**Who can do what.** Everyone in the workspace can read research. Managers and admins create and edit it. Only admins delete a market or sector; deleting one removes its sectors and history, and keeps its personas (unlinked). The confirmation lists the campaigns and accounts that use it, which lose it; while an active campaign uses it, it can't be deleted until that campaign is paused or given another sector.\n\n**Version history.** Every save is a version: who saved it, when, and which parts changed. **History** shows the latest 50; pick one to read it, and **Restore** saves its content as a new version, so nothing is lost. If someone else saves while you are editing, your save is refused instead of overwriting theirs; the page checks for a newer version while you have unsaved changes, and tells you before you press Save.\n\n**Private to the workspace.** Research is never shared between workspaces, and it holds organizations, never people: a value that looks like an email address or phone number is removed when you save, and the page tells you it was.\n\n**AI research.** Managers and admins can have AI research a market or a sector on the web: **Research a market with AI** on the Research page, **Research a sector with AI** (or a suggested sector) on a market, and **Refresh with AI** on any market or sector. Add a focus if you want one, such as US only, or how they budget for software.\n\n- A run searches the web (up to 12 searches) and reads the most useful pages (up to 8), framed by your company profile and knowledge base so fit is judged against what you sell. It writes a research brief with the source of every figure, then a draft of the market or sector, with suggested personas for a sector.\n- Every link in the draft must be a page the run actually searched or opened; a link it could not back up is removed, and so is anything that looks like an email address or phone number. The review lists what was removed.\n- **Nothing changes until you review it.** The run page shows each part; tick what to keep and **Save selected**. A refresh shows what you have now next to what it proposes, and saving makes a new version, so the old one can be restored. A new market or sector is saved as a Draft for you to check.\n- **Cost.** Runs bill this workspace's own Anthropic key, never Velocity's, and count toward the monthly AI budget. The run page shows the cost as it goes; web search is $10 per 1,000 searches plus the model's tokens. Admins choose the model (Claude Opus 5.5 by default) and how many runs each person gets per day (10 by default) under **AI research settings**. One run at a time per person, and a run can be stopped.\n- **What a run learned.** Each run's page has **The research brief**: everything it found, with the source of every figure. Every market and sector page lists its **Research runs** (the one that created it and each refresh), so the briefs stay one click away.\n- **Removing runs.** On the Research page, the bin on a run's row, or **Remove failed runs**, takes runs off the list. The person who started a run, or an admin, can remove it once it has stopped. A removed run stays on record: what it cost still counts toward the day's runs, a draft nobody saved is set aside, and its page still opens, read-only.\n\n**How the AI uses your research.** Every AI writer that writes to or about a prospect gets a short block of your research on that prospect's market: what to never say, the buyer persona (what they care about, pains, objections, the angle that works), the sector's pains and words, what to lead with, and a sourced fact or two that it may cite as sector-wide, never as the prospect's own figures. That covers Revenue Engine dossiers, sequence skeletons and per-prospect copy, the AI Pipeline (research and drafts), the Research Pipeline, account briefs, deal intelligence, composed and AI-dynamic sequence emails, subject lines, LinkedIn openers and invite notes, workflow emails, meeting invites, referral intros, suggested replies, and the AI voice agent, on calls it places and calls it answers when the caller's number matches a record (a short spoken brief with no statistics).\n\n- **Mailbox, the email editor and proposals** find the recipient first. AI replies and forwards in the Mailbox look up the other person's email address among your contacts, leads, people and campaign prospects. A forward uses whoever it is going to, else whoever wrote it. The editor's AI assistant uses the contact, lead, draft or campaign prospect it was opened for, or the address in the To field. Proposal sections use the proposal's contact, account or client email, and get the facts view: how they buy and what they must comply with, without opening lines.\n- **Email Builder and snippets** go to many people, so you choose: pick a sector under **Write for** (in AI Generate, the builder's top bar, and Snippets), and the AI writes for that sector. The builder remembers the choice for each template in your browser. The choice only appears once the workspace has a Researched or Verified sector.\n- **Which research applies:** a campaign's own sector and persona first (set them under **Research for this campaign** on the campaign's Sequences tab). This follows the person: a sequence step, meeting invite, reply or call to someone who is in that campaign uses its research too, unless the campaign rejected them. Next, the sector their company is tagged with (set when a company is imported from Downstream or approved in a campaign with a sector). Then the persona whose job titles match the prospect's title, then the sector whose targeting titles or industries match. A title alone never picks a sector whose industries the person's known industry is none of: an IT Director at a software company does not get your county-government research. A sector chosen for a campaign, a company or a template always applies.\n- **Website chat:** the chat agent uses a visitor's market research only after they have verified their email with a code and the address is on one of your records. Before that it is told nothing that depends on who they are. Its follow-up email uses the research when the address the visitor left belongs to a record.\n- **Elsie** can read your markets, sectors, results and research runs, and can tell you which research a writer would use for someone. It can draft edits to a market or sector for you to confirm. It never starts or accepts a research run.\n- **See what a writer reads.** Each sector page has **What the AI writers read**: the exact text given to a writer, for each kind of writing. On the Research page, **Check what a writer would use** takes an email address, or a job title and industry, and shows which sector and persona apply and why.\n- **Only Researched or Verified sectors are used.** A Draft sector is never given to the writers.\n- **Nothing matches, nothing changes.** A workspace without research, or a prospect who matches none of it, gets exactly the copy it got before.\n\n**Avoid rules are checked.** When the research behind a sequence has avoid rules, the AI checks each newly written sequence against them. A sequence that breaks one is **held**: it is saved, marked **Held: avoid rule** on the campaign's Sequences tab, and not enrolled until someone opens it and either releases it (after editing, or as it is) or regenerates it, which checks the new copy again. This applies in every autonomy mode, since no mode has a person read the copy before it goes out.\n\n**Research drives targeting.**\n\n- **Create campaign** (on a sector's page) makes a **draft** Revenue Engine campaign that searches with the sector's titles (or a chosen persona's own titles), industries, places, keywords and company size, keeps its never-target words, and writes with the sector's research. Nothing starts until you start it.\n- **Never-target words** (sector Targeting) rule people out wherever they come from: discovery does not queue someone whose title, company name or industry contains one (the campaign's Logs say who and why), the ICP score is 0 without an AI call, and screening rejects anyone left, in every autonomy mode, with the word named on the **Rejections** tab. Words are matched as whole words, so *intern* never catches *International*. A campaign uses the words copied when it was made plus its sector's current words while the sector is Researched or Verified.\n- **Find Prospects** has **Start from a research sector**: pick a sector, then click one of its titles to fill the search with that title and the sector's industry, place and keywords.\n- **The ICP** reads your Researched and Verified sectors as prior knowledge when it is inferred from your deals. On the ICP page, admins choose what discovery uses when a campaign has no targeting of its own: this ICP (the default), your researched sectors, or both.\n\n**Reports.** Every market has **Reports**: the button on its page, or the link on its card on the Research page. They read the research rather than edit it, and are worked out from it each time, so they always match it:\n\n- **Overview**: the market's headline, its figures (sectors, personas, programs, sources, AI runs and their cost) and a card for each sector.\n- **Sector scorecard**: the five 1 to 5 scores side by side, with a weight for each; change the weights to see how priorities shift (kept in your browser).\n- **Side by side**: where each sector's money comes from, who helps its organizations today, and what to lead with.\n- **Messaging by sector**: each sector's opening line, what to lead with and what never to say, and each persona's angle.\n- **Funders & programs**: who passes the money on, and every program the sectors name, once each, by agency.\n- **Competitive landscape**, **Glossary**, **Sources & accuracy** (what is Verified and what is still a lead to check), **Open questions**, **Research briefs** (what each AI run found, removed runs included) and **Results** (replies and meetings by sector).\n\nEach sector also has a **Report**: its figures, money flow, programs, how its organizations buy and what they must report, buyers and who helps them, pains, personas, messaging, targeting, policy watch, open questions and sources.\n\n**Importing from Downstream.** Downstream researches funding markets (who receives public money, and from which programs) and exports them as a file. Admins import it on the Research page with **Import from Downstream**: choose the file, check the preview, then **Import**. Nothing is saved until you import.\n\n- **Each workspace links its own.** The first import asks you to link the Downstream workspace to this one; its files then import only into workspaces that linked it. Another Velocity workspace sees the same file as not linked, and if it links it too, it gets its own copy: nothing is shared between workspaces. Admins can **Pause** a link (its research, personas and organizations' awards are kept but not used by the writers or targeting), change its **Settings**, or **Unlink** it (the research stays, and linking again finds the same market, sectors and personas instead of copying them).\n- **What it brings.** The Downstream workspace becomes a market (overview, glossary, competitors, market statistics and the funders' public rules). Each segment you tick becomes a Researched sector, its buyer personas join a persona category named after it, and its organizations become accounts, matched to ones you already have by website, then by name and state. A segment left unticked is listed as a suggested sector.\n- **Your settings narrow it.** For this workspace only: territory and company size replace the segment's, and you can add or remove job titles and add never-target words.\n- **The seller's layer.** A seller export also says how the seller's product fits each segment and organization (what to lead with, a sample opening, a fit score, flags). It is used only when the file was made for this workspace's own company and an admin says so; otherwise only the market research is imported.\n- **Importing again is safe.** The preview marks every item new, updated, unchanged or **edited here**. Unchanged items are not touched. Anything edited in Velocity since the last import is kept unless you tick **Use Downstream's version**, and every change is a new version with history. Statistics and funders always take the newest file, since they are not edited in Velocity.\n- **Awards become hooks.** When a prospect works at an imported organization, the Revenue Engine's research of that prospect leads with the organization's public award (funder, amount, purpose, program, year, and its source link), so the copy can open with it. Downstream lists an organization once per award; the company keeps every one (its page lists them, newest first) and the copy leads with the newest award that has not ended (in the same year, the one ending soonest); if all have ended, the newest, then the largest. With the seller's layer, an organization flagged as in financial distress is not contacted now; screening rejects it with that reason.\n\n**Results: what gets replies.** Each sector page has a **Results** section. A persona with results shows a badge such as *3 of 12 replied (25%)* on its sector page and on the Personas tab; click it for that persona's results.\n\n- When the Revenue Engine writes a prospect's sequence, it records the sector and persona it used, which of the research's pains the copy speaks to, which lead-with points the first message opens on, the hook it opened on, and its opening line. The pains and lead-with points come from the brief check, in the same AI call that checks the avoid rules.\n- Results count, for each persona, pain, lead-with point and hook: prospects written, contacted (at least one step sent), replied (on any channel; an out-of-office alone is not a reply) and meetings. They are listed best first by reply rate. A rate shows once 10 or more were contacted; below that, only the counts.\n- **Opening lines that got replies** shows the first sentence of the first message actually sent, with the prospect's role and organization, never their name. Meetings come first, then positive replies.\n- **Brief check** says how many sequences passed the avoid rules and how many were held.\n- Results count Revenue Engine campaign prospects whose sequences were written after results were added. A pain no longer in the research is marked, and pains no copy has used yet are listed last.`,
   },
   {
     slug: "prospect-source-registry",
@@ -452,12 +578,13 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "How Velocity searches your data vendors in order, previews for free, dedupes before spending, and meters every vendor's allowance.",
     readingTimeMinutes: 5,
     tags: ["prospecting", "warmysender", "quickenrich", "apollo", "leadocean", "budget", "waterfall"],
-    pageKey: "find-prospects",
+    // 2026-11-15: Source search is a tab of Data Enrichment, whose page key this is.
+    pageKey: "data-enrichment",
     bodyMarkdown: `Velocity treats every prospect-data vendor as a plugin in one **prospect source registry**. Each source declares what it can actually filter on (its *capability manifest*), whether searching is free, whether previews hide the email, and how its allowance resets. Today's sources: **WarmySender leads** (free masked search; one lead unit per net-new person acquired; US/Canada deepest; business phones only), **QuickEnrich** (free discovery of people with a has-email flag; credits are spent later by the enrichment sweep, verified before anything is written), **Apollo.io** (search-only, never an email, zero credits), and **LeadOcean** (people search on your own LeadOcean account, where every search row and every lookup counts as a record, so a person costs two). Hunter and Lemlist are registered as "available, not configured".
 
 **Connecting a vendor.** Settings → Data sources → the vendor's card. Paste the key, Save, then **Test connection**. The test records the key's scopes and plan tier and, for WarmySender, captures the search tool's parameter schema — that is how Velocity learns whether the vendor filters on job title natively or only keyword-matches it. For WarmySender also set the **billing anniversary day** (the plan's allowance resets then), and record any **purchased lead credits** (they never expire and skip the daily pace). The card's **Enabled** switch turns the source off workspace-wide without removing the key — campaigns and searches skip it while it is off. The same per-source switches live on ARE Settings; both edit one setting.
 
-**LeadOcean.** Settings → Data sources → LeadOcean. Paste this workspace's own key (it is stored encrypted and never shown again; there is no shared key) and Save, which tests it for free and shows the plan, usage and limits LeadOcean reports. Choose which email statuses to accept (Deliverable only by default; undeliverable, disposable, spam-trap and abuse addresses are never accepted), whether to fetch phone numbers (off by default, which asks for the work email alone), and optionally a daily cap on people pulled. Saving a key adds LeadOcean to no campaign and starts no search: because its previews are billed, it is never pre-ticked, so tick it on a campaign's Sources tab or on Source search. Before buying a page, Velocity asks LeadOcean for free whether it will apply every filter, and buys nothing if it will not. LeadOcean has no state filter for a person, so a state search uses the employer's headquarters and Velocity then records each person as inside, outside or unknown from their own address; on a campaign, someone outside is not looked up unless its territory check is off. A person seen once stays out of later LeadOcean searches in this workspace, including one dropped by another campaign's filters. When LeadOcean paces an account, the source is held until the window resets and the logs say so.
+**LeadOcean.** Settings → Data sources → LeadOcean. Paste this workspace's own key (it is stored encrypted and never shown again; Velocity supplies no LeadOcean key of its own) and Save, which tests it for free and shows the plan, usage and limits LeadOcean reports. Choose which email statuses to accept (Deliverable only by default; undeliverable, disposable, spam-trap and abuse addresses are never accepted), whether to fetch phone numbers (off by default, which asks for the work email alone), and optionally a daily cap on people pulled. Saving a key adds LeadOcean to no campaign and starts no search: because its previews are billed, it is never pre-ticked, so tick it on a campaign's Sources tab or on Source search. Before buying a page, Velocity asks LeadOcean for free whether it will apply every filter, and buys nothing if it will not. LeadOcean has no state filter for a person, so a state search uses the employer's headquarters and Velocity then records each person as inside, outside or unknown from their own address; on a campaign, someone outside is not looked up unless its territory check is off. A person seen once stays out of later LeadOcean searches in this workspace, including one dropped by another campaign's filters. When LeadOcean paces an account, the source is held until the window resets and the logs say so. A workspace with no LeadOcean key can use one that an admin shares from another workspace (see "Running multiple workspaces"); its usage then counts against the sharing workspace's LeadOcean account.
 
 **The waterfall.** A search — from a campaign's discovery or from Data Enrichment → **Source search** — runs down your sources in the order set under Revenue Engine → Settings → *Prospect Sources & Checking Order*, and **stops once the batch target is met**. A later source is never called, or paid, for someone an earlier one already found. Sources without a key, without the filters your query needs, over budget, or paused after repeated failures are skipped with the reason shown. Dedupe against People and every campaign queue runs *before* any billable step, using email (never a masked one), LinkedIn URL, and name + company. One vendor failing degrades the run; it never fails it.
 
@@ -485,8 +612,9 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "Bulk-import a list (LeadRocks, Apollo export, etc.).",
     readingTimeMinutes: 2,
     tags: ["prospecting", "import", "csv"],
-    pageKey: "prospects",
-    bodyMarkdown: `Have a list already? On **People**, open **Import → Import a CSV** (or use *Prospect and enrich → Import contacts*). Map your columns (name, title, company, email, LinkedIn URL) and import. Imported rows appear in your People list with an **email status** badge. CSV-imported prospects start without an ICP-fit score (that's only set by Discovery), so use the email-status filter to find the deliverable ones. From there, select and enroll into a sequence, or run **Find contact info** to verify emails before sending.`,
+    // 2026-11-15: was "prospects", which is the person detail page. Import is a tab of Data Enrichment.
+    pageKey: "data-enrichment",
+    bodyMarkdown: `Have a list already? On **People**, open **Import → Import a CSV**, or go to *Prospecting → Data Enrichment* and open the **Import contacts** tab. Map your columns (name, title, company, email, LinkedIn URL) and import. Imported rows appear in your People list with an **email status** badge. CSV-imported prospects start without an ICP-fit score (that's only set by Discovery), so use the email-status filter to find the deliverable ones. From there, select and enroll into a sequence, or run **Find contact info** to verify emails before sending. Below the importer, **Recent imports** lists every import, newest first: open one to see the rows it did not import and why, download the full report, or undo the import.`,
   },
   {
     slug: "understanding-scores-badges",
@@ -495,7 +623,8 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "What the Fit score and email/verification badges mean.",
     readingTimeMinutes: 2,
     tags: ["prospecting", "icp", "scoring", "email-verification"],
-    pageKey: "prospects",
+    // 2026-11-15: was "prospects" (the person detail page); the badges are read on the People list.
+    pageKey: "people",
     bodyMarkdown: `Two signals tell you whether a prospect is worth your time. **ICP-fit score** (the colored "Fit" number, 0–100) measures how well the prospect matches your target titles, industries, geos, and keywords — green ≥70 (strong), amber 40–69 (moderate), red <40 (weak). **Email status** tells you deliverability: *Valid* (safe to send), *Accept-All* / *Risky* (send with caution), *Invalid* (don't), *Unverified* (run a check first). Prioritize **high Fit + Valid email**. The verification badge (*Needs Review* vs *Verified*) reflects whether discovery could confirm the record's core fields.`,
   },
   {
@@ -516,7 +645,8 @@ Every engine has the same three-way switch, and they all live on one screen — 
     summary: "How a name flows from Find Prospects to a closed Customer.",
     readingTimeMinutes: 4,
     tags: ["crm", "funnel", "workflow", "overview"],
-    pageKey: "pipeline",
+    // 2026-11-15: was "pipeline", which has three other articles; Leads had none of its own.
+    pageKey: "leads",
     bodyMarkdown: `Every record in Velocity moves through one funnel. **Find Prospects starts it** (scraped or imported names — not yet in the CRM proper), and the funnel ends with a closed **Customer**.
 
 \`\`\`
@@ -543,7 +673,7 @@ persist across many deals. The **Opportunity** is the only thing that travels
 the pipeline and closes Won or Lost.
 
 **Step by step:**
-1. **Prospect → Lead.** A prospect who replies or shows interest is converted to a **Lead** (Prospects table → *Convert to lead*). Leads are scored and routed.
+1. **Prospect → Lead.** A **Lead** is someone who has shown interest and is waiting to be qualified. Most arrive on their own from a form, a landing page, the chat agent or a booking page; you can also add one with **New lead** on the Leads page. Leads are scored and routed.
 2. **Lead → Opportunity.** When a lead qualifies, **Convert** it (Leads page) — this creates the **Account** (company), a primary **Contact** (person), and an **Opportunity** (the deal) in one step, and marks the lead converted.
 3. **Work the Opportunity** through the Pipeline stages.
 4. **Closed Won** → the account automatically becomes a **Customer**, handing off to the post-sale module (health score, renewals, QBRs). **Closed Lost** → the Account and Contact are kept for future re-engagement; you open a *new* opportunity when the time is right.
@@ -557,7 +687,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "What each record type is for, and how one becomes the next.",
     readingTimeMinutes: 3,
     tags: ["crm", "data-model"],
-    pageKey: "leads",
+    // 2026-11-15: was "leads"; the Companies page had no article, and this one explains accounts.
+    pageKey: "companies",
     bodyMarkdown: `Five record types, each with one job. **Prospects** = your raw outbound list (discovery + CSV), not yet engaged. **Leads** = individuals who've shown interest and are being scored/qualified. **Accounts** = the companies you're working (hierarchy + ARR rollup). **Contacts** = the people inside those accounts. **Customers** = accounts that have closed won (post-sale: health, renewals, QBRs). The flow: a **Prospect** who engages becomes a **Lead**; a qualified Lead is **converted**, which creates the **Account + Contact + Opportunity** together; when the Opportunity is **Closed Won**, the account becomes a **Customer**. Accounts and Contacts are durable; the Opportunity is what moves through the pipeline. See "The sales funnel, end to end" for the full picture. Don't over-think it early — keep new outbound names as Prospects and promote as they engage.`,
   },
   {
@@ -569,7 +700,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["crm", "pipeline", "kanban"],
     pageKey: "pipeline",
     tourName: "Master the Pipeline",
-    bodyMarkdown: `Your pipeline lives under **Win deals → Deals** — a kanban of opportunities grouped by stage (the default pipeline uses discovery → qualified → proposal → negotiation → won/lost; your stages are whatever Settings → Pipelines defines), with the Deal Autopilot layered on top; the classic board also remains at /pipeline. Drag a card between columns to change its stage, or — keyboard/no-mouse — focus a card (Tab) and use the **◀ / ▶ Move** buttons on it. Cards show value, win probability, and AI next-best-actions; if AI suggests a stage change you'll see an **Accept** chip. Use the view toggle for the **Forecast** rollup. Every stage move is recorded in the opportunity's stage history. A stage counts as a close only when it is ticked **Won** or **Lost** in Settings → Pipelines — that tickbox, not the stage name, is what turns a deal into revenue, into a loss, and out of the open forecast. Keep stages honest — the forecast and alerts depend on it.`,
+    bodyMarkdown: `Your deals live on **Sales Pipeline** (sidebar: *CRM → Sales Pipeline*). It is the one deal board. The separate Deals page was folded into it on November 8, 2026, and old Deals links open it.\n\n**The board.** Each column is a stage and each card is an opportunity, with its value, win probability and AI next step. The default pipeline uses discovery → qualified → proposal → negotiation → won/lost. Your own stages are set behind the **Configure pipelines** button in the page header.\n\n**Moving a deal.** Drag a card to another column, open the **⋯** menu on the card and pick a stage under **Move to stage**, or focus the card with Tab and use its ◀ and ▶ buttons. Moving a deal to a lost stage asks why. If AI suggests a stage change, the card shows an **Accept** chip. Every move is recorded in the opportunity's stage history.\n\n**Filters.** **Owner** and **Close date** narrow the board, and **Clear filters** resets them. The won and lost columns can be folded, and **Show more** loads older closed deals.\n\n**In the header.** The **Deal Autopilot** dial (Off, Approve, Autonomous), **Analyze with AI**, **Export CSV**, **New opportunity**, and the **Board / Forecast** switch. **Forecast** shows the weighted forecast for the same deals, with AI commentary. The alerts strip above the board lists stale and at-risk deals. For the forecast by fiscal quarter, with Commit and Best case, see "The Forecast page".\n\nA stage counts as a close only when it is ticked **Won** or **Lost** in the pipeline's settings. That tickbox, not the stage name, is what turns a deal into revenue, into a loss, and out of the open forecast. Keep stages honest: the forecast and alerts depend on it.`,
   },
   {
     slug: "logging-activities",
@@ -587,7 +718,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Win probability, stages, and win/loss reasons.",
     readingTimeMinutes: 2,
     tags: ["crm", "opportunities", "forecasting"],
-    pageKey: "pipeline",
+    // 2026-11-15: was "pipeline"; a deal's own page (/opportunities/:id) resolves to "opportunities".
+    pageKey: "opportunities",
     bodyMarkdown: `An **Opportunity** is a deal on an account. It carries a value, a stage, and a win probability (AI-generated when intelligence has run, else the stage default). When you move a deal to **Won** or **Lost**, capture the **win/loss reason** in the inline editor on the detail page — this field now persists correctly and feeds win/loss analysis. Use the **Related Tasks** widget to keep next steps attached to the deal. Opportunities live on the Pipeline board; see "Managing your pipeline" for moving them.`,
   },
   {
@@ -599,7 +731,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["sequences", "outreach", "cadence"],
     pageKey: "sequences",
     tourName: "Build Your First Sequence",
-    bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set a daily cap; a reply pauses the person while reply detection is on. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). Email steps write **drafts** on cadence: nothing is sent until someone reviews and sends them (Emails → Needs review), or auto-send does if it is switched on.`,
+    bodyMarkdown: `**Sequences** (sidebar: *Outreach → Sequences*) are multi-step cadences. Click **Create sequence** and choose **AI-assisted**, **Templates** or **From scratch**. The sequence opens in the sequence editor.\n\n**Steps.** On the **Editor** tab, click **Add a step** and pick one: **Email** (subject and body, with \`{{firstName}}\`, \`{{company}}\` and \`{{senderName}}\` merge fields), **Phone call** or **Action item** (a task for the rep), **LinkedIn — connection request**, **LinkedIn — message**, or **Wait / delay** (days and hours). An email step can use a template, or have AI write it for each person.\n\n**One editor.** The visual Canvas was retired on November 7, 2026, and old canvas links open the editor. The editor's tabs are **Editor**, **Contacts**, **A/B tests**, **Activity**, **Report** and **Settings**. If a sequence was drawn on the old canvas with branches that never ran, the editor says so above its steps.\n\n**Settings.** The **Settings** tab holds the **Daily send cap** and **Pause a person when they reply**, which is on unless you switch it off.\n\n**Start it.** Click **Add contacts** to enroll people (see "Enroll prospects into a sequence"), then **Activate**. To change the steps of an active sequence, **Pause** it first. Email steps write **drafts** on cadence: nothing is sent until someone reviews and sends them (Emails → Needs review), or auto-send does if it is switched on.`,
   },
   {
     slug: "sequences-vs-campaigns",
@@ -611,7 +743,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     pageKey: "sequences",
     bodyMarkdown: `The word **sequence** shows up in three places, and they are not the same thing.
 
-**1. Sequences (Engage → Sequences).** A fixed multi-step cadence you write once: the same emails, in the same order, to everyone you enroll. Runs on the original sequence engine — one template per step, merge tags such as \`{{firstName}}\` and \`{{senderName}}\` fill in the details. Use it for steady follow-ups where one message fits everyone. Any sequence has a **Convert to campaign** action that turns it into a fixed-copy campaign on the Revenue Engine.
+**1. Sequences (Outreach → Sequences).** A fixed multi-step cadence you write once: the same emails, in the same order, to everyone you enroll. Runs on the original sequence engine — one template per step, merge tags such as \`{{firstName}}\` and \`{{senderName}}\` fill in the details. Use it for steady follow-ups where one message fits everyone. Any sequence has a **Convert to campaign** action that turns it into a fixed-copy campaign on the Revenue Engine.
 
 **2. Campaigns (Revenue Engine).** An autonomous campaign can source people, enrich them, write each email, send on a cadence, and react to replies. Every campaign has a **copy mode**: *per person* (the engine writes a unique email for each prospect) or *fixed* (one template per step, the same to everyone — what a Sequence does, now on the campaign engine's dispatcher, suppression list and approval queue). Campaigns run under Off / Approve / Auto control per campaign and per engine feature.
 
@@ -628,18 +760,22 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Design reusable email templates.",
     readingTimeMinutes: 3,
     tags: ["sequences", "email-builder", "templates"],
+    pageKey: "email-builder",
     bodyMarkdown: `**Email Builder** is a 3-panel drag-and-drop designer for HTML email templates — content blocks on the left, canvas in the middle, properties on the right (all panels resize and persist). Build reusable layouts for sequences and campaigns, preview on mobile, and **Publish** when ready (drafts show a badge). Published and draft templates both appear in the sequence step picker. Use the **Snippet Library** (header sub-nav) for reusable text fragments you drop into templates.`,
   },
   {
     slug: "unified-inbox",
     categorySlug: "sequences-email",
-    title: "The Unified Inbox",
-    summary: "Your social conversations (LinkedIn, WhatsApp and the like) in one list.",
+    // 2026-11-15: the Unified Inbox page was folded into /v2/inbox on 2026-11-07
+    // (lib/retiredRoutes). The slug stays so existing links open; the article
+    // now describes the one Inbox, and carries its page key.
+    title: "The Inbox: replies, mailbox, social chats, calls and notifications",
+    summary: "One page for everything that comes back. The Unified Inbox, Conversations and My Mailbox are tabs of it now.",
     readingTimeMinutes: 3,
-    tags: ["inbox", "replies", "sequences"],
-    pageKey: "unified-inbox",
+    tags: ["inbox", "replies", "mailbox", "linkedin", "social", "notifications", "unified inbox", "conversations"],
+    pageKey: "inbox",
     tourName: "Handle Replies (Unified Inbox)",
-    bodyMarkdown: `The **Unified Inbox** lists the conversations from the social accounts you connected (LinkedIn, WhatsApp and the like, through Settings › Social accounts). Chats list on the left; open one to read the thread and reply. A LinkedIn reply from someone you reached out to **pauses** their sequences, so you won't double-touch someone who already answered. Use the channel filter to focus. Header shortcuts: **Refresh**, **Manage Accounts**, and **Email Drafts**. Email replies are not here: they are in **Conversations** and **My Mailbox**.`,
+    bodyMarkdown: `**Inbox** (in the quick links at the top of the sidebar) is the one place for everything that comes back. The Unified Inbox, Conversations, My Mailbox and the old notifications Inbox were folded into it on November 7, 2026. Their old links and bookmarks open the matching tab.\n\nIt has five tabs:\n\n- **Replies**: replies to your sequences and Revenue Engine campaigns. Each one is classified, names the sequence or campaign it answers, and says what to do next. Opening a reply marks it read. **Unread** and **Mine** narrow the list. See "Replies and the reply Autopilot".\n- **Mailbox**: your connected email account, with Reply, Reply all, Forward and Compose. Nothing shows here until a mailbox is connected.\n- **LinkedIn & social**: the conversations from the social accounts you connected under Settings → Social accounts (LinkedIn, WhatsApp and the like). **Replies to our outreach** shows replies from people you messaged or invited first. **All chats** lists every conversation: open one to read the thread and reply. This is what the Unified Inbox used to show.\n- **Calls**: the voice agents' calls, with their transcripts.\n- **Notifications**: mentions, tasks, deals, renewals, approvals, workflow and engine events.\n\nA LinkedIn reply from someone you reached out to **pauses** their sequences, so you do not contact someone who already answered. An email reply does the same while the sequence's reply pause is on.`,
   },
   {
     slug: "email-drafts-sending",
@@ -670,7 +806,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["are", "automation", "configuration"],
     pageKey: "are",
-    bodyMarkdown: `Open a campaign → **Settings** to tune it. **Autonomy mode**: *Full* (discover→send, no human), *Batch approval* (you approve batches), *Review & release* (approve each). **Enrichment fit gate (minConfidence)**: only prospects whose ICP-fit score clears this threshold get enriched — raise it to save budget on weak fits, lower it for volume (default 40). **Auto-approve threshold**: auto-approve prospects above a fit score. Set the **daily send cap** and channels. Targeting (titles/industries/geos/keywords) drives discovery — weak targeting = weak prospects, so invest here first.`,
+    bodyMarkdown: `Open a campaign → **Settings** to tune it. **Autonomy mode**: *Full* (discover→send, no human), *Batch approval* (you approve batches), *Review & release* (approve each). **Enrichment fit gate (minConfidence)**: only prospects whose ICP-fit score clears this threshold get enriched — raise it to save budget on weak fits, lower it for volume (default 40). **Auto-approve threshold**: auto-approve prospects above a fit score. Set the **daily send cap** and channels. Targeting (titles/industries/geos/keywords) drives discovery — weak targeting = weak prospects, so invest here first.\n\n## Clone, archive or delete a campaign\n\nThe buttons are in the campaign's header and on its row on the Campaigns page. On a phone they are under **More**.\n\n- **Clone** copies the campaign's setup (targeting, sources, copy, cadence, caps and autonomy mode) into a new draft named "Copy of" plus the old name. It copies no people, and nothing runs until you activate the copy.\n- **Archive** takes a campaign out of the list without deleting it. An active campaign is paused as it is archived, so nothing more is sent from it. Its people, steps and replies are kept. Press **Archived** on the Campaigns page to see archived campaigns. **Unarchive** puts one back in the list as it was; it is not activated for you.\n- **Delete** is for admins and cannot be undone. Unsent steps are stopped and the people still in the campaign are freed to join another. Use Archive unless you mean it.\n\nThere is no button that marks a campaign completed. When every prospect in a campaign has finished, its owner gets a notice that it "has finished its sequences". Archive it when you are done with it.`,
   },
   {
     slug: "sdr-morning-routine",
@@ -699,7 +835,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["playbook", "pipeline", "review"],
     pageKey: "pipeline",
-    bodyMarkdown: `Once a week, step back. Open **Deals** (Win deals — use the Forecast view) and **Email Analytics**: Which sequences/steps get opens and replies? Which stages are stalling (check **Pipeline Alerts**)? Re-rank your prospecting: double down on the ICP slices and sequences that produce meetings, and retire the ones that don't. Update your ARE campaign's fit gate/targeting based on what actually converted. Archive dead prospects so your lists stay clean. A 20-minute weekly review compounds.`,
+    bodyMarkdown: `Once a week, step back. Open **Sales Pipeline** (sidebar: *CRM*; switch from **Board** to **Forecast**), the **Forecast** page (*Analytics → Forecast*) and **Email Analytics** (find it with Search or in **Library — all tools**): Which sequences/steps get opens and replies? Which stages are stalling (check the alerts strip above the deal board)? Re-rank your prospecting: double down on the ICP slices and sequences that produce meetings, and retire the ones that don't. Update your ARE campaign's fit gate/targeting based on what actually converted. Archive dead prospects so your lists stay clean. A 20-minute weekly review compounds.`,
   },
 
   /* ── Prospecting: LinkedIn enrichment + social outreach ─────────────────── */
@@ -710,7 +846,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Enrich prospects from LinkedIn compliantly, review uncertain matches, and catch job changes.",
     readingTimeMinutes: 3,
     tags: ["prospecting", "linkedin", "enrichment", "job-change"],
-    bodyMarkdown: `**LinkedIn enrichment** fills a prospect's title, company, location, and profile photo from their LinkedIn profile — via your own connected LinkedIn account (compliant API access, never scraping). Run it from any prospect (**Enrich**), from the People table's row action, or in bulk from the selection toolbar. Lookups are capped per LinkedIn account per day, so large batches run as jobs and continue after the cap resets.\n\nWhen a profile match is uncertain, the prospect lands in the **review queue** at **Data Enrichment → LinkedIn enrichment** — open each item, compare the found profile against your record, and apply or skip. Conflicts (the profile disagrees with your data) wait for your call.\n\nEnrichment also powers **Job change alerts** (Data Enrichment → Job change alerts): when a re-check detects a prospect moved companies or changed title, it's flagged in the feed, and the **Job Change Autopilot** (Off / Approve / Auto) can create a re-engagement task automatically — job changes are the warmest reason to reach back out.`,
+    pageKey: "data-enrichment",
+    bodyMarkdown: `**LinkedIn enrichment** fills a prospect's title, company, location, and profile photo from their LinkedIn profile — via your own connected LinkedIn account (compliant API access, never scraping). Run it from any prospect (**Enrich**), from the People table's row action, or in bulk from the selection toolbar. Lookups are capped per LinkedIn account per day, so large batches run as jobs and continue after the cap resets.\n\nWhen a profile match is uncertain, the prospect lands in the **review queue** on the **LinkedIn enrichment** page. Open it from Data Enrichment with **Automate Enrichment → Import LinkedIn URLs**, or from People with **Import → Enrich from LinkedIn**. Open each item, compare the found profile against your record, and apply or skip. The same page imports a list of profile URLs (see "Import LinkedIn profile URLs"). Conflicts (the profile disagrees with your data) wait for your call.\n\nEnrichment also powers **Job change alerts** (Data Enrichment → Job change alerts): when a re-check detects a prospect moved companies or changed title, it's flagged in the feed, and the **Job Change Autopilot** (Off / Approve / Auto) can create a re-engagement task automatically — job changes are the warmest reason to reach back out.`,
   },
   {
     slug: "linkedin-social-outreach",
@@ -720,18 +857,21 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["prospecting", "linkedin", "social", "outreach"],
     pageKey: "social",
-    bodyMarkdown: `Velocity runs a full LinkedIn motion through each rep's **own** connected account (see *My LinkedIn* / Connected Accounts):\n\n1. **Search & import** — on **Find Prospects**, the *LinkedIn search* card queries LinkedIn (and Sales Navigator where available) and imports results as prospects.\n2. **Connection invites** — the **Social Autopilot** (Autonomy Control Center) sends invites to un-invited leads on a safe hourly cadence with a hard daily cap per workspace.\n3. **Pre-invite warming** — before inviting, the autopilot can engage a prospect's latest post (a like) so your name isn't cold.\n4. **Accept → opener DM** — when someone accepts, an AI opener DM goes out from your account (Approve or Auto, your choice).\n5. **Replies** — inbound DMs land in **Inbox → LinkedIn & social**. Only DMs from people *we* messaged or invited first are treated as replies: those get AI-classified, and a "willing to meet" one from someone we actually messaged can automatically receive your booking link. Everything else — cold pitches, recruiters, strangers — is still listed under the **Not our outreach** filter, but is never classified, never counted and never answered automatically.\n\nThe **Social** page's *Network* tab shows pending invitations and connections, plus post tools (compose, like, comment) for manual engagement. Track the whole funnel — invites → accepts → replies → meetings — in **Analytics**.`,
+    bodyMarkdown: `Velocity runs a full LinkedIn motion through each rep's **own** connected account (Settings → Social accounts):\n\n1. **Search & import** — on **Find Prospects**, the *LinkedIn search* card queries LinkedIn (and Sales Navigator where available) and imports results as prospects.\n2. **Connection invites** — the **Social Autopilot** (Autonomy Control Center) sends invites to un-invited leads on a safe hourly cadence with a hard daily cap per workspace.\n3. **Pre-invite warming** — before inviting, the autopilot can engage a prospect's latest post (a like) so your name isn't cold.\n4. **Accept → opener DM** — when someone accepts, an AI opener DM goes out from your account (Approve or Auto, your choice).\n5. **Replies** — inbound DMs land in **Inbox → LinkedIn & social**. Only DMs from people *we* messaged or invited first are treated as replies: those get AI-classified, and a "willing to meet" one from someone we actually messaged can automatically receive your booking link. Everything else — cold pitches, recruiters, strangers — is still listed under the **Not our outreach** filter, but is never classified, never counted and never answered automatically.\n\nThe **Social** page's *Network* tab shows pending invitations and connections, plus post tools (compose, like, comment) for manual engagement. Track the whole funnel — invites → accepts → replies → meetings — in **Analytics**.`,
   },
 
   /* ── Sequences & Email: conversations autopilot + sending prefs ─────────── */
   {
     slug: "conversations-autopilot",
     categorySlug: "sequences-email",
-    title: "Conversations & the reply Autopilot",
-    summary: "Every inbound reply, AI-classified and acted on — email, social, and agent calls in one place.",
+    // 2026-11-15: the Conversations page was folded into /v2/inbox on 2026-11-07
+    // (lib/retiredRoutes). Slug kept; the article now says where the job is done.
+    title: "Replies and the reply Autopilot",
+    summary: "Every inbound reply, classified and acted on, on the Inbox's Replies tab.",
     readingTimeMinutes: 3,
-    tags: ["conversations", "autopilot", "replies", "ai"],
-    bodyMarkdown: `**Conversations** (Engage) is where inbound replies get handled. Three channels sit in the header toggle: **Email** (sequence replies), **Social** (LinkedIn DMs), and **Calls** (AI voice-agent phone calls with transcripts).\n\nThe **reply Autopilot** classifies each inbound reply into one of eight classes (willing to meet, needs info, objection, not interested, unsubscribe, out-of-office, wrong person, other) and acts per class. Modes: **Off** (you do everything), **Approve** (AI classifies and suggests; you apply), **Auto** (AI classifies *and* acts). The flagship autonomous move: a **"willing to meet"** reply automatically sends your self-serve **booking link** — on email, and on social where we messaged that person first — so the prospect books a real calendar slot with zero back-and-forth. Social is scoped on purpose: a LinkedIn DM only counts as a reply (and only gets an automatic answer) when we opened the conversation, so a stranger's cold pitch is listed under **Not our outreach** rather than acted on.\n\nUnsubscribes are suppressed automatically. Out-of-offices genuinely pause and resume: the sequence stops, and the enrollment is scheduled to restart on the return date the auto-reply states (7 days later when it states none, capped at 90). The 5-minute sequence tick wakes it and carries on from the next unsent step — nothing is re-sent. A real reply from that person before then cancels the restart, and after three consecutive out-of-offices we stop probing. Every handled reply is marked on the thread. Use **Classify with AI** to catch up a backlog. Watch the stat cards (unhandled / willing to meet / meetings from replies) to see the loop closing.`,
+    tags: ["conversations", "autopilot", "replies", "ai", "inbox"],
+    pageKey: "inbox",
+    bodyMarkdown: `Inbound replies are handled on **Inbox → Replies**. The separate Conversations page was folded into the Inbox on November 7, 2026, and its old link opens this tab. Email replies are on **Replies**, LinkedIn DMs on **LinkedIn & social**, and AI voice-agent calls with transcripts on **Calls**.\n\nThe **reply Autopilot** classifies each inbound reply into one of eight classes (willing to meet, follow-up question, referral, out of office, left the company or wrong person, not interested, unsubscribe, other) and acts per class. Set it with the **Autopilot** dropdown at the top of the Replies tab (admins only): **Autopilot: Off** (you do everything), **Autopilot: Approve** (AI classifies and suggests; you apply), **Autopilot: Autonomous** (AI classifies *and* acts). The same dial is on the Autonomy Center as Conversation. The flagship autonomous move: a **"willing to meet"** reply automatically sends your self-serve **booking link** — on email, and on social where we messaged that person first — so the prospect books a real calendar slot with zero back-and-forth. Social is scoped on purpose: a LinkedIn DM only counts as a reply (and only gets an automatic answer) when we opened the conversation, so a stranger's cold pitch is listed under **Not our outreach** rather than acted on.\n\nUnsubscribes are suppressed automatically. Out-of-offices genuinely pause and resume: the sequence stops, and the enrollment is scheduled to restart on the return date the auto-reply states (7 days later when it states none, capped at 90). The 5-minute sequence tick wakes it and carries on from the next unsent step — nothing is re-sent. A real reply from that person before then cancels the restart, and after three consecutive out-of-offices we stop probing. Every handled reply is marked on the thread. Use **Classify with AI** to catch up a backlog. Watch the stat cards (unhandled / willing to meet / meetings from replies) to see the loop closing.`,
   },
   {
     slug: "email-sending-preferences",
@@ -740,6 +880,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Open/click tracking, one-click unsubscribe headers, and the sequence opt-out footer.",
     readingTimeMinutes: 2,
     tags: ["email", "deliverability", "compliance", "unsubscribe"],
+    pageKey: "email-suppressions",
     bodyMarkdown: `Workspace-wide sending preferences live in **Settings → Profile → Email settings** (admins only):\n\n- **Open tracking / Click tracking** — toggles the tracking pixel and wrapped links on sequence sends. Turn either off and sends go out clean.\n- **One-click unsubscribe headers** — adds RFC 8058 List-Unsubscribe headers so Gmail/Outlook show their native unsubscribe button. Recommended for high-volume senders; unsubscribes land in the suppression list automatically.\n- **Sequence opt-out message** — appends a footer after your signature in sequence emails. Write the message and mark the clickable words with \`<%\` and \`%>\` — e.g. *If you don't want to hear from me, you can <%unsubscribe here%>.* The bracket becomes a real one-click unsubscribe link tied to that recipient.\n\nEvery send already respects the **suppression list** (unsubscribes + verified bounces) and per-mailbox daily caps regardless of these settings. Your per-mailbox signature and limits are set in the Mailboxes wizard, not here.`,
   },
 
@@ -751,6 +892,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "A public scheduling page that books straight into your calendar.",
     readingTimeMinutes: 3,
     tags: ["meetings", "booking", "calendar"],
+    // The booking link is set on Meetings; its open slots come from this calendar.
+    pageKey: "calendar",
     bodyMarkdown: `Your **booking link** is a public page (velocity → /b/your-slug) where a prospect picks a time that books a **real calendar event** with you — no email ping-pong. Find and share it from **Meetings** (the booking card): copy the link, set your **availability** (working hours, days, timezone — slots respect them and daylight saving), and it's live.\n\nBookings create the calendar invite via your connected calendar, notify you in-app, and log the booker as an inbound lead with the meeting on their timeline. Double-booking is prevented against your existing events.\n\nTwo places it works automatically: the \`{{bookingLink}}\` merge field drops your link into any sequence email, and the **reply Autopilot** in Auto mode sends it when a prospect replies "happy to chat" (email or LinkedIn), inside the workspace's send window: someone who writes in at night gets it when the window opens. A time booked through your link counts as a booked meeting straight away, because the prospect chose it. Pair it with **meeting reminders** (sent automatically before the call) to cut no-shows.`,
   },
   {
@@ -760,6 +903,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "AI proposes and books meetings; reminders and no-show rebounds run themselves.",
     readingTimeMinutes: 3,
     tags: ["meetings", "autopilot", "reminders", "no-show"],
+    pageKey: "meetings",
     bodyMarkdown: `The **Meeting Autopilot** (Autonomy Control Center, Off / Approve / Autonomous) turns positive replies into meetings: it proposes times between 9:00 and 16:00 in your workspace time zone with a drafted invite. In **Approve** you edit anything you want and **Approve & send** emails the prospect the offered times as links; in **Autonomous** each new proposal is emailed as soon as it is drafted. Nothing goes on your calendar until the prospect confirms a time, and then it is booked on your connected calendar with them invited. A confirmed time never double-books you or overfills a day, and only a confirmed meeting counts as booked. Autonomous sends only inside the workspace's send window; **Approve & send** sends the moment you click it. Who an invite comes from, its Teams link, the times it offers and what is checked when it sends are in "Meeting invites: who sends them, the link, and when it counts as booked".\n\nAround every booked meeting:\n\n- **Reminders** — once the prospect has **accepted**, they get an automatic reminder email in the day before the meeting, with join and reschedule links, sent inside the send window. An invite nobody has answered gets no reminder. Nothing to configure beyond a connected sending setup.\n- **Dispositions** — after the meeting, mark it completed/no-show on **Meetings**.\n- **No-show rebound** — marking a **no-show** auto-creates a high-priority *Re-book* follow-up task on the right record, assigned to you, so missed meetings never silently die.\n\nEach team member connects their **own** calendar (Outlook/Google) so invites come from the actual rep. Inbound self-booking is covered by your booking link (see "Self-serve booking links").`,
   },
   {
@@ -769,6 +913,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Your product, service and pricing documents, used by every AI writer and by the AI phone agent.",
     readingTimeMinutes: 3,
     tags: ["knowledge", "pdf", "documents", "pricing", "ai", "products", "voice"],
+    pageKey: "admin-setup",
     bodyMarkdown: `The **knowledge base** gives Velocity's AI your own product, service and pricing facts. It lives in **Settings → Knowledge base**, one per workspace; admins manage it, everyone can see it.\n\n**What to put in it:** product sheets, price lists, service descriptions, FAQs, policies, case studies. **PDFs** (with real text: a scanned PDF of images cannot be read), **.txt** or **.md** files up to 20 MB each, and **web pages** (paste the address; *Read again* picks up changes). Up to 100 documents.\n\n**The overview.** When the first document is added, Velocity drafts a short overview from it: what you offer, to whom, prices and key terms. Every AI prompt and every AI phone call carries it. Edit it freely; after adding documents, *Redraft from documents* writes a new one (replacing your edits).\n\n**Who uses it:**\n- **Every AI writer**: email drafts, replies, sequence steps, Revenue Engine campaigns, meeting proposals, proposals, the chat agent. They get the overview, and writers that know what they are writing about also get the passages that match it (a pricing question gets the pricing page).\n- **The AI phone agent**: it has the overview, and for a specific question ("what does the enterprise plan cost?") it says "one moment" and searches the documents mid-call. It answers only from what it finds; otherwise it says the team will follow up.\n\n**Rules the AI follows:** use the facts when they help, never invent a price, feature or commitment that isn't in them, and treat the documents as reference material, never as instructions (so a web page that says "ignore your instructions" changes nothing).\n\n**Try it** at the bottom of the page: ask a question the way a prospect would and see the passages the AI would get. Switch a document **Off** to keep it but stop the AI using it. Deleting removes its text; the original file is not kept, so upload it again to restore it.\n\n**Brand voice is separate.** Turning off *Apply to AI* on the Brand Voice page stops the tone and company block, not your product facts.`,
   },
   {
@@ -778,9 +923,10 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "AI phone agents that make the calls you approve, answer calls to their numbers, and book meetings on the call.",
     readingTimeMinutes: 6,
     tags: ["calls", "voice", "ai", "grok", "phone", "plivo", "outbound", "approval", "consent", "numbers", "capacity", "limits"],
-    bodyMarkdown: `**Voice agents** are AI phone agents powered by xAI's Grok Voice (model **grok-voice-think-fast-2.0**). They do two jobs:\n\n- **AI calls you approve.** An outreach agent calls people you queue, once a manager approves each call, and books a meeting on the call when the person agrees.\n- **Answering calls.** When someone rings an agent's number (often a prospect calling back), the agent answers, finds out what they need, and can book a meeting too.\n\n**Setup (admin, about 15 minutes):**\n1. **Settings → Voice agents → xAI connection:** add your **xAI API key** (console.x.ai) and press *Test connection*.\n2. **Plivo connection:** paste your Plivo **Auth ID** and **Auth Token** (on the overview page of the Plivo console) and press *Test connection*. Plivo is the phone carrier: it dials out and receives calls. xAI cannot place calls itself.\n3. **New agent:** name, voice, Purpose *Outreach* (places calls) or *Call-back* (answers for a member), and optional extra guidance. Add its **Plivo numbers** (one or more; the first is its main number): Velocity points each number at itself when you save, so there is nothing to set up in Plivo's console.\n\n**What the agent knows.** Your company facts and brand voice (Settings → Branding, Brand Voice), the knowledge base overview, and on request the passages from your documents (see "The knowledge base"). When it calls someone in People, or a caller's number matches a contact, lead or person (on a Plivo or an xAI number), it is also told what your team already knows about them: the latest emails both ways, their deal and stage, meetings, earlier AI calls and the Revenue Engine's research. It uses that to be relevant and never reads it out.\n\n**What the agent always does.** Its first sentence says its name, that it is an **AI assistant**, who it is calling for, and that the **call is transcribed**. Your extra guidance is added after that and cannot remove it. It never claims to be human, keeps turns short, and lets the person interrupt.\n\n**How an outreach call goes.** After the opening, the agent gives a one-sentence reason for calling that is about them (your team's notes, their research and history, or their role and company), asks two to four open questions one at a time with follow-ups, connects what they say to what you offer (from your knowledge base, in outcomes, not features), and only then suggests a meeting. Add **Discovery questions** on the agent (one per line) for questions you want worked in. Each call's log shows how long the person waited for replies (typical and slowest).\n\n**Test call.** On an outreach agent, admins can press **Test call**: the agent calls the number you give right away, even outside calling hours and without the approval queue. It treats you as the person called (your name and email), so if you agree to a meeting it emails you a link to confirm the time; confirming books it on the owner's calendar and invites you. Only call your own phone; up to 10 a day; the call shows as *Test* in the call log. Pick a person under **Play the part of** to hear the call as it would go to them (their role, company, research and history), while it still rings you, invites your email and writes nothing to their record.
+    pageKey: "calls",
+    bodyMarkdown: `**Voice agents** are AI phone agents powered by xAI's Grok Voice (model **grok-voice-think-fast-2.0**). They do two jobs:\n\n- **AI calls you approve.** An outreach agent calls people you queue, once a manager approves each call, and books a meeting on the call when the person agrees.\n- **Answering calls.** When someone rings an agent's number (often a prospect calling back), the agent answers, finds out what they need, and can book a meeting too.\n\n**Setup (admin, about 15 minutes):**\n1. **Settings → Voice agents and numbers → xAI connection:** add your **xAI API key** (console.x.ai) and press *Test connection*.\n2. **Plivo connection:** paste your Plivo **Auth ID** and **Auth Token** (on the overview page of the Plivo console) and press *Test connection*. Plivo is the phone carrier: it dials out and receives calls. xAI cannot place calls itself.\n3. **New agent:** name, voice, Purpose *Outreach* (places calls) or *Call-back* (answers for a member), and optional extra guidance. Add its **Plivo numbers** (one or more; the first is its main number): Velocity points each number at itself when you save, so there is nothing to set up in Plivo's console.\n\n**What the agent knows.** Your company facts and brand voice (Settings → Branding, Brand Voice), the knowledge base overview, and on request the passages from your documents (see "The knowledge base"). When it calls someone in People, or a caller's number matches a contact, lead or person (on a Plivo or an xAI number), it is also told what your team already knows about them: the latest emails both ways, their deal and stage, meetings, earlier AI calls and the Revenue Engine's research. It uses that to be relevant and never reads it out.\n\n**What the agent always does.** Its first sentence says its name, that it is an **AI assistant**, who it is calling for, and that the **call is transcribed**. Your extra guidance is added after that and cannot remove it. It never claims to be human, keeps turns short, and lets the person interrupt.\n\n**How an outreach call goes.** After the opening, the agent gives a one-sentence reason for calling that is about them (your team's notes, their research and history, or their role and company), asks two to four open questions one at a time with follow-ups, connects what they say to what you offer (from your knowledge base, in outcomes, not features), and only then suggests a meeting. Add **Discovery questions** on the agent (one per line) for questions you want worked in. Each call's log shows how long the person waited for replies (typical and slowest).\n\n**Test call.** On an outreach agent, admins can press **Test call**: the agent calls the number you give right away, even outside calling hours and without the approval queue. It treats you as the person called (your name and email), so if you agree to a meeting it emails you a link to confirm the time; confirming books it on the owner's calendar and invites you. Only call your own phone; up to 10 a day; the call shows as *Test* in the call log. Pick a person under **Play the part of** to hear the call as it would go to them (their role, company, research and history), while it still rings you, invites your email and writes nothing to their record.
 
-**Making AI calls:**\n1. **Queue:** in **People**, select one or more people and choose **Queue AI call**. Pick the agent and, if you like, notes for the agent. People without a North American number, on the do-not-call list, or already queued are skipped (the message says why).\n2. **Approve:** on the **Calls** page, *AI calls → To approve*, a manager or admin approves calls one at a time or in a batch. Approving asks you to confirm that the people agreed to receive AI calls: US law treats an AI voice as an "artificial voice", which needs prior consent for calls to mobiles. Velocity records who confirmed and when.\n3. **Dial:** approved calls dial on their own, but only **9 AM–5 PM on weekdays in the person's time zone** (from their state; the workspace's zone when unknown), never while **AI calls are paused** (Settings → Voice agents: their own switch, separate from Pause all outbound, which holds email), within the workspace's **calling capacity** (by default 2 new calls a minute and 3 at once), and up to 100 a day per number. The *Approved* tab shows why a call is waiting.\n\n**Making more calls.** Two things set how many calls a workspace makes:\n- **Numbers.** Each number places up to 100 calls a day (carriers flag a busy new number as spam), so give your outreach agents more numbers: buy them in your Plivo console, then add them on the agent (*Edit → Plivo numbers*). Calls take turns across an agent's numbers: someone called before gets the same number again (a second call from a new number looks like spam, and their call back reaches the same agent), otherwise a number with their area code, otherwise the least used. A call to any of the numbers is answered by that agent. A number belongs to one agent; adding it to another moves it. You can also run several outreach agents (different voices or scripts), each with its own numbers, and pick one when you queue calls.\n- **Calling capacity** (Settings → Voice agents, admins): calls at once (default 3, up to 10), new calls a minute (default 2, up to 10) and agent minutes a day (default 240, up to 1,500). The card shows how many calls a day your numbers allow and roughly what the minutes cost. Every change is recorded in the audit log.\n\nRegister each new number against spam labels (for example the Free Caller Registry and Hiya) before using it; Plivo's own account limits also apply.\n\n**On the call.** The agent waits for the person to say hello. If they agree to meet, it offers two or three open times from the owner's calendar (the same rules as emailed proposals: 9:00–16:00, at most 3 meetings a day, nothing already booked), confirms the email address (spelling back a new one), and emails them a link to **confirm that time**. Nothing goes on the calendar until they open it and press Confirm; then the calendar invite follows and the meeting counts as booked (see "Meeting invites"). If they pick a different time later in the call, a fresh link replaces the first. If they ask not to be called again, the number goes on the **do-not-call list** and every pending call to it is skipped. Voicemail is detected and the call ends: the agent does not leave messages.\n\n**Afterwards:** the transcript and result (meeting booked, not interested, call back later, wrong person, asked not to be called) appear on the Calls page, on the person's timeline, and in a notification to the owner. A booked meeting shows on the Meetings page.\n\n**Limits that protect your balance.** Every answered minute is billed to your xAI key ($0.08 a minute) and your Plivo account (about a cent). Per workspace, by default: at most 3 calls at once and 240 agent minutes in any 24 hours (an admin can raise these under *Calling capacity*, never past 10 at once and 1,500 minutes), and always 30 minutes per call (Plivo itself cuts outbound calls at 20). A call over a limit is not answered and shows as failed with the reason. If Velocity loses track of a call, for example during an update, a sweep hangs it up within minutes.\n\n**xAI phone numbers (optional).** A number registered in xAI's own console can still route calls to an agent through the webhook shown in Settings; paste the signing secret xAI shows you into the agent, or its calls are rejected. Plivo numbers need none of this.`,
+**Making AI calls:**\n1. **Queue:** in **People**, select one or more people and choose **Queue AI call**. Pick the agent and, if you like, notes for the agent. People without a North American number, on the do-not-call list, or already queued are skipped (the message says why).\n2. **Approve:** on the **Calls** page, *AI calls → To approve*, a manager or admin approves calls one at a time or in a batch. Approving asks you to confirm that the people agreed to receive AI calls: US law treats an AI voice as an "artificial voice", which needs prior consent for calls to mobiles. Velocity records who confirmed and when.\n3. **Dial:** approved calls dial on their own, but only **9 AM–5 PM on weekdays in the person's time zone** (from their state; the workspace's zone when unknown), never while **AI calls are paused** (Settings → Voice agents and numbers: their own switch, separate from Pause all outbound, which holds email), within the workspace's **calling capacity** (by default 2 new calls a minute and 3 at once), and up to 100 a day per number. The *Approved* tab shows why a call is waiting.\n\n**Making more calls.** Two things set how many calls a workspace makes:\n- **Numbers.** Each number places up to 100 calls a day (carriers flag a busy new number as spam), so give your outreach agents more numbers: buy them in your Plivo console, then add them on the agent (*Edit → Plivo numbers*). Calls take turns across an agent's numbers: someone called before gets the same number again (a second call from a new number looks like spam, and their call back reaches the same agent), otherwise a number with their area code, otherwise the least used. A call to any of the numbers is answered by that agent. A number belongs to one agent; adding it to another moves it. You can also run several outreach agents (different voices or scripts), each with its own numbers, and pick one when you queue calls.\n- **Calling capacity** (Settings → Voice agents and numbers, admins): calls at once (default 3, up to 10), new calls a minute (default 2, up to 10) and agent minutes a day (default 240, up to 1,500). The card shows how many calls a day your numbers allow and roughly what the minutes cost. Every change is recorded in the audit log.\n\nRegister each new number against spam labels (for example the Free Caller Registry and Hiya) before using it; Plivo's own account limits also apply.\n\n**On the call.** The agent waits for the person to say hello. If they agree to meet, it offers two or three open times from the owner's calendar (the same rules as emailed proposals: 9:00–16:00, at most 3 meetings a day, nothing already booked), confirms the email address (spelling back a new one), and emails them a link to **confirm that time**. Nothing goes on the calendar until they open it and press Confirm; then the calendar invite follows and the meeting counts as booked (see "Meeting invites"). If they pick a different time later in the call, a fresh link replaces the first. If they ask not to be called again, the number goes on the **do-not-call list** and every pending call to it is skipped. Voicemail is detected and the call ends: the agent does not leave messages.\n\n**Afterwards:** the transcript and result (meeting booked, not interested, call back later, wrong person, asked not to be called) appear on the Calls page, on the person's timeline, and in a notification to the owner. A booked meeting shows on the Meetings page.\n\n**Limits that protect your balance.** Every answered minute is billed to your xAI key ($0.08 a minute) and your Plivo account (about a cent). Per workspace, by default: at most 3 calls at once and 240 agent minutes in any 24 hours (an admin can raise these under *Calling capacity*, never past 10 at once and 1,500 minutes), and always 30 minutes per call (Plivo itself cuts outbound calls at 20). A call over a limit is not answered and shows as failed with the reason. If Velocity loses track of a call, for example during an update, a sweep hangs it up within minutes.\n\n**xAI phone numbers (optional).** A number registered in xAI's own console can still route calls to an agent through the webhook shown in Settings; paste the signing secret xAI shows you into the agent, or its calls are rejected. Plivo numbers need none of this.`,
   },
   {
     slug: "calls-page",
@@ -789,7 +935,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "AI calls to approve and their results, the voice-agent call log, and your call-task queue.",
     readingTimeMinutes: 2,
     tags: ["calls", "tasks", "voice"],
-    bodyMarkdown: `**Calls** (Engage) has three parts:\n\n1. **AI calls** — calls queued from People for an AI agent. *To approve* is where a manager approves them (one or many, confirming consent); *Approved* shows calls waiting to dial and why (calling hours, pause, limits); *Done* shows each result, including meetings booked. See "AI voice agents (Grok)".\n2. **AI voice agents** — each configured agent, its number, and the **agent call log**: every call in and out with status, duration and — click a row — the full **transcript**.\n3. **Your call queue** — every task of type *call* across your records, sorted by due date, with overdue/due-today counters. Check one off and log the outcome on the record; schedule new call tasks from any contact, lead, or account.\n\nManage agents (voices, guidance, numbers) via **Manage agents**, which opens Settings → Voice agents.`,
+    pageKey: "calls",
+    bodyMarkdown: `**Calls** (sidebar: *Dialer → Calls*) has three parts:\n\n1. **AI calls** — calls queued from People for an AI agent. *To approve* is where a manager approves them (one or many, confirming consent); *Approved* shows calls waiting to dial and why (calling hours, pause, limits); *Done* shows each result, including meetings booked. See "AI voice agents (Grok)".\n2. **AI voice agents** — each configured agent, its number, and the **agent call log**: every call in and out with status, duration and — click a row — the full **transcript**.\n3. **Your call queue** — every task of type *call* across your records, sorted by due date, with overdue/due-today counters. Check one off and log the outcome on the record; schedule new call tasks from any contact, lead, or account.\n\nManage agents (voices, guidance, numbers) via **Manage agents**, which opens Settings → Voice agents and numbers.`,
   },
 
   /* ── Autopilots & Automation ─────────────────────────────────────────────── */
@@ -801,7 +948,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["autopilot", "automation", "ai", "autonomy"],
     pageKey: "workflows",
-    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center** (sidebar → Automation and analytics), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes meetings with times and a drafted invite; in Approve you edit and approve each, in Autonomous each new invite is sent as soon as it is drafted (inside the send window).\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
+    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center**, and each surface also shows its own toggle. The Autonomy Center has no row in the sidebar sections: click **Search…** at the top of the sidebar (Ctrl+K) and type Autonomy, or open **Library — all tools** and find it under Daily. Only admins can change a dial.\n\nThe page groups the autopilots by what they do when they act: **Sends to people**, **Spends credits** and **Changes records**. **All: Approve** sets every one at once, after a confirm.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes meetings with times and a drafted invite; in Approve you edit and approve each, in Autonomous each new invite is sent as soon as it is drafted (inside the send window).\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
   },
   {
     slug: "autonomy-map",
@@ -811,7 +958,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["autopilot", "autonomy", "overview", "ai"],
     pageKey: "workflows",
-    bodyMarkdown: `With the autopilots on, everything between *"a name exists"* and *"a meeting is on the calendar"* can run itself.\n\n**Fully autonomous (flip to Auto and walk away):**\n- **ARE engine** — discovers prospects against your ICP, enriches, generates sequences, enrolls, and (in Full mode) sends.\n- **Sequence engine + AI auto-send** — cadence sends through your mailbox rotation pools, with caps, suppression, and auto-pause on reply; high-scoring AI drafts can send themselves.\n- **Conversation Autopilot** — classifies every reply (email + LinkedIn) and acts; a "willing to meet" reply automatically receives your booking link.\n- **Meetings** — the Meeting Autopilot proposes meetings and, in Autonomous, sends the invites itself (in Approve, you approve each); a meeting counts as booked when the prospect accepts; reminders go out on their own; a no-show creates the re-book task; booking links let prospects self-schedule.\n- **Social Autopilot** — LinkedIn invites (capped), pre-invite warming, opener DM on accept.\n- **Task, Deal, and Job-change Autopilots** — next-step tasks, deal nudges, re-engagement on detected company moves.\n- **Voice agents** — inbound call-backs answered by AI on the rep's behalf, transcribed, and logged to the record.\n- **Plumbing** — workflow rules, form-lead routing + funnel bridging, high-intent visitor tasks, enrichment re-checks, segment auto-enrollment, pipeline alerts, mailbox warmup, scheduled report emails.\n\nEvery autopilot defaults to **Off** with an **Approve** middle mode — autonomy is a dial you set in the Autonomy Center, not a switch someone else flipped.\n\n**Human by design:** the enrichment review queue and data conflicts, draft approval in Approve mode, and meeting dispositions.\n\n**Not autonomous (and why):** outbound AI voice calls (the vendor hasn't released the API yet), outbound SMS (no SMS gateway is connected) — both channels are shown disabled wherever campaigns pick channels, accepting inbound LinkedIn invites (no compliant API exists), one-time credentialed setup (mailboxes, LinkedIn, calendars, keys, phone numbers), billing, anonymous website-visitor identification (needs a paid data provider), and — most importantly — your **targeting and strategy**: the machine executes your ICP and sequences; defining them well is still your judgment.`,
+    bodyMarkdown: `With the autopilots on, everything between *"a name exists"* and *"a meeting is on the calendar"* can run itself.\n\n**Fully autonomous (flip to Auto and walk away):**\n- **ARE engine** — discovers prospects against your ICP, enriches, generates sequences, enrolls, and (in Full mode) sends.\n- **Sequence engine + AI auto-send** — cadence sends through your mailbox rotation pools, with caps, suppression, and auto-pause on reply; high-scoring AI drafts can send themselves.\n- **Conversation Autopilot** — classifies every reply (email + LinkedIn) and acts; a "willing to meet" reply automatically receives your booking link.\n- **Meetings** — the Meeting Autopilot proposes meetings and, in Autonomous, sends the invites itself (in Approve, you approve each); a meeting counts as booked when the prospect accepts; reminders go out on their own; a no-show creates the re-book task; booking links let prospects self-schedule.\n- **Social Autopilot** — LinkedIn invites (capped), pre-invite warming, opener DM on accept.\n- **Task, Deal, and Job-change Autopilots** — next-step tasks, deal nudges, re-engagement on detected company moves.\n- **Voice agents** — calls to an agent's number answered by AI, transcribed, and logged to the record. Agents also place outbound calls, but only the ones a manager or admin approved (see below).\n- **Plumbing** — workflow rules, form-lead routing + funnel bridging, high-intent visitor tasks, enrichment re-checks, segment auto-enrollment, pipeline alerts, mailbox warmup, scheduled report emails.\n\nEvery autopilot defaults to **Off** with an **Approve** middle mode — autonomy is a dial you set in the Autonomy Center, not a switch someone else flipped.\n\n**Human by design:** the enrichment review queue and data conflicts, draft approval in Approve mode, and meeting dispositions.\n\n**Not autonomous (and why):** outbound AI phone calls (an agent dials only after a manager or admin approves each call on the Calls page and confirms consent; see "AI voice agents (Grok)"), SMS and phone as campaign channels (no SMS gateway is connected and the engine does not dial, so both are shown disabled where campaigns pick channels), accepting inbound LinkedIn invites (no compliant API exists), one-time credentialed setup (mailboxes, LinkedIn, calendars, keys, phone numbers), billing, anonymous website-visitor identification (needs a paid data provider), and — most importantly — your **targeting and strategy**: the machine executes your ICP and sequences; defining them well is still your judgment.`,
   },
   {
     slug: "workflow-rules",
@@ -821,7 +968,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 2,
     tags: ["workflows", "automation", "rules"],
     pageKey: "workflows",
-    bodyMarkdown: `**Workflow rules** (sidebar → Automation and analytics → Workflow rules) are event-triggered if-this-then-that automations, separate from the AI autopilots (those live in the Autonomy Center). A rule pairs a **trigger** with one or more **actions**.\n\n**Live triggers (six):** *record created* and *record updated* — pick the scope on the rule: **leads, contacts, opportunities, or any**; leads fire from the CRM, web forms, landing pages, booking links, the chat agent and prospect promotion, and a lead conversion fires all three at once. *stage changed* — an opportunity moves, from any of the five places a stage can change: the Kanban, the Alerts page's move control, an approved stage-change request, and either proposal-accept path (so "when a deal is won" covers an accepted proposal). *task overdue* — a task crosses its due date. *signal received* — a buying signal such as a detected job change. *deal stuck* — no movement past your day threshold, checked nightly; its conditions are honoured, so "stuck **and** over $50k" means both.\n\nAccounts are not a trigger scope yet: update field, enroll in sequence and AI email draft have no account handler, so such a rule would fail most of its actions.
+    bodyMarkdown: `**Workflow rules** (click **Search…** at the top of the sidebar and type Workflow Rules, or open **Library — all tools** and find it under Configuration) are event-triggered if-this-then-that automations, separate from the AI autopilots (those live in the Autonomy Center). A rule pairs a **trigger** with one or more **actions**.\n\n**Live triggers (six):** *record created* and *record updated* — pick the scope on the rule: **leads, contacts, opportunities, or any**; leads fire from the CRM, web forms, landing pages, booking links, the chat agent and prospect promotion, and a lead conversion fires all three at once. *stage changed* — an opportunity moves, from any of the five places a stage can change: the Kanban, the Alerts page's move control, an approved stage-change request, and either proposal-accept path (so "when a deal is won" covers an accepted proposal). *task overdue* — a task crosses its due date. *signal received* — a buying signal such as a detected job change. *deal stuck* — no movement past your day threshold, checked nightly; its conditions are honoured, so "stuck **and** over $50k" means both.\n\nAccounts are not a trigger scope yet: update field, enroll in sequence and AI email draft have no account handler, so such a rule would fail most of its actions.
 
 **Conditions follow the record type.** The field list offered is exactly what that event carries: a contact has no *stage*, and a brand-new lead has no *score* — scoring runs after the record is created, so a "new lead with score over 60" rule could never match. Pick the record type first and the condition list follows it. An action the chosen type cannot run — enroll in sequence or AI email draft on an opportunity — is labelled *not supported* rather than silently failing on every fire.\n\n**Actions (eight):** **create task**, **send AI email draft**, **notify user** (in-app), **update field**, **enroll in sequence**, **post to Slack**, **notify Teams**, and call a **webhook**. Conditions let you scope a rule (e.g. only deals over a value, only stage = negotiation).\n\nBulk paths never fire rules — a 5,000-row import, a prospect import or an ARE bulk approval creates records silently, by design, so one import cannot become 5,000 webhooks. There is also a per-minute burst cap per workspace and trigger; a suppressed burst is recorded once in the run history as *skipped*.\n\nUse **Test (sends nothing)** on any rule to see what each of its actions would do, or why one can't run (no Slack webhook set, a URL that isn't http or https) — nothing is posted, created or changed, and the test is recorded in the rule's history. Managers can test, as they can edit. Every real run is recorded there too, with success/failure.`,
   },
@@ -834,6 +981,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Capture inbound interest and route it into the funnel automatically.",
     readingTimeMinutes: 3,
     tags: ["landing-pages", "forms", "inbound", "tracking"],
+    // One article, three pages (forms, landing pages, website visitors); the drawer matches one key.
+    pageKey: "forms",
     bodyMarkdown: `Three inbound tools feed your funnel without manual entry:\n\n- **Landing pages** (admin) — build simple hosted pages in the Landing Pages builder; each publishes at a public /l/your-slug URL with an optional lead-capture form. Submissions become leads instantly.\n- **Web forms** — embeddable forms whose submissions run **autonomous lead routing**: the lead is created, scored, routed to an owner, and **bridged** into the funnel — a company account is found-or-created from the corporate email domain (free-mail domains never become accounts) and a linked prospect is created, ready for sequences. Review the bridge on Data Enrichment → Form enrichment.\n- **Website visitor tracking** — a first-party snippet logs page views on your site. Links to your own site in Velocity's emails carry a signed id for the person they went to (while click tracking is on), so a visit through one is attributed to that person and marked verified; a high-intent visit (pricing, demo pages) then files a follow-up task. An id that was not signed is shown as an unverified claim, since anyone can type one into a link, and files nothing. Anonymous visitor de-anonymization isn't included — Velocity only claims what it can actually see.`,
   },
 
@@ -845,7 +994,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Build, save, and export custom reports on deals, leads, prospects, contacts, and activities.",
     readingTimeMinutes: 3,
     tags: ["reports", "analytics", "export", "csv"],
-    bodyMarkdown: `**Reports** (sidebar → Automation and analytics) is the custom report builder.\n\n1. **Pick an object** — Deals, Leads, Prospects, Contacts, or Activities.\n2. **Choose columns** — check the fields you want; owners resolve to real names.\n3. **Stack filters** — equals / contains / greater-less / empty checks, combined with AND. On Deals, **is won / is lost / is open** read your pipeline's Won/Lost flags instead of a stage name, so the report keeps meaning the right thing after you rename a stage.\n4. **Group (optional)** — group by any column with a row **count**, or a **sum**/**average** of a numeric field (e.g. *deals by stage, sum of value* = your pipeline by stage in one click).\n5. **Sort & cap**, then **Run**.\n\n**Save** keeps the whole spec per workspace (everyone can reuse it; "Save as new" forks a loaded report). **Export CSV** downloads up to 1,000 rows of the current result, and honours the per-member **Export data** permission — off by default for reps and managers, so the button shows for admins and for anyone an admin has granted it. The same permission governs emailing a report (**Send now** and schedules below), because that is the same rows leaving the app. **Run** is deliberately not gated: reading your own numbers on screen stays open to everyone.\n\n**Preset reports** — thirteen ready-made reports (pipeline by stage, deal value by owner, upcoming closes, won/lost deals, lead funnel, lead quality by source, prospects by email status, sendable prospects, activity volume, emails by source, recent campaign emails, failed sends) sit at the top of the rail: one click loads and runs, then customize and save your own variant.\n\n**Charts** — grouped reports render stat tiles (groups, total, top group + share) and a chart above the table: switch between **Bar, Line, Area, Donut, Pie, and Funnel**; your chart choice saves with the report. Flat reports show row/sum tiles and an automatic **rows-per-day trend** whenever a date column is included.\n\n**Email schedules** — the clock icon on any saved report sets a **daily, weekly (Monday), or monthly** email to any recipients. Reports arrive from your workspace's **system sender** (the same address as team invites and notifications) with a chart and the data table inline; **Send now** fires one immediately.\n\nHow it fits with the rest of reporting: **Analytics** is the fixed autonomous-funnel overview, **Dashboards** is widget/chart canvases you arrange — **Reports** is where you answer ad-hoc questions in table form and hand the CSV to whoever asked.`,
+    pageKey: "reports",
+    bodyMarkdown: `**Reports** (sidebar: *Analytics → Reports*) is the custom report builder.\n\n1. **Pick an object** — Deals, Leads, Prospects, Contacts, or Activities.\n2. **Choose columns** — check the fields you want; owners resolve to real names.\n3. **Stack filters** — equals / contains / greater-less / empty checks, combined with AND. On Deals, **is won / is lost / is open** read your pipeline's Won/Lost flags instead of a stage name, so the report keeps meaning the right thing after you rename a stage.\n4. **Group (optional)** — group by any column with a row **count**, or a **sum**/**average** of a numeric field (e.g. *deals by stage, sum of value* = your pipeline by stage in one click).\n5. **Sort & cap**, then **Run**.\n\n**Save** keeps the whole spec per workspace (everyone can reuse it; "Save as new" forks a loaded report). **Export CSV** downloads up to 1,000 rows of the current result, and honours the per-member **Export data** permission — off by default for reps and managers, so the button shows for admins and for anyone an admin has granted it. The same permission governs emailing a report (**Send now** and schedules below), because that is the same rows leaving the app. **Run** is deliberately not gated: reading your own numbers on screen stays open to everyone.\n\n**Preset reports** — thirteen ready-made reports (pipeline by stage, deal value by owner, upcoming closes, won/lost deals, lead funnel, lead quality by source, prospects by email status, sendable prospects, activity volume, emails by source, recent campaign emails, failed sends) sit at the top of the rail: one click loads and runs, then customize and save your own variant.\n\n**Charts** — grouped reports render stat tiles (groups, total, top group + share) and a chart above the table: switch between **Bar, Line, Area, Donut, Pie, and Funnel**; your chart choice saves with the report. Flat reports show row/sum tiles and an automatic **rows-per-day trend** whenever a date column is included.\n\n**Email schedules** — the clock icon on any saved report sets a **daily, weekly (Monday), or monthly** email to any recipients. Reports arrive from your workspace's **system sender** (the same address as team invites and notifications) with a chart and the data table inline; **Send now** fires one immediately.\n\nHow it fits with the rest of reporting: **Analytics** is the fixed autonomous-funnel overview, **Dashboards** is widget/chart canvases you arrange — **Reports** is where you answer ad-hoc questions in table form and hand the CSV to whoever asked.`,
   },
 
   /* ── Settings & Account ──────────────────────────────────────────────────── */
@@ -856,6 +1006,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Ramped warmup sending that builds a new mailbox's sending reputation.",
     readingTimeMinutes: 2,
     tags: ["mailboxes", "warmup", "deliverability"],
+    pageKey: "deliverability",
     bodyMarkdown: `New mailboxes that suddenly send at volume get flagged. **Warmup** builds reputation first: flip the **warmup toggle** on a mailbox in **Settings → Mailboxes** and the engine sends a slowly-growing number of short, ordinary business emails from that mailbox each day — starting at ~2/day and ramping to ~40/day, spread across working hours with natural variation.\n\nWarmup mail goes to your workspace's **other connected mailboxes** (your own pool), carries no tracking, and is automatically excluded from replies/inbox views. The Mailboxes table shows live progress — *Day N · X sent today* — and after the **28-day ramp** the mailbox flips to **Warmed up** on its own. Pause anytime with the toggle.\n\nBeing straight about scope: this builds steady, authenticated sending history between real mailboxes you own. It does not fake engagement on external providers or use a third-party warmup network. Start warmup the day you connect a new mailbox, and let sequences take over once it completes.`,
   },
   {
@@ -865,7 +1016,22 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Profile, appearance, mailboxes, voice agents, and workspace admin in one place.",
     readingTimeMinutes: 2,
     tags: ["settings", "profile", "account"],
-    bodyMarkdown: `All configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*. The old standalone Settings page is gone; every one of its tabs is now a hub section, and old \`/settings\` links land on the matching section automatically. The left rail groups everything:\n\n- **Personal settings** — your **Profile** (name, title, change email/password, multi-factor authentication, email settings), **Appearance** (theme mode + colour palette, personal email signature), and **Mailboxes** (link and configure sending accounts via the guided wizard).\n- **Workspace settings** (admins) — Workspace overview, Users & teams, Security, Notification policy, Integrations (incl. AI provider keys, verification policy, messaging webhooks), **Voice agents**, Data sources, Email delivery (SMTP + email identity), Branding, Proposals, Billing and credits, System activity, Tour builder, and the Danger zone.\n- **Data management** — custom fields, imports & exports, data enrichment, and the enrichment sweep dial.\n\nProfile changes save with the **Save** button top-right; appearance (your colour theme) syncs to your account so it follows you across browsers. Rows that point to a dedicated page (Team, Audit) open it directly — the search box at the top of the rail finds any setting fast. Every workspace section has a **workspace switcher** at the top of the rail, so an admin of several workspaces can change another workspace's settings without leaving the page; the section reloads for the workspace you pick. **Workspace overview** also holds the workspace time zone and the **send window** (see "The send window").`,
+    pageKey: "admin-setup",
+    bodyMarkdown: `All configuration lives in the **Settings hub**. Admins open **Admin Settings** at the bottom of the sidebar and pick **All settings**. The same menu has shortcuts to **Users and Teams**, **Audit Log**, **Security** and **Integrations**. Members who are not admins click **Settings** in the same place. The old standalone Settings page is gone, and old \`/settings\` links land on the matching section.
+
+The left rail groups everything:
+
+- **Personal settings**: **Profile** (name, title, change email or password, multi-factor authentication, email settings), **Appearance** (theme and colour palette), **Email signature**, **Notifications** (your own bell and email switches) and **Social accounts** (LinkedIn and other social connections).
+- **Workspace settings** (admins): Workspace overview, Users and teams, Mailboxes, Voice agents and numbers, Security, Notification policy, Integrations (AI provider keys, messaging webhooks), Knowledge base, Data sources, Email delivery, Branding, Proposals, Billing and credits, Audit log, Tour builder and the Danger zone.
+- **Data management**: Custom fields, Imports and exports, Data enrichment and Enrichment sweep.
+
+**What opens inside Settings.** Since November 8, 2026, **Users and teams**, **Audit log**, **Custom fields** and **Notifications** open inside the hub, like every other section. They used to open as separate pages; their old links still work. Three rows still take you to another page: **Tour builder**, **Imports and exports** and **Data enrichment**.
+
+**Search.** The **Search settings** box at the top of the rail matches section names and common words such as "mfa", "smtp", "webhook" or "signature".
+
+**Switching workspace.** The workspace switcher at the top of the rail lets an admin of several workspaces change another workspace's settings without leaving the page. The section reloads for the workspace you pick.
+
+Profile changes save with the **Save** button. Your colour theme syncs to your account, so it follows you across browsers. **Workspace overview** also holds the workspace time zone, the fiscal calendar and currency, and the **send window** (see "The send window"). To let another workspace use one of this workspace's keys, see "Running multiple workspaces".`,
   },
   {
     slug: "mfa-security",
@@ -876,7 +1042,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["security", "mfa", "2fa", "account"],
     bodyMarkdown: `Velocity supports **TOTP multi-factor authentication** — the standard authenticator-app codes (Google Authenticator, 1Password, Authy…).\n\n**Enable it:** Settings → Profile → **Security** tab → *Authenticator App* → **Set up**. Scan the QR code with your authenticator (or type the key, or use the link on your phone), then confirm with a live 6-digit code. From then on, password sign-ins require your current code. Setup then shows **ten one-time backup codes**: save them, because they are shown once.\n\n**Disable it** from the same tab — you'll need a current code or your password. If you sign in with a linked provider instead of a password, MFA protects the password path specifically.\n\n**It is no longer purely personal.** An admin can require it for the whole workspace under **Settings → Security → Enforce 2FA**. A member who has not connected an authenticator then gets a full-screen "Two-factor authentication required" panel instead of the app, with the setup dialog on it and a Sign out button — nothing else in the workspace loads until they enrol. A **super admin is never blocked** (they are the ones who can switch the policy off), and an admin cannot switch it on until they have connected their own authenticator, so the person flipping it is never the first one locked out. See "Session timeout and the 2FA policy".\n\n**If you lose the phone your codes were on**, choose *Lost your phone? Use a backup code* at sign-in and enter one of your backup codes; each works once. The Security tab shows how many you have left and makes a new set (which replaces the old one). Lost the codes too? Ask an admin to reset your 2FA from the **Team** page, then enrol again. An admin can only reset someone *below* their own role.
 
-**Where you're signed in:** the same tab lists your active sessions (device, address and when) and lets you sign one out, or press **Sign out everywhere** to end every session on every other device.\n\nSMS codes aren't offered (no SMS gateway is connected), and the tab says so honestly. Admins can review sign-in activity under **System activity**. One habit worth keeping: set up MFA the same day you set a password.`,
+**Where you're signed in:** the same tab lists your active sessions (device, address and when) and lets you sign one out, or press **Sign out everywhere** to end every session on every other device.\n\nSMS codes aren't offered (no SMS gateway is connected), and the tab says so honestly. Admins can review sign-in activity under **Settings → Audit log**. One habit worth keeping: set up MFA the same day you set a password.`,
   },
   {
     slug: "security-settings-enforcement",
@@ -885,6 +1051,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "What Settings → Security actually enforces — and the one control that is deliberately still off.",
     readingTimeMinutes: 3,
     tags: ["security", "settings", "sessions", "2fa", "admin"],
+    pageKey: "admin-setup",
     bodyMarkdown: `**Settings → Security** holds three workspace controls. Two of them enforce; one deliberately does not, and says so on the page.\n\n### Session timeout\n\nThis is the **absolute age of a sign-in, not idle time**. Set it to 480 and a member is signed out eight hours after they signed in, however busy they were in between — there is no "keep alive by using the app".\n\nTwo consequences worth knowing before you lower it:\n\n- **It applies at each member's next sign-in.** Anyone already signed in keeps the session they hold until it expires. Lowering the number does not sign the team out; it lands one person at a time as they come back.\n- **It is per workspace, and the strictest one wins.** Someone who belongs to two workspaces gets the shorter of the two lifetimes, so a second membership cannot be used to buy a longer session.\n\nThe range is 15 minutes to 7 days. Every workspace was reset to **7 days** when this began enforcing, because the stored numbers pre-dated any enforcement and were never a deliberate choice — the field had been saving values that nothing read.\n\n### Enforce 2FA\n\nSwitch this on and members without an authenticator app are **blocked from the workspace** until they connect one. They see a full-screen panel with the setup dialog and a Sign out button; no other page loads.\n\nThe guards around it exist so it can never become a one-way lockout:\n\n- **You must connect your own authenticator first.** Saving the switch without one is refused, naming Settings → Profile → Multi-factor authentication. The person who turns it on is therefore never the first one blocked.\n- **A super admin is never blocked**, because a super admin is who turns it back off — and that screen is behind the same check.\n- **The enrolment screens stay reachable** for a blocked member. Nothing else does.\n- **If the database cannot be read, the policy is suspended** rather than locking everybody out of a product that is already having a bad day.\n\nA member who loses their phone has no backup codes: an admin resets their 2FA from the **Team** page. See "Multi-factor authentication".\n\n### IP allowlist — stored, and honestly switched off\n\nThe field saves your list and **nothing acts on it**, which the page states in amber next to the box.\n\nThe reason is infrastructure, not a missing check. Velocity does not yet know how many proxy hops sit in front of it, so it cannot tell the address you are really calling from apart from one a caller simply claims in a header. Enforcing on the wrong hop fails in one of two ways, and both are worse than an honest label: trust the near hop and anyone who sets a header walks in while the page promises protection, or trust the far hop and every member — the admin who would switch it off included — is compared against an internal address that matches nobody.\n\nThe page shows the address **this** request arrived from, and **Team → a member → sign-in history** lists the addresses your team actually signs in from, so the list is ready to author the day that is settled.`,
   },
   {
@@ -894,6 +1061,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Link sending mailboxes and configure signature, limits, and opt-out — step by step.",
     readingTimeMinutes: 3,
     tags: ["mailboxes", "email", "smtp", "deliverability", "settings"],
+    pageKey: "sending-accounts",
     bodyMarkdown: `**Settings → Mailboxes** manages the accounts your sequences send from. Click **Link mailbox** to start the guided wizard:\n\n1. **Link** — pick your provider. *Other (SMTP/IMAP)* connects a single account with a **live Test SMTP** check before saving, or use **Bulk Import via CSV** (sample file provided, up to 100 accounts at once).\n2. **Configure** — three quick modules: **Signature** (used on that mailbox's sends), **Sending limits** (daily cap, hourly cap, delay between emails — the defaults are deliverability-safe), and **Opt-out link** (an unsubscribe footer for that mailbox).\n3. **Finish** — the overview shows a ✓/✗ per module; *Fix Configuration Issues* jumps you to whatever's incomplete.\n\nThe mailbox table shows each account's **setup %**, daily usage against its cap (every send from that mailbox counts toward it — campaigns, sequences, CRM, Inbox and warmup alike), **warmup progress** (see "Mailbox warmup"), deliverability signal, and aliases. The deliverability signal is that mailbox's own reputation, derived from the share of recipients it reached in the last 30 days that went on to bounce — it reads *Not enough data* until the mailbox has reached enough recipients to rate, and *Check deliverability* in the row menu tests the connection rather than recalculating it. Row menu: test the connection, refresh aliases, configure, set default, or unlink. Setup progress matters — a complete configuration (signature + limits + opt-out) is what keeps your mail out of spam folders.`,
   },
   {
@@ -914,6 +1082,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Four roles, one rank rule, and the per-member overrides that sit on top.",
     readingTimeMinutes: 3,
     tags: ["team", "roles", "permissions", "admin"],
+    pageKey: "team",
     bodyMarkdown: `Velocity has four roles, in rank order: **Rep → Manager → Admin → Super admin**. Almost every permission question in the product resolves through that one ranking.\n\n**The rank rule:** you can only act on people *below* you. An admin can change a rep's or a manager's role, deactivate them, or delete them — but not another admin's, and not their own. A super admin is exempt and can act on anyone. This is why an action that works on one teammate is silently unavailable on another: check their role first.\n\n**What each role adds:**\n- **Rep** — their own records, sequences and tasks. Private sequences they own are visible only to them and to managers and above.\n- **Manager** — sees every rep's work unfiltered, plus team-wide reporting.\n- **Admin** — Settings, the Team page, invitations, integrations, mailboxes, workflow rules and the autopilots.\n- **Super admin** — everything above, plus the Danger Zone (see "Archiving, transferring and exporting").\n\n**Per-member overrides.** Six capabilities are settled individually rather than by role, on the **Permissions** tab of the member's row on the Team page. Each switch shows the *effective* answer — what the server would say right now — and an override wins over the role default **in both directions**: it can hand a rep something their role would not give them, and it can refuse an admin something their role would.
 
 | Override | Granted by default for | What it gates |
@@ -938,7 +1107,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Send an invitation, what happens if it expires, and how to resend one.",
     readingTimeMinutes: 3,
     tags: ["team", "invite", "onboarding", "admin"],
-    bodyMarkdown: `**Settings → Team → Invite** adds someone by email and role. They get a link that signs them in and joins them to this workspace at the role you chose.\n\n**Invitations expire.** The default is **7 days**, adjustable on the same page. Two things then happen on their own:\n\n- **A warning email** goes out to anyone whose invitation is inside its last **48 hours**, telling them how long is left and carrying the accept link. It is only recorded as sent if it actually left — a skipped send (no sending account configured yet, for instance) writes nothing, so the activity log never claims a reminder the invitee never got.\n- **A nightly job** marks anything past its date as *Expired*, and the Team page shows a distinct badge for it.\n\n**An expired invitation is not a dead end.** Use **Resend** on the member's row: it issues a fresh token with a new expiry and mails a new link. The person keeps the same seat and role — nothing needs deleting and recreating.\n\n**Accepting.** The link opens a page showing which workspace and role the invite is for, then signs the invitee in. The email on the invitation and the email they sign in with must match — if they do not, the page says which address the invite was sent to rather than silently joining the wrong person. That check is the reason a forwarded invite link cannot be used by whoever received it.\n\n**Setting a password later.** If someone joined through a linked provider and later needs a password, use **Resend password setup**. That issues a token scoped to password setup only — it does not re-run acceptance, and it does not change their role or their existing sign-in method.`,
+    pageKey: "team",
+    bodyMarkdown: `**Settings → Users and teams → Invite** adds someone by email and role. They get a link that signs them in and joins them to this workspace at the role you chose.\n\n**Invitations expire.** The default is **7 days**, adjustable on the same page. Two things then happen on their own:\n\n- **A warning email** goes out to anyone whose invitation is inside its last **48 hours**, telling them how long is left and carrying the accept link. It is only recorded as sent if it actually left — a skipped send (no sending account configured yet, for instance) writes nothing, so the activity log never claims a reminder the invitee never got.\n- **A nightly job** marks anything past its date as *Expired*, and the Team page shows a distinct badge for it.\n\n**An expired invitation is not a dead end.** Use **Resend** on the member's row: it issues a fresh token with a new expiry and mails a new link. The person keeps the same seat and role — nothing needs deleting and recreating.\n\n**Accepting.** The link opens a page showing which workspace and role the invite is for, then signs the invitee in. The email on the invitation and the email they sign in with must match — if they do not, the page says which address the invite was sent to rather than silently joining the wrong person. That check is the reason a forwarded invite link cannot be used by whoever received it.\n\n**Setting a password later.** If someone joined through a linked provider and later needs a password, use **Resend password setup**. That issues a token scoped to password setup only — it does not re-run acceptance, and it does not change their role or their existing sign-in method.`,
   },
   {
     slug: "offboarding-a-teammate",
@@ -947,7 +1117,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "What happens to a leaver's work, exactly what moves, and the one thing reassignment cannot fix.",
     readingTimeMinutes: 5,
     tags: ["team", "offboarding", "deactivate", "reassign", "admin"],
-    bodyMarkdown: `When somebody leaves, **deactivate** them on **Settings → Team**. Deactivation revokes access immediately — their session stops working, they cannot sign in again, and they disappear from assignment pickers — while keeping their history intact for reporting.\n\n**You must name someone to inherit their work.** The picker defaults to you. This is not a formality: their open work would otherwise point at a person who no longer exists in the product, and nothing else in Velocity ever repairs those columns.\n\n**Exactly what moves to the new owner:**\n\n| Moves | Scope |\n|---|---|\n| Leads, opportunities, accounts, contacts | all of them |\n| Campaigns and autonomous (ARE) campaigns | all of them |\n| Sequences they own **and** sequences assigned to them | both columns, they move independently |\n| Unfinished tasks | open work only |\n| Upcoming meetings | future only |\n\n**What deliberately does not move:** completed tasks and past meetings. Reassigning a finished task would rewrite the record of who actually did the work, and that is history rather than a workload.\n\n> ⚠️ **A meeting is not like the others.** Moving an upcoming meeting changes who owns it in Velocity. It does **not** move the calendar event off the leaver's calendar, and it does not recall the invitation already sitting in the attendee's inbox with the leaver's name on it. Velocity therefore clears the meeting's calendar link and its "invite sent" flag when it reassigns one — the new host genuinely does not have it in their calendar yet, and saying otherwise would be the comfortable lie. **Re-send those invites.**\n\n**Deactivate vs delete.** Deactivate is the normal path and is reversible — **Reactivate** restores access. Delete removes the membership row entirely and is not. Both reassign work; both refuse to remove the last super admin or the workspace owner.\n\n**Doing several at once.** Select multiple members and use **Bulk deactivate** — up to 50 at a time, with one inheritor for the batch. It skips anyone it is not allowed to touch (yourself, already-deactivated members, and anyone at or above your rank) and reports how many it skipped rather than failing the whole batch. If the batch would empty the last super-admin seat it refuses outright, before touching anything.`,
+    pageKey: "team",
+    bodyMarkdown: `When somebody leaves, **deactivate** them on **Settings → Users and teams**. Deactivation revokes access immediately — their session stops working, they cannot sign in again, and they disappear from assignment pickers — while keeping their history intact for reporting.\n\n**You must name someone to inherit their work.** The picker defaults to you. This is not a formality: their open work would otherwise point at a person who no longer exists in the product, and nothing else in Velocity ever repairs those columns.\n\n**Exactly what moves to the new owner:**\n\n| Moves | Scope |\n|---|---|\n| Leads, opportunities, accounts, contacts | all of them |\n| Campaigns and autonomous (ARE) campaigns | all of them |\n| Sequences they own **and** sequences assigned to them | both columns, they move independently |\n| Unfinished tasks | open work only |\n| Upcoming meetings | future only |\n\n**What deliberately does not move:** completed tasks and past meetings. Reassigning a finished task would rewrite the record of who actually did the work, and that is history rather than a workload.\n\n> ⚠️ **A meeting is not like the others.** Moving an upcoming meeting changes who owns it in Velocity. It does **not** move the calendar event off the leaver's calendar, and it does not recall the invitation already sitting in the attendee's inbox with the leaver's name on it. Velocity therefore clears the meeting's calendar link and its "invite sent" flag when it reassigns one — the new host genuinely does not have it in their calendar yet, and saying otherwise would be the comfortable lie. **Re-send those invites.**\n\n**Deactivate vs delete.** Deactivate is the normal path and is reversible — **Reactivate** restores access. Delete removes the membership row entirely and is not. Both reassign work; both refuse to remove the last super admin or the workspace owner.\n\n**Doing several at once.** Select multiple members and use **Bulk deactivate** — up to 50 at a time, with one inheritor for the batch. It skips anyone it is not allowed to touch (yourself, already-deactivated members, and anyone at or above your rank) and reports how many it skipped rather than failing the whole batch. If the batch would empty the last super-admin seat it refuses outright, before touching anything.`,
   },
   {
     slug: "notifications-and-alerts",
@@ -956,7 +1127,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Five events, an admin policy, and a personal switch that can only turn things down.",
     readingTimeMinutes: 4,
     tags: ["notifications", "email", "alerts", "settings", "admin"],
-    bodyMarkdown: `Velocity notifies on **five events**, and both the bell and the emails come from the same list:\n\n| Event | In-app | Email |\n|---|---|---|\n| A new lead is routed to me | on | off |\n| A lead becomes Sales-Ready | on | **on** |\n| A deal I own moves stage | on | off |\n| One of my tasks is overdue | on | off |\n| Someone @mentions me | on | **on** |\n\nThose are the **defaults** for a workspace that has never opened the page. All five have a real dispatch site behind them — nothing in that list is a switch that does nothing.\n\n**Two levels, and they are not equal.**\n\n1. **The workspace policy** — *Settings → Notifications*, admin only. This is the ceiling.\n2. **Your own preferences** — on your profile. You can **mute** an event your admin turned on. You cannot turn on one your admin turned off. A personal setting that silently overruled a workspace decision would make the admin panel meaningless.\n\nNever having touched your own page means "follow the workspace" for every event — not "off".\n\n**Each event has two switches — bell and email are separate channels.** Muting the bell for *A deal I own moves stage* keeps its email copy coming (and the other way round), so "in-app but no email" is a real setting. Muting both simply silences the event for you.\n\n**A different address for alerts.** Each member can set a **notification email** on their profile that differs from their sign-in address — useful if you want alerts going to a shared or monitored inbox.\n\n**Two deliberate asymmetries worth knowing**, because they explain surprises in both directions:\n\n- If the stored policy is missing or malformed, **in-app notifications still fire**. A dropped notice is a lead nobody knows arrived; noise is something you can switch off.\n- In the same situation, **email does not send**. Email is a second copy of a notice that has already been written, so silence costs nothing — whereas mailing people from a workspace that never opened the settings page is not recoverable.`,
+    pageKey: "notification-prefs",
+    bodyMarkdown: `Velocity notifies on **five events**, and both the bell and the emails come from the same list:\n\n| Event | In-app | Email |\n|---|---|---|\n| A new lead is routed to me | on | off |\n| A lead becomes Sales-Ready | on | **on** |\n| A deal I own moves stage | on | off |\n| One of my tasks is overdue | on | off |\n| Someone @mentions me | on | **on** |\n\nThose are the **defaults** for a workspace that has never opened the page. All five have a real dispatch site behind them — nothing in that list is a switch that does nothing.\n\n**Two levels, and they are not equal.**\n\n1. **The workspace policy** — *Settings → Notification policy* (under Workspace settings), admin only. This is the ceiling.\n2. **Your own preferences** — *Settings → Notifications* (under Personal settings). The page is titled **Notification Preferences**, and it opens inside Settings. Each event has one switch for the bell and one for email; change them and press **Save preferences**. You can **mute** an event your admin turned on. You cannot turn on one your admin turned off. A personal setting that silently overruled a workspace decision would make the admin panel meaningless.\n\nNever having touched your own page means "follow the workspace" for every event — not "off".\n\n**Each event has two switches — bell and email are separate channels.** Muting the bell for *A deal I own moves stage* keeps its email copy coming (and the other way round), so "in-app but no email" is a real setting. Muting both simply silences the event for you.\n\n**A different address for alerts.** Each member can set a **Notification email** at the top of the same page that differs from their sign-in address — useful if you want alerts going to a shared or monitored inbox.\n\n**Two deliberate asymmetries worth knowing**, because they explain surprises in both directions:\n\n- If the stored policy is missing or malformed, **in-app notifications still fire**. A dropped notice is a lead nobody knows arrived; noise is something you can switch off.\n- In the same situation, **email does not send**. Email is a second copy of a notice that has already been written, so silence costs nothing — whereas mailing people from a workspace that never opened the settings page is not recoverable.`,
   },
   {
     slug: "danger-zone",
@@ -979,9 +1151,9 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
 ## 1. Connect the accounts (Settings)
 
 - **A mailbox or SendGrid** — *Settings → Mailboxes*. Nothing sends without one. If you use SendGrid, press **Test key** and believe it: it verifies both the key and the Mail Send permission.
-- **LinkedIn** — *Settings → Integrations*. Powers profile enrichment, photos, job-change detection and Social outreach, all through the authorized vendor connection with a daily lookup budget (about 100/day).
+- **LinkedIn** — *Settings → Social accounts*. Powers profile enrichment, photos, job-change detection and Social outreach, all through the authorized vendor connection with a daily lookup budget (about 100/day).
 - **Microsoft 365** (if your admin has configured it) — the Connected Accounts card. One connect gets calendar sync, OneDrive files on records, and OneNote.
-- **Verification credits** — *Settings → Data enrichment*: a Reoon key for email verification, and optionally your own QuickEnrich key.
+- **Verification credits** — *Settings → Data sources*: a Reoon key for email verification, and optionally your own QuickEnrich key.
 
 ## 2. Clear the demo, keep your bearings
 
@@ -991,19 +1163,19 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
 
 Three doors, use any or all:
 
-- **Import a CSV** — *Data → Import*. Column mapping is exact-match and refuses duplicates; required fields are enforced per destination, so a bad file fails loudly at mapping time rather than quietly at send time.
-- **Find prospects** — *Data → Find Prospects* searches by role and company shape.
-- **Let a campaign source itself** — an Autonomous Revenue Engine campaign (*Autopilot & AI → ARE Campaigns*) discovers prospects on its own once its queue runs low; pick which sources it may use per campaign under its Settings → Prospect Sources.
+- **Import a CSV** — *Prospecting → Data Enrichment*, the **Import contacts** tab. Column mapping is exact-match and refuses duplicates; required fields are enforced per destination, so a bad file fails loudly at mapping time rather than quietly at send time.
+- **Find prospects** — the **Find prospects** tab of Data Enrichment searches by role and company shape.
+- **Let a campaign source itself** — an Autonomous Revenue Engine campaign (*Outreach → Campaigns*) discovers prospects on its own once its queue runs low; pick which sources it may use on the campaign's **Sources** tab.
 
 ## 4. Enrich and score
 
-Select people on *Data → People* and run **Enrich ▾ → Enrich fully (all sources)**: LinkedIn profile data on file, company-name-to-domain resolution, QuickEnrich, pattern+verification, and a site scrape, reconciled field-by-field with a provenance ledger (the "Data sources" chips in a person's drawer show where each fact came from). Profiles and photos ride an async LinkedIn pass and appear when they land.
+Select people on *CRM → People* and run **Enrich ▾ → Enrich fully (all sources)**: LinkedIn profile data on file, company-name-to-domain resolution, QuickEnrich, pattern+verification, and a site scrape, reconciled field-by-field with a provenance ledger (the "Data sources" chips in a person's drawer show where each fact came from). Profiles and photos ride an async LinkedIn pass and appear when they land.
 
-Then open *Configuration → Lead Scoring*, make sure a fit model is installed and primary, and press **Recalculate** — scores read the enriched company/title/domain fields, so recalculate after any big enrichment wave.
+Then open **Lead Scoring** (click **Search…** at the top of the sidebar and type its name, or find it in **Library — all tools** under Configuration), make sure a fit model is installed and primary, and press **Recompute all** (admins). Scores read the enriched company, title and domain fields, so recompute after any big enrichment wave.
 
 ## 5. Choose your autonomy
 
-*Autopilot & AI → Autonomy Center* is every dial in one place. Each autopilot is **Off / Approve / Auto**:
+The **Autonomy Center** is every dial in one place. Find it with **Search…** (Ctrl+K) or in **Library — all tools**, under Daily. Each autopilot is **Off / Approve / Auto**:
 
 - **Approve** means the work happens and queues for a human — nothing reaches a prospect.
 - **Auto** means it executes unattended.
@@ -1012,9 +1184,9 @@ A sane starting posture: everything that only *does work* (tasks, deals, enrichm
 
 ## 6. Open the inbound doors
 
-- **Your booking link** (*Scheduling → Meetings*) — check the timezone before sharing it; it defaults to UTC.
-- **The chat agent** (*Inbound → Chat Agents*, admin) — write down what it is allowed to know, start it on Approve, read transcripts, then promote it.
-- **Landing pages** (*Inbound → Landing Pages*, admin) — capture forms feed straight into leads and the CRM bridge.
+- **Your booking link** (*Outreach → Meetings*) — check the timezone before sharing it; it defaults to UTC.
+- **The chat agent** (*Prospecting → Chat Agents*, admin) — write down what it is allowed to know, start it on Approve, read transcripts, then promote it.
+- **Landing pages** (*Prospecting → Landing Pages*, admin) — capture forms feed straight into leads and the CRM bridge.
 
 ## 7. Learn the two habits
 
@@ -1037,28 +1209,393 @@ Press **Ctrl+K** anywhere to jump to any tool. And make *Home* your first stop e
    - **Unhandled replies** — a human answer within a day is worth more than any sequence step. Handling a reply also stops the sequence for that person.
    - **Proposed meetings** — confirm times the Meeting Autopilot suggested.
    - **Draft tasks** — accept or dismiss the next-best-actions.
-2. **Glance at Conversations** (*Scheduling → Conversations*) for anything the classifier flagged but could not act on.
-3. **Check today's meetings** (*Scheduling → Meetings*) — prep notes live on the meeting record.
+2. **Glance at Inbox → Replies** for anything the classifier flagged but could not act on.
+3. **Check today's meetings** (*Outreach → Meetings*) — prep notes live on the meeting record.
 
 If the panel is empty, you are done. That is the system working, not something you missed.
 
 ## Weekly — about thirty minutes
 
-- **Performance** (*Autopilot & AI → ARE Performance*): which subject lines and hooks are winning, which A/B variants got promoted, reply and meeting rates per campaign. Kill or rewrite what is losing; the optimisation autopilot tunes within limits, but retiring a whole angle is a human call.
-- **Sequences** (*Engage → Sequences*): enrollment counts and stuck steps.
-- **Data health** (*Data → Data Enrichment* and the sweep card): what the last sweeps found, credits spent, how many prospects still lack an email or a company. The People list self-heals blanks as you browse it, and the backfills run on their own schedule — what you are checking for is a stall, not doing the work yourself.
-- **Pipeline** (*Scheduling → Deals*): stage-by-stage review; the Deal Autopilot advances what it can and flags what it cannot.
-- **Workflow suggestions** (*Autopilot & AI → Autonomy Center*): the AI proposes new automation rules from what it sees; adopt the ones that describe something you actually do.
+- **Performance** (*Analytics → Engine Performance*; the page is titled **What's Working**): which subject lines and hooks are winning, which A/B variants got promoted, reply and meeting rates per campaign. Kill or rewrite what is losing; the optimisation autopilot tunes within limits, but retiring a whole angle is a human call.
+- **Sequences** (*Outreach → Sequences*): enrollment counts and stuck steps.
+- **Data health** (*Prospecting → Data Enrichment* and the sweep card): what the last sweeps found, credits spent, how many prospects still lack an email or a company. The People list self-heals blanks as you browse it, and the backfills run on their own schedule — what you are checking for is a stall, not doing the work yourself.
+- **Pipeline** (*CRM → Sales Pipeline*): stage-by-stage review; the Deal Autopilot advances what it can and flags what it cannot.
+- **Workflow suggestions** (the Autonomy Center): the AI proposes new automation rules from what it sees; adopt the ones that describe something you actually do.
 
 ## Monthly — an hour, calendar it
 
 - **Budgets.** Check the LLM token usage card and set or adjust the **Monthly AI budget** (tokens, not dollars; 0 means unlimited). Verification credits (Reoon, QuickEnrich) reset on their own monthly cycles with no rollover — if a cycle ended with credits unspent, raise the sweep's daily cap; if it ran dry early, lower it.
-- **Recalculate lead scoring** (*Configuration → Lead Scoring → Recalculate*) — a month of enrichment has changed the fields the model reads.
+- **Recalculate lead scoring** (Lead Scoring → **Recompute all**) — a month of enrichment has changed the fields the model reads.
 - **Prune.** Archive campaigns that finished, retire sequences nobody enrolls into, and clear lists that served their purpose.
 - **Autonomy review** (*Autonomy Center*): anything that spent a clean month on Approve with you approving everything unchanged is a candidate for Auto. Promote one dial at a time, not all of them at once — you want to notice which change caused whatever changes.
 - **Export a backup** (*Settings → Danger zone → Export*) if your compliance posture wants an offline copy of record counts.
 
 The pattern underneath all three cadences is the same: the machines act, the attention panel confesses, and your job is to read the confession — daily for sends, weekly for trends, monthly for budgets and trust.`,
+  },
+  // 2026-11-15: articles for pages that had none, each written against the
+  // page's own component, and for features no article mentioned (dashboard
+  // filters, the fiscal-quarter forecast, the What's Working filters). The
+  // pageKey is the key the page's route resolves to (Elsie's ROUTE_PAGE_KEYS,
+  // else the first path segment), so the "?" drawer lists it on that page.
+  {
+    slug: "engine-status",
+    categorySlug: "team-admin",
+    title: "Engine status: is everything running?",
+    summary: "An admin page showing each background engine's last run, this workspace's queues, browser errors and slow queries.",
+    readingTimeMinutes: 2,
+    tags: ["admin", "engine status", "health", "monitoring", "queues", "errors", "stuck"],
+    pageKey: "engine-status",
+    bodyMarkdown: `**Engine status** answers one question: is everything running? It is for admins. It has no row in the sidebar sections: click **Search…** at the top of the sidebar and type Engine Status, or open **Library — all tools** and find it under Configuration.
+
+The page reads the numbers once when it opens. Press **Refresh** to read them again. It does not update on its own.
+
+**Engines.** One row for each background engine, counted since the server last started: its state, when it last ran, how long that took, its last success, and its runs, failures and skipped overlaps. The state is **OK**, **Running**, **Failing** or **Not run yet**. A failing engine shows its last error under its name.
+
+**Queues in this workspace.** What is waiting, what is due now, what is stuck, what failed today, and the oldest item still due. The queues are approved emails waiting to send, sequence enrolments, Revenue Engine steps, background jobs and LinkedIn lookups. Each row says which engine works through it.
+
+**Automatic tasks today.** Each source of automatic tasks files at most its daily cap, which is set on the Tasks page. The table shows how many each source filed, its cap, and how many were held back for tomorrow.
+
+**Browser errors today.** Errors that browsers in this workspace reported in the last day, grouped, with a count, when the last one happened and the page it happened on.
+
+**Slow database queries.** How many queries ran slower than the threshold since the server started, and how long the slowest took.
+
+**How to use it.** When something looks stuck, such as emails not going out or a campaign not moving, look here first. A **Failing** engine or a growing **Due now** number shows where the problem is. If the engines say **OK** and the queues are empty, the hold-up is somewhere else: a paused campaign, a daily cap, or the send window.`,
+  },
+  {
+    slug: "quota-targets",
+    categorySlug: "crm-pipeline",
+    title: "Quota: targets and attainment",
+    summary: "Set a revenue, deal and activity target for each rep and period, and see how far each has got.",
+    readingTimeMinutes: 2,
+    tags: ["quota", "targets", "attainment", "forecast", "managers"],
+    pageKey: "quota",
+    bodyMarkdown: `**Quota Management** holds a revenue, deal and activity target for each team member, and shows how far each has got. Open it from the **Quota Management** link under the header of the Dashboards page, or from **Set targets on Quota** on the Forecast page.
+
+**Set a target.** Managers and admins set targets. Pick the month at the top right, press **Add Target**, choose the **Team Member** and the **Period Type** (Monthly, Quarterly or Annual), and fill in **Revenue ($)**, **Deals** and **Activities**. Add Target does not overwrite a target that already exists for that person and period. To change one, use the pencil on its card. The member and the period type cannot be changed on an existing target. The bin deletes a target after a confirm. Deals and activities are not touched.
+
+**Read attainment.** Each card shows the three targets and, under **Attainment**, a bar for each with the actual figure and the percentage. Revenue and deals count won deals by the date they were won. Activities are the ones that member logged. The figures are worked out each time you open the page.
+
+**Fiscal periods.** Quarterly and annual targets follow the workspace's fiscal year, which is set in Settings → Workspace overview under **Fiscal calendar & currency**. A quarterly target is stored once for its quarter, and it shows whichever month of that quarter you pick.
+
+**Where the targets are used.** The **Quota pacing** table on the Forecast page compares each rep's closed and Commit amounts with these targets. See "The Forecast page".`,
+  },
+  {
+    slug: "territories",
+    categorySlug: "crm-pipeline",
+    title: "Territories and account routing rules",
+    summary: "Group accounts into territories and give each new account a territory and an owner by rule.",
+    readingTimeMinutes: 2,
+    tags: ["territories", "routing", "accounts", "lead routing", "owners"],
+    pageKey: "territories",
+    bodyMarkdown: `**Territories** group accounts and give each group a rep. Open the page from the **Territories** link under the header of Lead Scoring or Lead Routing. Managers and admins can change it. Everyone else can read it.
+
+**Territories.** Press **New territory** and give it a name. A territory does nothing until a routing rule assigns accounts to it. Each row says how many routing rules assign it.
+
+**Routing rules.** Press **New routing rule** and fill in:
+
+- **Rule name** and **Priority**. A lower number is checked first.
+- The conditions: **Industry equals**, **Country/region equals**, **State equals** and **Company name contains**. A blank condition matches anything, and text matches ignoring case.
+- **Assign to territory** and **Assign to owner**.
+
+The first rule that matches wins.
+
+**When the rules run.** A rule gives a new account its territory and owner when the account is created. That includes an account created by converting a lead. Lead Routing's Geography and Industry rules take their owner from these rules.
+
+**Deleting.** Both deletes ask first. When a rule is deleted, accounts it would have matched go to the next rule that matches, or stay with whoever creates them. When a territory is deleted, rules that assigned it keep their owner and stop assigning a territory, and accounts in it are left with no territory and keep their owner.`,
+  },
+  {
+    slug: "custom-fields",
+    categorySlug: "settings-account",
+    title: "Custom fields",
+    summary: "Add your own fields to leads, contacts, accounts and opportunities.",
+    readingTimeMinutes: 2,
+    tags: ["custom fields", "settings", "crm", "fields", "admin"],
+    pageKey: "custom-fields",
+    bodyMarkdown: `**Custom fields** add your own fields to leads, contacts, accounts and opportunities. Open **Settings → Custom fields**, under Data management. Admins create, edit and delete fields. Everyone can fill them in on a record.
+
+**Add a field.** Choose the record type, then press **Add Field** and fill in:
+
+- **Entity Type**: lead, contact, account or opportunity.
+- **Label**: the name people see, for example Contract Value.
+- **Field Key**: a short name in lower case with underscores, for example contract_value. It cannot be changed after the field is created.
+- **Field Type**: text, number, date, boolean, select, multiselect or url. For select and multiselect, type each option and press **Add**.
+- **Required**, **Show in list view** and **Sort Order**.
+
+**Fill it in.** Custom fields appear in a **Custom fields** card on the record: a lead's page, a deal's page, a company's page (account fields), and a person's page when that person is linked to a contact (contact fields). Change the values and press **Save** on the card.
+
+**Edit or delete.** The pencil edits a field's label, type, options and switches. The bin deletes the field after a confirm. Deleting a field removes its stored values from every record of that type, and it cannot be undone.`,
+  },
+  {
+    slug: "snippet-library",
+    categorySlug: "sequences-email",
+    title: "The Snippet Library",
+    summary: "Reusable pieces of email text you copy into an email, a template or a sequence step.",
+    readingTimeMinutes: 2,
+    tags: ["snippets", "email", "templates", "copy", "ai generate"],
+    pageKey: "snippets",
+    bodyMarkdown: `The **Snippet Library** keeps reusable pieces of email text: an opener, a value statement, a closing line. Open it from the **Snippet Library** link under the header of the Email Builder.
+
+It is a library you copy from. No email composer has a snippet menu or a slash command yet, so a snippet gets into an email when you copy it there.
+
+**Create a snippet.** Press **New Snippet**, give it a **Name**, pick a **Category** (Opener, Value Prop, Social Proof, Objection Handler, Call to Action, Closing or P.S.) and write the **Content**. The tags under the box insert personalisation tokens such as {{firstName}}, {{company}} and {{senderName}}.
+
+**AI Generate.** In the same dialog, **AI Generate** drafts a snippet for the chosen category. If your workspace has a Researched or Verified research sector, a dropdown beside the button lets you pick one, and the draft is written for that sector. It reads **No research sector** until you choose.
+
+**Use a snippet.** Search by name, or filter with **All categories**. Press the copy button on a card, then paste the text into your email, template or sequence step. The pencil edits a snippet and the bin deletes it after a confirm.`,
+  },
+  {
+    slug: "prompt-templates",
+    categorySlug: "settings-account",
+    title: "Prompt Templates",
+    summary: "A library of AI prompts you can write and keep. No AI feature reads them yet.",
+    readingTimeMinutes: 2,
+    tags: ["prompt templates", "ai", "prompts", "library"],
+    pageKey: "prompt-templates",
+    bodyMarkdown: `**Prompt Templates** is a library of AI prompts you write and keep. Open it from the **Prompt Templates** link under the header of Brand Voice, with **Search…** at the top of the sidebar, or in **Library — all tools** under Configuration.
+
+**What it does not do.** No AI feature reads these templates yet. The email writers, research and the ICP agent use their own built-in prompts. To change how the AI writes today, use **Brand Voice**, the **Knowledge base**, your **Research**, and each campaign's sequence prompt.
+
+**Create a template.** Press **New Template** and fill in:
+
+- **Template Name**.
+- **A/B Group**: Group A or Group B.
+- **Goal**: Intro, Follow Up, Meeting Request, Value Prop, Break Up or Check In.
+- **Prompt Text**. The tags under the box insert placeholders such as {{firstName}}, {{company}}, {{goal}} and {{context}}.
+
+**Manage templates.** Templates are grouped by goal, and **All goals** filters the list. Each card shows the template's version number. The buttons on a card set it as the active template for its goal, edit it, duplicate it, or delete it after a confirm.`,
+  },
+  {
+    slug: "are-approvals-queue",
+    categorySlug: "are",
+    title: "The Approvals queue: every campaign in one list",
+    summary: "Approve or reject the prospects waiting for a decision in any Revenue Engine campaign, without opening each campaign.",
+    readingTimeMinutes: 3,
+    tags: ["are", "approvals", "campaigns", "prospects", "approve", "reject"],
+    pageKey: "are",
+    bodyMarkdown: `**Approvals** lists every enriched prospect waiting for a decision, in every Revenue Engine campaign. Open it from the **Approvals** link under the header of any Revenue Engine page, or from the engine approvals row on Home.
+
+Each row shows the person's ICP score, name, title and company, then their campaign, its status and the source that found them. Click the campaign name to open that person inside the campaign. A person whose earlier sequence was canceled is marked **Back for review**.
+
+**Approve or reject one.** Use the **Approve** and **Reject…** buttons on the row. Approve on a row acts at once, without a confirm.
+
+**Filters.** Narrow the queue by **Campaign**, **ICP score at least**, **Source** and **Kind**. Kind is **All waiting**, **New**, or **Back after a canceled sequence**. The search box matches name, email, company and title.
+
+**Approve or reject several.** Tick the rows, or tick the box above the list to select everyone on the page. Then press **Approve** or **Reject…** in the bar that appears. Approve asks you to confirm. Reject asks for a reason, with the same reasons a campaign's own Prospects tab offers.
+
+**Approve by score.** Set a number beside **Approve everyone waiting who scores at least** and press **Count and approve…**. Velocity counts first. The confirm says how many people match and in which campaigns, and it approves no more than that count. The other filters apply too. If more than 2,000 people match, raise the score or narrow the filters.
+
+**What approving does.** Approving queues each person's sequence. It sends nothing by itself. Each campaign writes the sequences and sends them on its own cadence, inside its daily cap and the send window. Nothing is sent from a paused or draft campaign, or while outbound is paused for the workspace.
+
+You can still approve inside one campaign, on its Prospects tab. This page saves opening each campaign in turn.`,
+  },
+  {
+    slug: "whats-working",
+    categorySlug: "are",
+    title: "What's Working: measured results",
+    summary: "Which campaign steps, sources and replies produce meetings, with filters by campaign and date and a CSV export.",
+    readingTimeMinutes: 2,
+    tags: ["are", "performance", "whats working", "analytics", "filters", "export"],
+    pageKey: "are",
+    bodyMarkdown: `**What's Working** reports the measured results of the Revenue Engine: which campaign steps, sources and replies produce meetings. Open it from *Analytics → Engine Performance* in the sidebar, or from the **What's Working** link under the header of any Revenue Engine page.
+
+The numbers are reported as measured. Nothing is estimated or projected, so an empty page means nothing has happened yet.
+
+**Filters.** At the top of the page:
+
+- **Campaign**: **All campaigns**, or one campaign. Archived campaigns are in the list too, marked "(archived)", because a finished campaign's results still count.
+- **Dates**: **All time**, **Last 7 days**, **Last 30 days**, **Last 90 days** or **Custom range**. Custom range shows a **From** and a **To** date.
+
+Days are counted in the workspace's time zone, which the page names beside the filters.
+
+**Export CSV.** The button at the top right downloads what the page shows, with the current filters.
+
+**Sequences are counted apart.** Email sent from the Sequences page is shown in its own table and is not part of the Revenue Engine numbers. The campaign filter does not apply to that table. The dates do.
+
+**Recommendations.** The page also lists the optimisation recommendations, with their own Off, Approve, Autonomous dial. Applying a change edits your live sequences, and each applied change can be undone from the history.`,
+  },
+  {
+    slug: "research-pipeline",
+    categorySlug: "prospecting",
+    title: "The AI Research Pipeline",
+    summary: "Run five AI stages for one contact, from research to a finished draft that waits for your review.",
+    readingTimeMinutes: 2,
+    tags: ["research pipeline", "ai", "drafts", "email", "contact"],
+    pageKey: "research-pipeline",
+    bodyMarkdown: `The **AI Research Pipeline** writes one researched email for one contact. It is separate from the **Research** page, which holds your markets and sectors.
+
+Open it from the draft tools in the Emails drawer: the link **Open the Research Pipeline**.
+
+**Start a run.** Under **Start New Pipeline**:
+
+1. **Contact**: pick who the email is for.
+2. **Outreach Goal**: say what you want, for example booking a discovery call.
+3. **Tone**: Concise, Warm, Formal or Punchy.
+4. Press **Run Pipeline**. A confirm says how many AI calls the run makes and about what they cost. The run starts when you confirm.
+
+**The five stages.** Each one shows on the page as it finishes:
+
+1. **Prospect Research**: the company and the person.
+2. **Signal Detection**: recent triggers and buying signals.
+3. **Angle Generation**: angles ranked by relevance.
+4. **Draft Candidates**: three subject and body variants.
+5. **Final Selection**: the best variant.
+
+**What you get.** **Generated Draft** shows the subject and body, and **Stage Details** keeps every stage's output. The draft goes to the Email Drafts queue (Emails → Needs review) and waits there. Nothing is sent until you review and send it.
+
+**Recent Pipelines** lists earlier runs with their status. Click one to open it again.`,
+  },
+  {
+    slug: "tour-builder",
+    categorySlug: "team-admin",
+    title: "The Tour Builder",
+    summary: "Create and edit the guided tours your team sees in the Help Center and on first visits to a page.",
+    readingTimeMinutes: 3,
+    tags: ["tours", "tour builder", "onboarding", "admin", "help"],
+    pageKey: "tour-builder",
+    bodyMarkdown: `The **Tour Builder** is where admins create and edit guided tours. Tours appear in the Help Center, in the Help drawer's tours tab, and as an offer when someone first visits a page. Open it from **Settings → Tour builder**, or from **Build a tour** at the bottom of the Help drawer.
+
+**Create a tour.** Press **New Tour** and fill in **Tour Details**:
+
+- **Tour Name** and **Description**.
+- **Type**: Onboarding, Feature, What's New or Custom.
+- **Trigger Page Key**: the page the tour belongs to, for example sequences. The tour is offered on that page.
+- **Est. Minutes**.
+- **Status**: Draft or Published. Only a published tour is shown to the team.
+
+**Add steps.** Press **Add Step**. Each step has:
+
+- A target: **data-tour-id (preferred)** or a **CSS Selector (fallback)**.
+- **Step Title** and **Body (Markdown)**.
+- **Visual Treatment**: Spotlight, Pulse ring, Arrow pointer or Coach mark.
+- **Advance Condition**: Next button click, Target element clicked, Form field filled or Route changed.
+
+Use the arrows on a step to move it up or down. Press **Save Tour** when you are done.
+
+**Record steps instead of typing them.** Press **Start recording**, then click through the app. Each click captures the element you clicked. Press **Stop**, then **Copy JSON**, and paste the steps into a new tour.
+
+**Your edits are kept.** The tours that ship with Velocity are refreshed when Velocity is updated. A tour you have edited or deleted is left as you made it.`,
+  },
+  {
+    slug: "scim-provisioning",
+    categorySlug: "team-admin",
+    title: "SCIM provisioning",
+    summary: "Let your identity provider add and deactivate members for you.",
+    readingTimeMinutes: 2,
+    tags: ["scim", "provisioning", "okta", "azure ad", "identity provider", "admin", "team"],
+    pageKey: "scim",
+    bodyMarkdown: `**SCIM provisioning** lets your identity provider (Okta, Azure AD or any other that speaks SCIM 2.0) add and deactivate members in this workspace for you. It is for admins. Open it from the **SCIM Provisioning** link under the header of the Team page.
+
+**Connect a provider.**
+
+1. Press **New provider** and give it a name, for example Okta production.
+2. Velocity shows a **bearer token** once. Copy it then: it is not shown again.
+3. In your identity provider, enter the **Base** address shown under **SCIM endpoints** and the token as the SCIM bearer credential.
+
+**What it supports.** Users can be listed, created, updated and deleted. Groups can be read. Removing a user in your identity provider **deactivates** their membership here, the same as deactivating them on the Team page, so their history is kept. Marking them active again brings them back.
+
+**Manage a provider.** Each provider has a switch to turn it on or off. **Rotate** issues a new token: the old one stops working at once, so update your identity provider straight away. The bin deletes the provider, which stops provisioning from it for the whole workspace and cannot be undone.
+
+**Recent SCIM events** lists the latest requests your identity provider made, so you can see whether it is reaching Velocity.`,
+  },
+  {
+    slug: "mindmaps",
+    categorySlug: "crm-pipeline",
+    title: "Mindmaps",
+    summary: "Freeform canvases for planning, with nodes you can turn into tasks and notes.",
+    readingTimeMinutes: 2,
+    tags: ["mindmaps", "planning", "canvas", "tasks", "notes"],
+    pageKey: "mindmaps",
+    bodyMarkdown: `**Mindmaps** are freeform canvases for working out an idea or a plan. Open the page with **Search…** at the top of the sidebar, or in **Library — all tools** under Analytics.
+
+**Create a map.** Press **New Mindmap** and name it. The menu on a map's card renames or deletes it. Deleting cannot be undone.
+
+**Build it.**
+
+- Use the buttons above the canvas to add a **Topic**, **Subtopic**, **Idea**, **Task Node** or **Note Node**. Double-clicking the canvas also adds a topic.
+- Drag a node to move it. Drag from a node's handle to another node to connect them.
+- Click a node to open **Node Properties**, where you edit its **Label**, **Notes** and colour.
+
+**Turn a node into work.** In Node Properties, **Create Task from Node** makes a real task (title, description, due date and priority) and links it to the node. **Create Note from Node** makes a note in the same way.
+
+**Saving.** The map saves on its own every 15 seconds while it has changes, and **Save** saves it now. If the map was saved somewhere else after you opened it, Velocity says so and asks which version to keep: **Load the saved version** or **Keep mine**.`,
+  },
+  {
+    slug: "linkedin-enrichment-import",
+    categorySlug: "prospecting",
+    title: "Import LinkedIn profile URLs",
+    summary: "Paste or upload a list of LinkedIn profile URLs, match them to People, and review the uncertain ones.",
+    readingTimeMinutes: 3,
+    tags: ["linkedin", "enrichment", "import", "csv", "urls", "people"],
+    pageKey: "data-enrichment",
+    bodyMarkdown: `The **LinkedIn enrichment** page takes a list of LinkedIn profile URLs, looks each profile up through your connected LinkedIn account, and matches it to a person in People. Open it from Data Enrichment with **Automate Enrichment → Import LinkedIn URLs**, from People with **Import → Enrich from LinkedIn**, or in **Library — all tools** under Prospecting.
+
+It needs a connected LinkedIn account. Until one is connected the page says LinkedIn enrichment isn't ready and tells you what to connect.
+
+**Add the URLs.** Under **Add LinkedIn URLs**, paste one profile URL per line, or press **Upload CSV**. For a CSV, choose which column holds the profile URLs, and check the preview. A row with no URL, or one that is not a profile URL, is left out.
+
+A batch takes up to 1,000 rows. A longer file is imported a slice at a time, and the page offers each slice.
+
+**Validate & import**, then **Run enrichment.** Managers and admins press **Validate & import** to create the batch. The page reports how many rows are valid. Then **Run enrichment** queues the lookups. They run at the pace your LinkedIn limits allow, so a large batch carries on the next day. **Retry** queues failed rows again.
+
+**Review the results.** Each row shows whether it matched. For an uncertain match, choose to match an existing person, **Create new**, or **Skip**. Uncertain and conflicting matches from other enrichment runs are listed on this page too, with the same choices.
+
+**Daily change check.** People who have been enriched are checked once a day, in working hours, for a new title or company. The card shows the last check, and an admin can start one now.
+
+For enrichment from a single person or a People selection, and for job-change alerts, see "LinkedIn enrichment & job-change alerts".`,
+  },
+  {
+    slug: "custom-dashboards",
+    categorySlug: "crm-pipeline",
+    title: "Dashboards and their filters",
+    summary: "Build your own dashboards from widgets, narrow them with the filter bar, and schedule one to email itself.",
+    readingTimeMinutes: 3,
+    tags: ["dashboards", "filters", "widgets", "date range", "owner", "stage", "source", "schedule"],
+    pageKey: "dashboards",
+    bodyMarkdown: `**Dashboards** (sidebar: *Analytics → Dashboards*) are boards of widgets you arrange yourself. This is a different page from **Dashboard** in the quick links, which is Home's Pipeline view.
+
+**Build one.** Press the **+** beside **Dashboards** in the list on the left to create a dashboard, then press **Add widget**. Give the widget a title and pick its type: a chart (line, bar, area, pie, donut, funnel and more) or a widget such as a KPI card, leaderboard, activity feed, goal progress bar or pipeline stage breakdown. Press **Customize** to drag widgets, resize them, rename or remove them, and rename or delete the dashboard. Press **Done editing** when you finish. The numbers are worked out each time the dashboard loads.
+
+## The filter bar
+
+The filter bar sits above the widgets of the open dashboard and narrows what they show.
+
+- **Date range**: **Today**, **Last 7 days**, **Last 30 days**, **Last 90 days**, **Year to date** or **All time**. For other dates press **Custom** and set **From** and **To**. Days are counted in the workspace's time zone.
+- **Owner**: **All owners**, or one team member.
+- **Stage**: **All stages**, or one stage of your pipeline.
+- **Source**: **All sources**, or one lead source. This is the source of the lead a deal was converted from.
+
+When a filter is on, a badge shows how many are active. The **x** beside it clears them all. Filters are not saved. Reload the page and it is back on **All time** with no other filter.
+
+**Schedule an email.** With a dashboard open, press **Schedule**, choose **Daily**, **Weekly** or **Monthly**, and enter the recipients. The schedule is listed under **Scheduled exports**, where you can pause it or send it now.
+
+The links under the page header open **Email Analytics** and **Quota Management**.`,
+  },
+  {
+    slug: "forecast-page",
+    categorySlug: "crm-pipeline",
+    title: "The Forecast page",
+    summary: "Closed, Commit, Best case and Pipeline for one fiscal period, with quota pacing and the deals behind the numbers.",
+    readingTimeMinutes: 3,
+    tags: ["forecast", "fiscal quarter", "commit", "best case", "quota", "pacing", "pipeline"],
+    pageKey: "forecast",
+    bodyMarkdown: `**Forecast** (sidebar: *Analytics → Forecast*) shows what you expect to close in one fiscal period. Reps see their own deals. Managers and admins see the team.
+
+**Pick the period.** The switch at the top right has **This quarter**, **Next quarter** and **This year**. Quarters are your fiscal quarters. An admin sets the month the fiscal year starts in, and the currency, in Settings → Workspace overview under **Fiscal calendar & currency**. The page names the period and the currency above the numbers.
+
+**The six numbers.**
+
+- **Closed**: won in the period.
+- **Commit**: open deals marked Commit, or with a win probability of 90% or more.
+- **Best case**: Commit plus Best case, or 50% or more.
+- **Pipeline**: the rest that is still open.
+- **Omitted**: open deals called out of the period.
+- **No close date**: open deals that are not counted until they have a date.
+
+**Set a deal's category.** The deals behind the numbers are listed lower on the page. In the **Category** column choose **Pipeline**, **Best case**, **Commit** or **Omitted**. Leave it on **By win %** and the deal is placed by its win probability. A deal's owner sets their own call. A manager can change a rep's call, and the row then shows **Override**, who changed it, when, and what it was before.
+
+**Quota pacing.** For each rep with a target: the target, what is closed, closed plus Commit, and what was expected by now given how much of the period has gone. The status reads **Attained**, **Ahead of pace**, **On track with Commit**, **Behind** or **No target**. If there are no targets, the link **Set targets on Quota** opens the Quota page. See "Quota: targets and attainment".
+
+**The board's own forecast.** Sales Pipeline has a **Forecast** view too. That one is the weighted forecast of the deals on the board. This page is the one that follows fiscal periods and categories.`,
   },
   // The Operator's Manual (2026-09-08): every page, the data model, the engine,
   // the autopilots, and the daily / weekly / monthly routines, in their own
@@ -1096,17 +1633,17 @@ export const TOURS: TourSeed[] = [
   // need different first sessions, and returning users need neither.
   {
     name: "Meet Elsie",
-    description: "How the in-app guide works, and how to switch it off.",
+    description: "Your guide and assistant: how to open her, what she does, and how to stop her tour offers.",
     type: "onboarding",
     estimatedMinutes: 1,
     pageKey: "elsie",
     route: "/v2/home",
     roleTags: ["sdr", "admin"],
     steps: [
-      { title: "I'm Elsie", bodyMarkdown: "I'm the guide built into Velocity by LSI Media. When you land on a page I have a walkthrough for, I offer it once — never twice for the same page in a session.", routeTo: "/v2/home", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "The switch is always in reach", bodyMarkdown: "The compass in the top bar turns me on and off. Off means off: I stop asking and stop looking things up, rather than just hiding the card.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Your choice follows you", bodyMarkdown: "Turn me off on your laptop and I stay off on your phone. The setting lives on your account, not the browser.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Everything is replayable", bodyMarkdown: "Nothing here is one-shot. Every walkthrough lives in the Help Center under Tours, so dismissing one now costs you nothing later.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "I'm Elsie", bodyMarkdown: "I'm the guide and assistant built into Velocity. Ask me about your own data, ask to be shown around a page, or tell me what you want done. I act only after you confirm.", routeTo: "/v2/home", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "One button, on every page", bodyMarkdown: "This button opens me anywhere, and so does Ctrl+J. One conversation follows you from page to page.", targetDataTourId: "assistant-button", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "I offer a tour once", bodyMarkdown: "When you land on a page I have a tour for, I offer it once, never twice for the same page in a session. To stop the offers, open me and switch Tour offers off at the top of my panel. The setting lives on your account, so it follows you to every device.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Everything is replayable", bodyMarkdown: "Nothing here is one-shot. Every tour lives in the Help Center under Tours, so dismissing one now costs you nothing later. You can also ask me to show you something and I will hand you the tour.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1140,7 +1677,7 @@ export const TOURS: TourSeed[] = [
       { title: "Verification is the bottleneck", bodyMarkdown: "Without a verification key the finder still collects phones and social links, but resolves no addresses at all — and it fails quietly rather than loudly.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Brand voice before outreach", bodyMarkdown: "Every AI-written email, chat reply and proposal reads from Brand Voice. Set it before anyone starts sending, not after you dislike the drafts.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Decide the autonomy posture", bodyMarkdown: "Approve everywhere is the safe default for a new workspace. Promote engines to Autonomous one at a time, once you have seen what each proposes.", routeTo: "/v2/workflows", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Workspaces are separate worlds", bodyMarkdown: "Members, mailboxes, API keys and autopilot settings do not cross between workspaces. Running one per client means configuring each one.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Workspaces are separate worlds", bodyMarkdown: "Members, mailboxes, prospects and autopilot settings do not cross between workspaces. Vendor keys stay separate too, unless an admin of both workspaces shares one from the Share keys with other workspaces panel in Settings.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1168,25 +1705,28 @@ export const TOURS: TourSeed[] = [
     route: "/v2/home",
     roleTags: ["admin"],
     steps: [
-      { title: "Switching", bodyMarkdown: "The control at the top of the sidebar lists every workspace you belong to and moves between them.", routeTo: "/v2/home", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Switching", bodyMarkdown: "Click the workspace name at the left of the top bar. The menu lists every workspace you belong to and moves between them.", routeTo: "/v2/home", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Creating one", bodyMarkdown: "Super admins get a New workspace option in that same menu. Sample data is off by default — a client workspace full of invented accounts is worse than an empty one.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Nothing is shared", bodyMarkdown: "Members, mailboxes, API keys, autopilot settings and prospects all belong to a single workspace. A new one starts genuinely empty, which is the point when each client is separate.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "What is shared, and what is not", bodyMarkdown: "Members, mailboxes, autopilot settings and prospects all belong to a single workspace, and a new one starts empty. The one exception is a vendor key: an admin of both workspaces can tick Share keys with other workspaces in Settings, and the other workspace uses that key without ever seeing it.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   // Full nav coverage. Pages without a spotlight anchor use coach steps
   // rather than a target that would resolve to nothing.
   {
-    name: "Ask the AI Assistant",
-    description: "Ask about your own pipeline in plain English — and have it propose actions you confirm.",
+    // Renamed from "Ask the AI Assistant" on 2026-11-15, when Elsie and the
+    // assistant became one helper; the old name is in RETIRED_LEGACY_TOURS.
+    name: "Ask Elsie",
+    description: "Ask about your own pipeline in plain English, and have her propose actions you confirm.",
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "ai-assistant",
     route: "/v2/ai-assistant",
     roleTags: ["sdr"],
     steps: [
-      { title: "Your data, asked in plain English", bodyMarkdown: "Ask about your own pipeline rather than reading dashboards. It answers from your records, not from general knowledge.", routeTo: "/v2/ai-assistant", targetDataTourId: "ai-assistant-panel", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Good questions to start with", bodyMarkdown: "Which deals went quiet this week. Which prospects replied but never got a follow-up. What my best source was last month. Specific beats broad.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "It can act, behind a confirm card", bodyMarkdown: "Ask it to enroll people in a sequence, create tasks, build a list, enrich people, pause or activate a campaign, draft meeting proposals — or create a new campaign as a draft. Each shows a card; nothing runs until you click Confirm. It never sends email or LinkedIn messages, and never launches a campaign.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Your data, asked in plain English", bodyMarkdown: "Ask about your own pipeline rather than reading dashboards. Elsie answers from your records, not from general knowledge.", routeTo: "/v2/ai-assistant", targetDataTourId: "ai-assistant-panel", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Good questions to start with", bodyMarkdown: "Which deals went quiet this week. Which prospects replied but never got a follow-up. What my best source was last month. Which keys are set up. Specific beats broad.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "She can act, behind a confirm card", bodyMarkdown: "Ask her to enroll people in a sequence, create tasks, build a list, enrich people, pause or activate a campaign, draft meeting proposals, or create a new campaign as a draft. Each shows a card; nothing runs until you click Confirm. She never writes and sends a new email or LinkedIn message; she can only send what an approval queue already holds, and that card says so.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "She can show you, too", bodyMarkdown: "Ask to be shown or walked through something and she hands back a Show me button that starts the guided tour for it.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1356,7 +1896,7 @@ export const TOURS: TourSeed[] = [
     route: "/segments",
     roleTags: ["sdr"],
     steps: [
-      { title: "A segment is a live rule", bodyMarkdown: "Define the conditions once and membership updates itself as records change. Membership is evaluated over your Contacts, so a lead or a prospect joins once it has been converted.", routeTo: "/segments", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "A segment is a live rule", bodyMarkdown: "Define the conditions once and membership updates itself as records change. Membership is worked out over the people in People, and archived people are left out.", routeTo: "/segments", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Auto-enroll", bodyMarkdown: "Point a segment at a sequence and anyone who enters it is enrolled automatically. That is the closest thing here to outbound that runs itself.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
@@ -1728,7 +2268,7 @@ export const TOURS: TourSeed[] = [
       { title: "Three steps, not two", bodyMarkdown: "Finding an address is a chain, and each link feeds the next: LinkedIn gives the person's employer, Apollo turns that company name into a website domain, and Velocity then derives the likely address patterns and asks Reoon which one is real. A prospect stalls at whichever link is missing.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Only the last step costs credits", bodyMarkdown: "The LinkedIn step spends from your connected account's daily lookup allowance. The domain step is free — Apollo's organisation search costs no credits. Only verification spends Reoon credits, which is why the three are controlled separately rather than behind one switch.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "The verifier key", bodyMarkdown: "Paste your Reoon key here and hit **Test & check credits** — it reports your remaining balance, so you know whether a run will resolve anything before you start one. Without a key the finder still collects phones and social links, but every email lookup stops and no address is resolved.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Keys are per workspace", bodyMarkdown: "These credentials belong to this workspace only. A new workspace starts with none — which is the point when you run one per client.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "Keys are per workspace", bodyMarkdown: "These credentials belong to this workspace, and a new workspace starts with none. If you are an admin of another workspace too, the Share keys with other workspaces panel at the bottom of this page lets that workspace use these keys.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1758,7 +2298,7 @@ export const TOURS: TourSeed[] = [
     roleTags: ["sdr"],
     steps: [
       { title: "Welcome to Velocity", bodyMarkdown: "Quick 3-min tour of where you'll work each day.", routeTo: "/v2/home?view=pipeline", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, AI Assistant, Inbox, Mailbox, Calendar), then the work: Prospect and enrich, Engage, Win deals, Revenue Engine, and more.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Your sidebar", bodyMarkdown: "Quick links up top (Home, Dashboard, Elsie, Inbox, My Calendar), then the sections: Prospecting, CRM, Outreach, Proposals, Dialer, Customer Success and Analytics. Library — all tools lists every page, and Search (Ctrl+K) jumps to one by name.", targetDataTourId: "sidebar-nav", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Your daily numbers", bodyMarkdown: "The Dashboard is your morning home — pipeline, leads, customers.", targetDataTourId: "dashboard-kpi-grid", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Help anytime", bodyMarkdown: "Click the ? in the top bar for contextual articles, Ask AI, and these tours — on any page.", targetDataTourId: "help-button", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
@@ -1900,6 +2440,8 @@ export const TOURS: TourSeed[] = [
  *  the standalone Contacts page (gone 2026-08-17). Do not remove that entry
  *  thinking it is a mistake — it would resurrect the broken tour everywhere. */
 const RETIRED_LEGACY_TOURS = [
+  // Renamed to "Ask Elsie" on 2026-11-15 (Elsie and the assistant are one helper).
+  "Ask the AI Assistant",
   "Welcome to Velocity",
   "Building an Email Sequence",
   "Managing Your Pipeline",

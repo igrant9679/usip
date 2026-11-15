@@ -10,7 +10,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { ALLOWED_GROUPS, AUTONOMY_DIALS, DENY_LEAF, SEND_ALLOWLIST, buildCatalogFrom, describeGenericAction, refusesUnattended, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
+import { ALLOWED_GROUPS, AUTONOMY_DIALS, DENY_LEAF, READ_ONLY_PATHS, SEND_ALLOWLIST, buildCatalogFrom, describeGenericAction, refusesUnattended, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
 import { MUTATING_TOOLS, READ_TOOLS, TOOL_ARGS } from "./services/assistantTools";
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -39,6 +39,11 @@ describe("action catalog policy on the real router", () => {
     const cat = await realCatalog();
     const bad = cat.filter((a) => {
       if (a.sends) return !(a.path in SEND_ALLOWLIST);
+      // 2026-11-15 (owner: "widen reads"): a settings-class READ, by exact path,
+      // is the one way a procedure from these routers may appear. Anything else
+      // from them, and any mutation at all, is still a failure here. The reads
+      // have their own block below ("settings-class reads").
+      if (a.readOnly) return a.kind !== "query" || !(a.path in READ_ONLY_PATHS);
       const root = a.path.split(".")[0];
       const leaf = a.path.split(".").pop() ?? "";
       return DENY_LEAF.test(leaf)
@@ -129,7 +134,9 @@ describe("the assistant's tool surface", () => {
   it("is reachable from anywhere: the Shell mounts the drawer, a top-bar button and Ctrl/Cmd+J", () => {
     const shell = read("../client/src/components/usip/Shell.tsx");
     expect(shell).toContain("<AssistantDrawer />");
-    expect(shell).toContain('data-tour-id="assistant-button"');
+    // 2026-11-15: the button is Elsie's (one helper); the tours' anchor moved with it.
+    expect(shell).toContain("<ElsieButton />");
+    expect(read("../client/src/components/usip/Elsie.tsx")).toContain('data-tour-id="assistant-button"');
     expect(shell).toMatch(/key\.toLowerCase\(\) === "j"/);
     const page = read("../client/src/pages/usip/AIAssistant.tsx");
     const drawer = read("../client/src/components/usip/AssistantDrawer.tsx");

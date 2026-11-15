@@ -194,6 +194,10 @@ export const TOOL_ARGS = {
    * allowlisted tRPC catalog (services/assistantActionCatalog.ts). Every
    * mutation still lands on a confirm card. */
   // READ
+  find_tours: z.object({
+    query: z.string().trim().max(120).optional(),
+    pageKey: z.string().trim().max(60).optional(),
+  }),
   list_actions: z.object({
     query: z.string().trim().max(200).optional(),
     group: z.string().trim().max(40).optional(),
@@ -292,7 +296,7 @@ export type AssistantToolName = keyof typeof TOOL_ARGS;
 export const READ_TOOLS: AssistantToolName[] = [
   "search_people", "get_person", "list_sequences", "list_lists", "list_campaigns", "whats_waiting", "help_lookup",
   "deals_pipeline", "preview_people_filter", "list_data_entities", "query_data", "search_companies", "get_company",
-  "list_actions", "run_read_action", "list_report_fields", "run_report",
+  "list_actions", "run_read_action", "list_report_fields", "run_report", "find_tours",
 ];
 export const MUTATING_TOOLS: AssistantToolName[] = [
   "enroll_in_sequence", "create_tasks", "add_to_list", "enrich_prospects", "set_campaign_status",
@@ -464,6 +468,13 @@ const FILTER_SCHEMA = {
 };
 
 export const ASSISTANT_TOOLS: Tool[] = [
+  t("find_tours", "Find the guided, click-by-click tours (a spotlight walks the user through a page). Use it when the user asks to be shown or walked through something: every tour you get back is shown to the user as a 'Show me' button under your answer, so name the one you recommend and say what it covers. Returns nothing when no tour matches; then explain in words instead.", {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Words from what the user wants to learn, e.g. 'campaign', 'import', 'inbox'" },
+      pageKey: { type: "string", description: "A page key to list that page's tours, e.g. the page the user is on" },
+    },
+  }),
   t("search_people", "Search the workspace's prospects by name, company, title, or email fragment. Returns compact rows with ids.", {
     type: "object",
     properties: {

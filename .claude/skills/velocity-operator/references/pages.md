@@ -1,6 +1,6 @@
 # Velocity page directory — every page, what it is for, how to use it
 
-Organised the way the sidebar rail and the Library (`/v2/library`, Ctrl+K) organise it. `★` = on the sidebar rail. `[admin]` = admin-only. Hover any rail item in the app for its one-line help; the `?` in the top bar opens the Help drawer for the current page.
+Organised the way the Library (`/v2/library`) groups it. `★` = a `primary` registry tool. The rail itself shows the Daily quick links (Home, Dashboard, the assistant, Inbox, My Calendar) and the sections Prospecting, CRM, Outreach, Proposals, Dialer, Customer Success and Analytics; the Autonomy Center, Marketing and Configuration pages have no rail row and open from the Library or the Ctrl+K palette (which searches pages, not records). `[admin]` = admin-only. Hover any rail item in the app for its one-line help; the `?` in the top bar opens the Help drawer for the current page.
 
 Table of contents: Daily · Prospecting · CRM · Outreach · Marketing · Proposals · Dialer · Customer Success · Analytics · Configuration · Public pages.
 
@@ -153,7 +153,7 @@ The catalog proposals are priced from.
 ## Dialer
 
 ### ★ Calls — `/v2/calls`
-Call queue and log with outcomes and durations; AI voice agents (inbound call-back receptionist: greets, confirms, books) with transcripts and summaries logged to the record. Outbound AI dialing is not available (vendor API unpublished).
+Call queue and log with outcomes and durations; AI voice agents (xAI Grok over Plivo) with transcripts logged to the record. They answer calls to their numbers, and place outbound AI calls: queued from People (**Queue AI call**), approved one by one or in a batch by a manager or admin under **AI calls → To approve** (consent confirmed), dialled 9–5 weekdays in the person's zone, with their own pause switch in Settings → Voice agents and numbers. See the help article `voice-agents`.
 
 ---
 
@@ -176,16 +176,16 @@ The one cross-channel funnel: Sourced → Contacted → Replied → Meetings boo
 Row-level report builder over any object (columns, filters, group by, sort), CSV export, saved reports, schedules (daily/weekly/monthly email to recipients), presets.
 
 ### ★ Dashboards — `/dashboards`
-Custom CRM metric boards with widgets.
+Custom CRM metric boards with widgets. A filter bar above the widgets narrows them: date presets (Today, Last 7/30/90 days, Year to date, All time) or a custom range, Owner, Stage and lead Source; not saved with the dashboard. **Schedule** emails a dashboard daily, weekly or monthly. Sub-nav: Email Analytics and **Quota Management** (`/quota`: per-rep revenue, deal and activity targets with attainment; managers set them).
 
 ### Email Analytics — `/email-analytics`
 Opens, clicks, replies, bounces by send — drafts and CRM sends only; campaign sends are in Analytics and Engine Performance.
 
 ### ★ Engine Performance — `/are/performance`
-What the engine sent, booked and learned: reply and meeting rates by step, by source, by A/B variant; promoted winners; optimisation proposals and their attribution verdicts.
+Titled **What's Working** in the app. What the engine sent, booked and learned: reply and meeting rates by step, by source, by A/B variant; promoted winners; optimisation proposals and their attribution verdicts. Filters (2026-11-07): **Campaign** (archived ones included) and **Dates** (All time, Last 7/30/90 days, Custom range), in the workspace's days; **Export CSV**. Sequence email is shown apart and takes the dates only.
 
 ### ★ Forecast — `/forecast`
-Projected revenue from the open pipeline, weighted by stage and win probability.
+One fiscal period at a time (This quarter, Next quarter, This year; the fiscal year start and currency are set in Settings → Workspace overview): Closed, Commit, Best case, Pipeline, Omitted and No close date. Each open deal's category is set by its owner (or left on its win %: Commit at 90%+, Best case at 50%+); a manager can override, and the row says who, when and from what. **Quota pacing** compares closed and Commit with the targets on `/quota`. Reps see their own deals, managers the team. The weighted forecast with AI commentary is the Forecast view of Sales Pipeline.
 
 ### Mindmaps — `/mindmaps`
 Freeform planning canvases and account maps.
@@ -195,7 +195,7 @@ Freeform planning canvases and account maps.
 ## Configuration
 
 ### Settings hub — `/v2/settings/profile`
-Personal: Profile, Appearance (theme + personal signature), Mailboxes, Phone numbers, Notifications, Social accounts, Multi-factor authentication, Email settings. Workspace: Overview, Users and teams, Security, Notification policy, Integrations (provider grid + AI keys + verification policy + messaging/system sender), Voice agents, Data sources, Email delivery (SMTP + From-name/signature), Branding, Proposals, Billing and credits (AI monthly token budget, verification credits — permission-sensitive: hidden from a member whose `access_billing` override is off), System activity, Tour builder, Danger zone (remove sample data, export, archive, transfer ownership). Data management: Custom fields, Imports and exports, Data enrichment, Enrichment sweep. **Sharing keys between workspaces** (2026-11-13): on Integrations (AI keys), Voice agents (xAI) and Data sources (Apollo, QuickEnrich, WarmySender, LeadOcean, Reoon) an admin sees "Share keys with other workspaces": tick a workspace to let it use this workspace's key. It is a live link, not a copy: the other workspace never sees the key, a change to the key here applies there, unticking stops it at once, and a workspace's own key always comes first. Only someone who is an admin of both workspaces (with Manage API keys) can share; a borrowed key cannot be passed on; Plivo, SendGrid and mailboxes are not shareable. The legacy `/settings` page collapsed into the hub 2026-09-15 — the route is a redirect shim (`?tab=X` maps to the matching section), so old deep links keep working.
+Personal: Profile (General, Security with MFA and sessions, Email settings), Appearance, Email signature, Notifications, Social accounts. Workspace: Overview, Users and teams, Mailboxes, Voice agents and numbers, Security, Notification policy, Integrations (provider grid + AI keys + verification policy + messaging/system sender), Knowledge base, Data sources, Email delivery (SMTP + From-name/signature), Branding, Proposals, Billing and credits (AI monthly token budget, verification credits — permission-sensitive: hidden from a member whose `access_billing` override is off), Audit log, Tour builder, Danger zone (remove sample data, export, archive, transfer ownership). Data management: Custom fields, Imports and exports, Data enrichment, Enrichment sweep. Users and teams, Audit log, Custom fields and Notifications render inside the hub since 2026-11-08; Tour builder, Imports and exports and Data enrichment still link out. The hub renders outside the main shell, so it has no `?` help drawer. **Sharing keys between workspaces** (2026-11-13): on Integrations (AI keys), Voice agents (xAI) and Data sources (Apollo, QuickEnrich, WarmySender, LeadOcean, Reoon) an admin sees "Share keys with other workspaces": tick a workspace to let it use this workspace's key. It is a live link, not a copy: the other workspace never sees the key, a change to the key here applies there, unticking stops it at once, and a workspace's own key always comes first. Only someone who is an admin of both workspaces (with Manage API keys) can share; a borrowed key cannot be passed on; Plivo, SendGrid and mailboxes are not shareable. The legacy `/settings` page collapsed into the hub 2026-09-15 — the route is a redirect shim (`?tab=X` maps to the matching section), so old deep links keep working.
 
 **Security** (2026-09-20) — two of its three controls now enforce, one deliberately does not:
 - **Session timeout** — the ABSOLUTE age of a sign-in, not idle time. Applied at each member's NEXT sign-in (the JWT `exp` and the cookie `maxAge` are set from it in `passwordAuth`), so lowering it never signs the team out on the spot. A member in two workspaces gets the SHORTER of the two. Every row was reset to 10080 (7 days) by migration 0186, because the stored values pre-dated any enforcement and were nobody's deliberate choice.
@@ -218,19 +218,27 @@ Per-account invite/message caps, pacing, working hours.
 Multiple named pipelines per workspace, each with its own stages (key, label, order, default win probability) and one marked default. Every stage carries a **Won** and a **Lost** tickbox, and those flags — not the stage key — are what the whole product reads: closed-won revenue, win rate, the open forecast, the Closed Won → Customer step, the closed-lost win-back task, the `is_won`/`is_lost`/`is_open` report filters. Renaming `won` to `signed` is safe as long as the tickbox travels with it. Deleting a stage leaves its opportunities holding the old key, and an unrecognised key counts as OPEN. New pipelines can clone an existing one's stages.
 
 ### Lead Scoring — `/lead-scoring` · Lead Routing — `/lead-routing`
-Fit and engagement models with grade thresholds (install defaults, set primary, **Recalculate** after enrichment waves); assignment rules for new leads (round-robin, territory, owner rules).
+Fit and engagement models with grade thresholds (install defaults, set primary, **Recompute all** after enrichment waves); assignment rules for new leads (round-robin, territory, owner rules), with **Test a lead** and an optional cap on a target's open leads. Their sub-nav also opens **Territories** (`/territories`): named territories plus account routing rules (priority, industry, country, state, company-name match → territory and owner; first match wins), which run when an account is created; managers edit.
 
 ### Brand Voice — `/brand-voice` · Personas — `/personas` · ICP Agent — `/are/icp`
 (Personas and ICP are also tabs of **Research**, above.) How the AI sounds; who it writes to; the living ideal-customer profile (current version, history, regenerate, override, restore). There is **one** brand voice profile per workspace, edited here or at Settings → Branding, and every AI writer reads it — ARE Settings has no voice picker of its own (the one that was there wrote a column nobody read; removed 2026-09-20). **Apply to AI** off here silences branding for all of them.
 
 ### Prompt Templates — `/prompt-templates`
-Versioned prompts behind the AI generators (sequence writer, reply drafts, QBR prep). Edit with care; the campaign's own **sequence prompt** (voice + do-not list) overrides per campaign.
+A library of versioned prompts (goal, A/B group, prompt text) that **no AI feature reads yet**: the writers use their own built-in prompts. To change how the AI writes, use Brand Voice, the Knowledge base, Research and each campaign's **sequence prompt** (voice + do-not list). **Snippets** (`/snippets`, from the Email Builder's sub-nav) is the same kind of library for email text you copy by hand.
 
 ### Workflow Rules — `/workflows`
 If-this-then-that on CRM events: triggers record created, stage changed, signal received (job change), deal stuck, task overdue; actions webhook, Slack, Teams, create task, notify. **Test fire** runs the real path.
 
 ### Custom Fields — `/custom-fields` · Team — `/team` · Audit Log — `/audit` · Help Center — `/help`
 Your own fields on records; members, roles, invites, deactivate/reassign/delete; who changed what; guides, articles, tours and Ask AI.
+
+### Smaller admin pages
+- **Engine Status** — `/engine-status` [admin]: each background engine's last run and failures since the server started, this workspace's queues (waiting, due now, stuck, failed today), automatic tasks filed against their daily caps, browser errors and slow queries. Reads once; **Refresh** re-reads.
+- **SCIM** — `/scim` [admin], from the Team page's sub-nav: providers with a bearer token shown once, Rotate, enable/disable; deprovisioning deactivates the member.
+- **Tour Builder** — `/tour-builder` [admin], from Settings or the Help drawer: tours with a trigger page key, steps (data-tour-id or CSS selector, treatment, advance condition), a click recorder, draft/published.
+- **Research Pipeline** — `/research-pipeline`, linked from the draft tools in the Emails drawer: five AI stages for one contact, ending in a draft that waits in Email Drafts.
+- An admin's edit or delete of a seeded help article or tour survives deploys (`help_seed_overrides`, 2026-11-06); untouched ones keep receiving shipped updates.
+- The `?` help drawer lists the articles whose single `pageKey` equals the page's key (Elsie's `ROUTE_PAGE_KEYS`, else the first path segment). `help_articles.pageKeys` exists and is written by the admin editor, but nothing reads it.
 
 **Audit Log is not read-only.** Filter by entity type (the dropdown is derived from what the workspace has actually recorded, not a fixed list) and by member, then **Export CSV**. The export is rendered server-side, so it returns the filtered set — up to **2,000** entries, newest first, with a warning when there were more — rather than the 500 rows on screen. It carries the before/after diff (1,000 chars per side), the actor's name including deleted members, the IP and the user agent. Admin role **plus** the `export_data` permission; the read alone needs only admin.
 

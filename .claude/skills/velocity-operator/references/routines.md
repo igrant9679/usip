@@ -11,8 +11,8 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 ### Everyone — the 10-minute loop (Home first)
 1. **Home → attention panel**, top to bottom. Each row is a queue; empty the queue, not the row. Each approvals screen also has a whole-queue button (P13) whose count is the server's, not the page's — sample the queue before using it.
    - AI drafts (Emails → AI Pipeline): approve, edit, discard. Read at least two in full every day; you are training your own trust.
-   - Engine approvals (campaign → Prospects): release the batch if the campaign runs batch-approval. Nothing sends until you do.
-   - Unhandled replies (Conversations): answer within one business day. A human reply beats any sequence step; handling one stops the sequence for that person.
+   - Engine approvals (campaign → Prospects, or `/are/approvals` for every campaign at once): release the batch if the campaign runs batch-approval. Nothing sends until you do.
+   - Unhandled replies (Inbox → Replies): answer within one business day. A human reply beats any sequence step; handling one stops the sequence for that person.
    - Proposed meetings (Meetings): confirm or decline candidate times.
    - Draft tasks (Tasks): accept or dismiss next-best actions.
    - Routing suggestions and campaign proposals (Revenue Engine hub): decide, do not let them pile up; the engine keeps proposing.
@@ -55,9 +55,9 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 1. **Engine Performance** (`/are/performance`) and each active campaign's **Step performance**: which steps and variants get opens and replies; kill or rewrite losers; promote winners (A/B tab). Retiring a whole angle is a human call; the optimisation dial only tunes within limits.
 2. **Campaign health** (`/are/campaigns`): per campaign — working count vs target, enrichment backlog, sequence quality spread (open two low-twenties sequences and read them), rejections for false negatives (restore real fits), sources still what you intend, daily cap sane, status as expected (nothing "active" that should be paused).
 3. **Sequences** (`/v2/sequences`): enrollment counts, stuck steps, drafts sitting in Email Drafts.
-4. **Conversations**: classification quality — mark anything misclassified; if "needs classify" grows, the classifier is starved or the mailbox is disconnected.
+4. **Inbox → Replies**: classification quality — mark anything misclassified; if "needs classify" grows, the classifier is starved or the mailbox is disconnected.
 5. **Data health** (Data Enrichment → Data Health + sweep and backfill cards): what the sweeps found, credits spent, how many people still lack email or company. You are checking for a stall, not doing the work.
-6. **Pipeline review** (Deals + Forecast): stage-by-stage; slipped close dates; deals with no activity in 14 days; forecast vs quota. Update win probabilities honestly.
+6. **Pipeline review** (Sales Pipeline + Forecast): stage-by-stage; slipped close dates; deals with no activity in 14 days; forecast vs quota. Update win probabilities honestly.
 7. **Leads**: anything `new` older than 2 days is a routing problem (Lead Routing) or a capacity problem.
 8. **Inbound**: Website Visitors high-intent list, Forms submissions, Chat sessions transcripts (read three; promote the agent's dial if you approved everything unchanged), Landing page views vs submits.
 9. **Autonomy Center**: AI-suggested workflow rules — adopt or dismiss; every dial still where you meant it.
@@ -69,9 +69,9 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 ## Monthly (60–90 min, calendar it)
 
 1. **Budgets** (Settings → Billing and credits): AI token usage vs monthly budget; verification and QuickEnrich credit cycles (no rollover: if a cycle ended with credits unspent raise the sweep cap, if it ran dry early lower it); LinkedIn lookup usage.
-2. **Recalculate lead scoring** (Lead Scoring → Recalculate); confirm the primary model is still right. A month of enrichment changed the fields it reads.
+2. **Recalculate lead scoring** (Lead Scoring → **Recompute all**); confirm the primary model is still right. A month of enrichment changed the fields it reads.
 3. **ICP review** (ICP Agent): read the current version vs last month; if won deals moved the profile, adjust campaign targeting; consider a campaign proposal run.
-4. **Prune**: complete or archive finished campaigns; archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
+4. **Prune**: archive finished campaigns (there is no complete button; Unarchive brings one back); archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
 5. **Autonomy review**: any dial that spent a clean month on Approve with everything approved unchanged is a candidate for Auto. Promote one per month.
 6. **Deliverability month-end**: warmup graduations, suppression list growth, unsubscribes by campaign; retire any sender with rising bounces. Rates are a rolling 30-day per-recipient window and appear only once a mailbox has reached the recipient floor. (No domain-health panel exists on the page — SPF/DKIM/DMARC rows come from SendGrid domain auth, not `/v2/deliverability`.)
 7. **Brand voice and personas**: re-read; update avoid-words from what replies complained about; add personas for new segments that converted.
@@ -107,7 +107,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 2. Enrich fully; verify emails; clear Needs Review for the list.
 3. Recalculate fit; keep `good`/`excellent` with `valid` email.
 4. Enroll into a sequence (People → Add to ▾ → Sequence) or a campaign (wizard). Drafts appear in Email Drafts if the sequence requires review.
-5. Replies → Conversations → handle; willing-to-meet → send booking link or propose times (Meetings).
+5. Replies → Inbox → Replies → handle; willing-to-meet → send booking link or propose times (Meetings).
 6. Meeting held → disposition → convert lead → opportunity.
 
 ### P3 — Inbound lead handling (forms, landing pages, chat, booking)
@@ -117,14 +117,14 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 4. Chat-qualified visitors: in Approve mode a high-priority task; in Auto a booked meeting — check the transcript before the meeting.
 
 ### P4 — Reply handling
-1. Conversations, newest first; read classification and suggested reply.
+1. Inbox → Replies, newest first; read classification and suggested reply.
 2. Willing to meet → propose times / booking link (Meeting Autopilot can do it); question → answer in your voice, log; referral → create the referred person (People) and a task; OOO → automatic snooze (the enrollment gets a `resumeAt` — stated return date, else +7d, capped at +90d — and the 5-minute sequence tick flips it back to active from the next unsent step; a genuine reply clears the stamp, and three consecutive out-of-offices ends the probing. Only in Approve/Auto: an Off workspace never classifies, so its OOOs stay paused until you resume them); left company → job-change flow, mark contact departed; not interested → mark, respect it; unsubscribe → suppression (automatic in Auto).
 3. Handling marks the reply handled and stops the sequence for that person.
 
 ### P5 — Weekly pipeline and forecast review
 1. Deals board by stage; sort by days in stage; every deal: next step dated, champion named, close date realistic.
 2. Pipeline Alerts cleared; Deal Autopilot suggestions accepted or dismissed.
-3. Forecast page: commit vs best case; adjust win probabilities; note slips with reasons.
+3. Forecast page: pick the fiscal quarter, set each deal's category, read Commit vs Best case and quota pacing; adjust win probabilities; note slips with reasons.
 4. Proposals/Quotes: follow-ups on anything sent > 5 days.
 
 ### P6 — Campaign copy refresh

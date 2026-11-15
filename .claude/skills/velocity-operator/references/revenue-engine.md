@@ -59,7 +59,7 @@ Everything is idempotent and per-phase try/caught. Logs tab shows each phase per
 - `review_release`: approve each person's written sequence.
 - `full` is set **only** by a human on the campaign's Settings tab, behind the "I understand…" acknowledgement. The AI Assistant refuses it on every route it can reach — `are.campaigns.create`, `are.campaigns.update` and `are.campaigns.setAllAutonomy` — and it also refuses `launch: true`, so a campaign minted from chat is always a draft (2026-09-20).
 - Reject = `skipped` with a reason; Restore brings a row back to `pending`/`approved`.
-- Attention panel row "Engine approvals" counts these by campaign.
+- Attention panel row "Engine approvals" counts these by campaign, and opens **Approvals** (`/are/approvals`, 2026-11-07): one queue across campaigns, filtered by campaign, ICP score, source and kind, with select-and-approve, reject with reasons, and "approve everyone who scores at least N" that counts first and approves no more than the count (2,000 at most). Approving queues sequences and sends nothing by itself.
 
 ## Reading a campaign
 - **Prospects tab**: enrichment and sequence status per row; filters by status; ICP score.
@@ -71,7 +71,7 @@ Everything is idempotent and per-phase try/caught. Logs tab shows each phase per
 - **Logs**: engine phases per tick, counts and errors.
 
 ## Replies
-Inbound mail is polled every 60 s (IMAP/Gmail/Graph). A reply to a campaign step marks the person `replied`, stops their remaining steps, and lands in Conversations classified. **SendGrid senders have no inbox**: replies go to the Reply-To address and only appear in Velocity if that mailbox is connected.
+Inbound mail is polled every 60 s (IMAP/Gmail/Graph). A reply to a campaign step marks the person `replied`, stops their remaining steps, and lands in Inbox → Replies, classified. **SendGrid senders have no inbox**: replies go to the Reply-To address and only appear in Velocity if that mailbox is connected.
 
 ## Sender identity
 One rule: `senderDisplayName` — the sending account's display name, else the owner's name. It becomes the From header and fills `{{senderName}}`. Set display names on every sender (SendGrid senders especially) or the signature is blank.

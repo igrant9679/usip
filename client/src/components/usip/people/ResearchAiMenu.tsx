@@ -83,7 +83,7 @@ export function ResearchAiMenu({ compact = false }: { compact?: boolean }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setModal(null)}>Cancel</Button>
             <Button onClick={() => { setLocation("/v2/ai-assistant"); setModal(null); }}>
-              Open AI Assistant
+              Open Elsie
             </Button>
           </DialogFooter>
         </DialogContent>

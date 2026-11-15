@@ -23,6 +23,16 @@
  *
  * Offering is rate-limited by memory of what was already offered: a guide that
  * re-asks on every route change is not a guide, it is a popup.
+ *
+ * ONE HELPER (owner, 2026-11-15: "Merge Elsie and the assistant"). The top bar
+ * carried two things a user had to tell apart: this toggle, which only offered
+ * tours, and a sparkles button that opened the AI Assistant, which answers
+ * questions and does the work. They are one Elsie now:
+ *   • the top-bar button opens her (the assistant drawer, Ctrl/Cmd+J)
+ *   • the chat can hand back a tour as a "Show me" button (find_tours)
+ *   • the old on/off preference still exists, and still means exactly what it
+ *     did, "offer me a tour when I open a page": it moved into her drawer
+ *   • the unprompted card gained "Ask Elsie", so an offer is never a dead end
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -31,6 +41,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useTourEngine, type Tour } from "./TourEngine";
 import { Compass, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { assistantStore, useAssistantStore } from "@/lib/assistantStore";
 
 /** Her name, in one place, so renaming her is a one-line change. */
 export const ELSIE_NAME = "Elsie";
@@ -124,7 +135,12 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/calendar", "calendar"],
   ["/v2/companies", "companies"],
   ["/v2/lists", "lists"],
+  // "Every page, explained" and "Navigating the app" are filed under this key.
+  ["/v2/library", "library"],
   ["/v2/data-enrichment", "data-enrichment"],
+  // Research had no key, so its Help drawer was empty and the assistant was
+  // told the user was on an unknown page (2026-11-15).
+  ["/research", "research"],
   ["/data-health", "data-health"],
   ["/import", "import"],
   ["/v2/emails", "emails"],
@@ -181,37 +197,50 @@ export function pageKeyForRoute(path: string): string | null {
   return best?.key ?? null;
 }
 
-/* ─── Toggle (top bar) ───────────────────────────────────────────────────── */
+/* ─── Tour-offer preference ──────────────────────────────────────────────── */
 
 /**
- * The on/off control. Lives in Shell's top bar — deliberately not a floating
- * action button, which this product does not use.
+ * Whether Elsie offers a tour unprompted, and the switch for it. The switch
+ * sits in her drawer's header (AssistantDrawer); the value still follows the
+ * account (users.elsie_enabled).
  */
-export function ElsieToggle() {
+export function useElsieTourOffers(): [boolean, () => void] {
   const [enabled, setEnabled] = useElsieEnabled();
   // Best-effort account sync: the local state flips immediately either way, so
   // a failed write costs this device's session rather than the interaction.
   const save = trpc.profile.updateMyAppearance.useMutation({ meta: { silentError: true } });
-  const toggle = () => {
+  const toggle = useCallback(() => {
     const next = !enabled;
     setEnabled(next);
     save.mutate({ elsieEnabled: next });
-  };
+  }, [enabled, setEnabled, save]);
+  return [enabled, toggle];
+}
+
+/* ─── Button (top bar) ───────────────────────────────────────────────────── */
+
+/**
+ * The one way in. Lives in Shell's top bar — deliberately not a floating
+ * action button, which this product does not use. It opens Elsie's drawer;
+ * it is no longer an on/off switch (that is "Tour offers" inside the drawer).
+ */
+export function ElsieButton() {
+  const { open } = useAssistantStore();
   return (
     <button
-      onClick={toggle}
-      title={enabled ? `${ELSIE_NAME} is on — click to turn guidance off` : `${ELSIE_NAME} is off — click to turn guidance on`}
-      aria-pressed={enabled}
+      type="button"
+      data-tour-id="assistant-button"
+      onClick={() => assistantStore.toggle()}
+      title={`${ELSIE_NAME}: ask anything, get shown around, or have it done (Ctrl+J)`}
+      aria-label={`Open ${ELSIE_NAME}, your guide and assistant`}
+      aria-expanded={open}
       className={cn(
         "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm transition-colors shrink-0",
-        enabled ? "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300" : "text-muted-foreground hover:bg-secondary",
+        "bg-violet-100 text-violet-700 hover:bg-violet-200/80 dark:bg-violet-500/15 dark:text-violet-300 dark:hover:bg-violet-500/25",
       )}
     >
-      <Compass className={cn("size-4", enabled && "animate-none")} />
+      <Compass className="size-4" />
       <span className="hidden sm:inline font-medium">{ELSIE_NAME}</span>
-      <span className={cn("hidden md:inline text-[10px] px-1 rounded", enabled ? "bg-violet-200/70 dark:bg-violet-400/20" : "bg-muted")}>
-        {enabled ? "ON" : "OFF"}
-      </span>
     </button>
   );
 }
@@ -227,6 +256,8 @@ export function ElsieController() {
   const [enabled] = useElsieEnabled();
   const [location] = useLocation();
   const { startTour, activeTour } = useTourEngine();
+  // Her drawer is the same corner of the screen: no card over an open chat.
+  const { open: drawerOpen } = useAssistantStore();
 
   const pageKey = useMemo(() => pageKeyForRoute(location), [location]);
   const [dismissed, setDismissed] = useState(false);
@@ -274,7 +305,7 @@ export function ElsieController() {
     setDismissed(true);
   }, [pageKey]);
 
-  if (!canAsk || !suggestion) return null;
+  if (!canAsk || !suggestion || drawerOpen) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-[9980] w-80 rounded-xl border bg-popover text-popover-foreground shadow-xl p-4 animate-in slide-in-from-bottom-4">
@@ -295,6 +326,12 @@ export function ElsieController() {
               className="px-3 py-1.5 text-[12px] font-medium text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-60 rounded-lg"
             >
               Show me
+            </button>
+            <button
+              onClick={() => { dismiss(); assistantStore.open(); }}
+              className="px-2 py-1.5 text-[12px] font-medium text-violet-700 dark:text-violet-300 hover:underline"
+            >
+              Ask {ELSIE_NAME}
             </button>
             <button onClick={dismiss} className="px-2 py-1.5 text-[12px] text-muted-foreground hover:text-foreground">
               Not now

@@ -28,7 +28,7 @@ import { inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
 import { buildStageIndex } from "@shared/stageSemantics";
-import { aiAssistantProposals, aiHelpConversations, aiHelpMessages, helpArticles, prospects } from "../../drizzle/schema";
+import { aiAssistantProposals, aiHelpConversations, aiHelpMessages, helpArticles, prospects, tours } from "../../drizzle/schema";
 import { invokeLLM, type Message } from "../_core/llm";
 import { recordAudit } from "../audit";
 import {
@@ -43,7 +43,8 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
-import { AUTONOMY_DIALS, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
+import { AUTONOMY_DIALS, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, redactForModel, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
+import { describeScreen, screenLine } from "@shared/assistantScreen";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 import { affectedRowsOf } from "../_core/claim";
 
@@ -115,6 +116,42 @@ const compactPerson = (p: Record<string, unknown>) => ({
   linkedinUrl: p.linkedinUrl ?? null,
   fitScore: (p as { fitScore?: number }).fitScore ?? null,
 });
+
+/**
+ * A tool result the model can always read. The old form parsed a JSON string
+ * cut at 6,000 characters, which is not JSON any more: a long result (a full
+ * settings row, a team list) threw, and the user saw "run_read_action
+ * failed" for a read that had worked. A long result now arrives as cut text
+ * with a note, so the model can say what it saw and that there is more.
+ */
+const MODEL_RESULT_CHARS = 6000;
+export function capForModel(value: unknown): unknown {
+  const text = JSON.stringify(value ?? null);
+  if (text.length <= MODEL_RESULT_CHARS) return JSON.parse(text);
+  return { truncated: true, note: `The result is ${text.length} characters; this is the first ${MODEL_RESULT_CHARS}. Narrow the request if what you need is missing.`, text: text.slice(0, MODEL_RESULT_CHARS) };
+}
+
+/** A guided tour the chat offers as a "Show me" button. */
+export type TourOffer = { id: number; name: string; description: string | null; pageKey: string | null; estimatedMinutes: number | null };
+
+/**
+ * The tours that match what the user asked to be shown: the page's own first,
+ * then any whose name, description or page key holds a word of the query.
+ * At most three: a list of ten buttons is a menu, not guidance.
+ */
+export function pickTours(rows: TourOffer[], query: string | undefined, pageKey: string | undefined): TourOffer[] {
+  const words = Array.from(new Set((query ?? "").toLowerCase().match(/[a-z0-9]{3,}/g) ?? []))
+    .filter((w) => !["the", "and", "for", "how", "show", "tour", "walk", "through", "page", "this", "with", "use", "using"].includes(w));
+  const key = (pageKey ?? "").toLowerCase();
+  const scored = rows.map((t) => {
+    const hay = `${t.name} ${t.description ?? ""} ${t.pageKey ?? ""}`.toLowerCase();
+    let score = 0;
+    if (key && (t.pageKey ?? "").toLowerCase() === key) score += 5;
+    for (const w of words) if (hay.includes(w)) score += (t.name.toLowerCase().includes(w) ? 3 : 1);
+    return { t, score };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name));
+  return scored.slice(0, 3).map((x) => x.t);
+}
 
 async function runReadTool(
   name: AssistantToolName,
@@ -310,7 +347,23 @@ async function runReadTool(
       if (entry.kind !== "query") return { result: { error: `${entry.path} changes data — propose it with run_action instead` }, summary: `${entry.path} is a mutation` };
       const input = entry.parse(args.input ?? {});
       const r = await invokeCallerPath(caller, entry.path, input);
-      return { result: JSON.parse(JSON.stringify(r ?? null).slice(0, 6000)), summary: `Ran ${entry.path}` };
+      // A settings-class read is scrubbed of anything named like a secret
+      // before the model, or the stored digest, can hold it (2026-11-15).
+      return { result: capForModel(entry.readOnly ? redactForModel(r ?? null) : (r ?? null)), summary: `Ran ${entry.path}` };
+    }
+    case "find_tours": {
+      const db = await getDb();
+      if (!db) return { result: { tours: [] }, summary: "Looked for a tour" };
+      const rows = await db.select({ id: tours.id, name: tours.name, description: tours.description, pageKey: tours.pageKey, estimatedMinutes: tours.estimatedMinutes })
+        .from(tours)
+        .where(and(eq(tours.workspaceId, ctx.workspace.id), eq(tours.status, "published")))
+        .orderBy(tours.name)
+        .limit(200);
+      const found = pickTours(rows, args.query as string | undefined, args.pageKey as string | undefined);
+      return {
+        result: { tours: found, note: found.length ? "Each of these is shown to the user as a 'Show me' button." : "No tour matches. Explain in words, or use help_lookup." },
+        summary: found.length ? `Found ${found.length} guided tour${found.length === 1 ? "" : "s"}` : "No guided tour matches",
+      };
     }
     case "list_report_fields": {
       const s = await caller.reports.schema();
@@ -329,7 +382,7 @@ async function runReadTool(
   }
 }
 
-const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-app assistant and operator. You can look anything up, run reports, and do virtually anything the user can do in the app — create and edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas, reports; add batches of people to campaigns, sequences and lists by criteria; log and queue calls — always by PROPOSING the action, which runs only after the user confirms the card in the chat.
+const SYSTEM_PROMPT = (pageKey: string | undefined, screen: string) => `You are Elsie, Velocity's in-app guide, assistant and operator (one helper: the same Elsie who offers the guided tours). You can look anything up, run reports, and do virtually anything the user can do in the app — create and edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas, reports; add batches of people to campaigns, sequences and lists by criteria; log and queue calls — always by PROPOSING the action, which runs only after the user confirms the card in the chat.
 
 How to work with the user:
 - Be consultative. When a request is ambiguous in a way that changes the outcome (which campaign, which criteria, how many, draft or active), ask ONE focused question with ask_user and offer 2–4 concrete options. Do not ask about things you can look up or that have an obvious default.
@@ -353,7 +406,9 @@ Rules:
 - ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
 - Be concise and concrete. Short sentences, tight lists, real names and numbers from tool results.
-- The user opened the assistant from this page: ${pageKey ?? "unknown"}. Use it to interpret "this page" / "here" and to pick navigate targets.
+- The user opened you from this page: ${pageKey ?? "unknown"}. ${screen} Use both to interpret "this page" / "here" / "this record" and to pick navigate targets. The one exception to the id rule above: the id of the record on screen may be used for a LOOKUP; act on it only after that lookup returned the record.
+- Settings, usage, keys, team and mailboxes are READ ONLY for you: the actions in the "Settings (read only)" group (list_actions with that group) answer "which keys are set up", "who is on the team", "what have we spent", "is a key shared with another workspace", "which mailboxes are connected". You never see a key or password, only whether one is set. You cannot change any of them: say what the setting is, then navigate the user to the page that changes it.
+- Showing, not only telling: when the user asks to be shown or walked through a page or a job, call find_tours; a matching tour appears as a "Show me" button that starts the on-screen walkthrough. When they would rather you did it, do it (propose the action) and say afterwards what you did.
 - For "what should I do today / this week / this month" call whats_waiting first, then answer as the routine below applied to those real counts — name the queues that are non-empty and skip the ones that are. For "where is X" / "how do I X" answer from the page map and, when depth is needed, help_lookup (the Help Center's Operator's Manual articles cover every page, routine and process).
 
 OPERATOR'S MANUAL (the product's mental model, vocabulary, page map, dials and routines — trust it, and keep its vocabulary exact):
@@ -365,6 +420,8 @@ export const assistantRouter = router({
       conversationId: z.number(),
       message: z.string().min(1).max(2000),
       pageKey: z.string().optional(),
+      /** The address the user is on (path and query), for "this record" (shared/assistantScreen). */
+      pagePath: z.string().max(300).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -390,7 +447,7 @@ export const assistantRouter = router({
 
       const caller = await getCaller(ctx);
       const messages: Message[] = [
-        { role: "system", content: SYSTEM_PROMPT(input.pageKey) },
+        { role: "system", content: SYSTEM_PROMPT(input.pageKey, screenLine(describeScreen(input.pagePath))) },
         ...prior.map((m) => ({ role: m.role as "user" | "assistant", content: m.body })),
         { role: "user", content: input.message },
       ];
@@ -398,6 +455,8 @@ export const assistantRouter = router({
       const toolEvents: Array<{ tool: string; summary: string }> = [];
       const toolResults: Array<{ tool: string; result: unknown }> = [];
       const navigations: Array<{ href: string; label: string }> = [];
+      /** Tours find_tours returned this turn: the chat shows each as a "Show me" button. */
+      const tourOffers: TourOffer[] = [];
       type Pending = { nonce: string; tool: string; args: Record<string, unknown>; description: string; expiresAt: string };
       const pendingActions: Pending[] = [];
       let question: { text: string; options: string[] } | null = null;
@@ -495,6 +554,11 @@ export const assistantRouter = router({
             const { result, summary } = await runReadTool(name, args, ctx, caller);
             toolEvents.push({ tool: name, summary });
             toolResults.push({ tool: name, result });
+            if (name === "find_tours") {
+              for (const t of ((result as { tours?: TourOffer[] }).tours ?? [])) {
+                if (!tourOffers.some((o) => o.id === t.id)) tourOffers.push(t);
+              }
+            }
             messages.push({ role: "user", content: `[tool_result ${name}]: ${JSON.stringify(result).slice(0, 6000)}` });
           } catch (e) {
             const emsg = (e as Error).message?.slice(0, 200) ?? "failed";
@@ -532,7 +596,7 @@ export const assistantRouter = router({
       await db.update(aiHelpConversations).set({ lastMessageAt: new Date() } as never)
         .where(and(eq(aiHelpConversations.workspaceId, ctx.workspace.id), eq(aiHelpConversations.id, input.conversationId)));
 
-      return { answer, toolEvents, navigations, pendingAction: pendingActions[0] ?? null, pendingActions, question };
+      return { answer, toolEvents, navigations, tours: tourOffers.slice(0, 3), pendingAction: pendingActions[0] ?? null, pendingActions, question };
     }),
 
   /**
