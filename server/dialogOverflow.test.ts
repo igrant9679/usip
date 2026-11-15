@@ -46,7 +46,18 @@ describe("a dialog's contents stay inside it", () => {
     const cls = classesWith(read("client/src/components/ui/select.tsx"), "w-fit").split(/\s+/);
     expect(cls).toContain("max-w-full");
     expect(cls).toContain("*:data-[slot=select-value]:min-w-0");
-    expect(cls).toContain("*:data-[slot=select-value]:line-clamp-1");
+  });
+
+  // Owner ask 2026-11-15: a label that is cut short ends in "…". The value used to be a flex box
+  // (for options that pair an icon with text; the app has none), and a flex box clips its text
+  // with no ellipsis whatever text-overflow says. As a block it truncates properly. Seen on the
+  // live dialog at a 375px-wide window before the change.
+  it("a dropdown value that is cut short ends in an ellipsis", () => {
+    const cls = classesWith(read("client/src/components/ui/select.tsx"), "w-fit").split(/\s+/);
+    expect(cls).toContain("*:data-[slot=select-value]:block");
+    expect(cls).toContain("*:data-[slot=select-value]:truncate");
+    expect(cls).not.toContain("*:data-[slot=select-value]:flex");
+    expect(cls).not.toContain("*:data-[slot=select-value]:line-clamp-1");
   });
 
   it("the AI research settings dropdown fills the dialog, which is wide enough for its longest label", () => {
