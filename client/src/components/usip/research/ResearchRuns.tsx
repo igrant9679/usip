@@ -303,7 +303,7 @@ export function ResearchSettingsButton() {
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>AI research settings</Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md">
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>AI research settings</DialogTitle>
             <DialogDescription>Runs bill this workspace's own Anthropic key. Prices are Anthropic's list prices per million tokens; web search adds $10 per 1,000 searches.</DialogDescription>
@@ -312,7 +312,7 @@ export function ResearchSettingsButton() {
             <div className="space-y-2">
               <Label>Model</Label>
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger><SelectValue placeholder="Choose a model" /></SelectTrigger>
+                <SelectTrigger className="w-full"><SelectValue placeholder="Choose a model" /></SelectTrigger>
                 <SelectContent>
                   {(q.data?.models ?? []).map((m) => (
                     <SelectItem key={m.id} value={m.id}>{m.label} (${m.input} in / ${m.output} out). {m.note}</SelectItem>
