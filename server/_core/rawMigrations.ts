@@ -5503,6 +5503,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `workspace_settings` ADD COLUMN `elsieAssistDailyCap` int NULL",
     ],
   },
+
+  // ── 0443: DeepSeek, a fourth AI provider (owner ask 2026-11-16) ──────────
+  // "Have her use a low cost model such as Haiku, Sonnet, Deepseek v4 flash."
+  // The tiers (0441) could only name Anthropic, OpenAI or Gemini. A workspace
+  // can now enter a DeepSeek key and a model beside the other three. Both
+  // NULL = no DeepSeek, which is every workspace until an admin adds a key.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0443_deepseek_provider.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `deepseekApiKeyEnc` text NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `deepseekModel` varchar(128) NULL",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AI_PROVIDER_IDS,
+  AI_PROVIDER_LABEL as PROVIDER_NAME,
   AI_TASKS,
   AI_TASK_IDS,
   AI_TIERS,
@@ -33,8 +34,6 @@ import {
   type AiProviderId,
   type AiTier,
 } from "@shared/aiTiers";
-
-const PROVIDER_NAME: Record<AiProviderId, string> = { anthropic: "Anthropic", openai: "OpenAI", gemini: "Google Gemini" };
 
 type Draft = { provider: AiProviderId; model: string };
 

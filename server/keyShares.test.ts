@@ -334,12 +334,13 @@ describe("every read of a shareable key goes through the link", () => {
     "server/_core/rawMigrations.ts": "DDL",
     "server/_core/safeProjections.ts": "the list of columns withheld from members",
     "server/routers/spend.ts": "the platform owner's list of which workspaces hold their OWN key",
+    "server/services/deepseekSettings.ts": "the raw read of DeepSeek's own column; every caller also asks the link (server/deepseekProvider.test.ts)",
     "server/services/quickenrich.ts": "resolves through a dynamic import of ./keyShares (pinned below)",
     "server/services/reoon.ts": "resolves through a dynamic import of ./keyShares (pinned below)",
   };
 
   it("no server file reads a shareable key column around the link", () => {
-    const out = execFileSync("git", ["grep", "-l", "-E", "(anthropic|openai|gemini|xai|apollo|reoon|quickenrich)ApiKeyEnc", "--", "server"], { cwd: ROOT, encoding: "utf8" });
+    const out = execFileSync("git", ["grep", "-l", "-E", "(anthropic|openai|gemini|deepseek|xai|apollo|reoon|quickenrich)ApiKeyEnc", "--", "server"], { cwd: ROOT, encoding: "utf8" });
     const files = out.split("\n").map((s) => s.trim()).filter((f) => f && !f.endsWith(".test.ts") && f !== "server/services/keyShares.ts");
     expect(files.length).toBeGreaterThan(10);
     const unresolved = files.filter((f) => !(f in OWN_KEY_ONLY) && !/from "(\.\.?\/)+(services\/)?keyShares"/.test(read(f)));

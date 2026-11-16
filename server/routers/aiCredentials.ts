@@ -2,7 +2,7 @@
  * aiCredentials.ts — BYOK AI provider credentials per workspace.
  *
  * Procedures:
- *   aiCredentials.get     — return masked + boolean status of all 3 providers (any role)
+ *   aiCredentials.get     — return masked + boolean status of every provider (any role)
  *   aiCredentials.upsert  — set/clear API key + model per provider (admin only)
  *   aiCredentials.test    — issue a tiny "ping" call against a provider (admin only)
  *   aiCredentials.getTiers / setTier / setTaskTier / testTier — model tiers (shared/aiTiers.ts)
@@ -20,12 +20,27 @@ import {
 } from "../_core/crypto";
 import { invokeLLM, type ProviderName } from "../_core/llm";
 import { borrowedKeys } from "../services/keyShares";
+import { deepseekSettings } from "../services/deepseekSettings";
 import { forgetTierConfig } from "../services/aiTiers";
-import { AI_TASK_IDS, AI_TIERS, cleanTaskTiers, cleanTierModels, type AiTask } from "@shared/aiTiers";
+import { AI_PROVIDER_IDS, AI_TASK_IDS, AI_TIERS, cleanTaskTiers, cleanTierModels, type AiProviderId, type AiTask } from "@shared/aiTiers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
-const providerEnum = z.enum(["anthropic", "openai", "gemini"]);
+const providerEnum = z.enum(AI_PROVIDER_IDS);
+
+/** Where each provider's key and model are kept on workspace_settings. */
+const KEY_COLUMN = {
+  anthropic: "anthropicApiKeyEnc",
+  openai: "openaiApiKeyEnc",
+  gemini: "geminiApiKeyEnc",
+  deepseek: "deepseekApiKeyEnc",
+} as const satisfies Record<AiProviderId, string>;
+const MODEL_COLUMN = {
+  anthropic: "anthropicModel",
+  openai: "openaiModel",
+  gemini: "geminiModel",
+  deepseek: "deepseekModel",
+} as const satisfies Record<AiProviderId, string>;
 const tierEnum = z.enum(AI_TIERS);
 const taskEnum = z.enum(AI_TASK_IDS as [AiTask, ...AiTask[]]);
 
@@ -56,7 +71,7 @@ async function ensureSettingsRow(workspaceId: number): Promise<void> {
 
 export const aiCredentialsRouter = router({
   /**
-   * Return masked credential status for all 3 providers in the current workspace.
+   * Return masked credential status for every provider in the current workspace.
    * Never returns plaintext keys.
    */
   get: workspaceProcedure.query(async ({ ctx }) => {
@@ -77,10 +92,12 @@ export const aiCredentialsRouter = router({
       .limit(1);
 
     const row = rows[0];
+    // DeepSeek's two columns are read apart from the rest (services/deepseekSettings).
+    const deepseek = await deepseekSettings(ctx.workspace.id);
     // A key another workspace lends this one (services/keyShares) is in use
     // and named, but never shown here — not even its tail.
     const borrowed = await borrowedKeys(ctx.workspace.id);
-    const mask = (enc: string | null | undefined, kind: "anthropic" | "openai" | "gemini") => {
+    const mask = (enc: string | null | undefined, kind: AiProviderId) => {
       const pt = tryDecryptSecret(enc);
       const lent = pt ? undefined : borrowed.find((b) => b.kind === kind && b.usable);
       return { configured: pt.length > 0 || !!lent, masked: maskSecret(pt), sharedFrom: lent?.ownerName ?? null };
@@ -98,6 +115,10 @@ export const aiCredentialsRouter = router({
       gemini: {
         ...mask(row?.geminiApiKeyEnc, "gemini"),
         model: row?.geminiModel ?? "",
+      },
+      deepseek: {
+        ...mask(deepseek.keyEnc, "deepseek"),
+        model: deepseek.model ?? "",
       },
       defaultProvider: row?.aiDefaultProvider ?? "",
     };
@@ -124,22 +145,10 @@ export const aiCredentialsRouter = router({
 
       const updates: Record<string, string | null> = {};
       if (input.apiKey !== undefined) {
-        const encCol =
-          input.provider === "anthropic"
-            ? "anthropicApiKeyEnc"
-            : input.provider === "openai"
-              ? "openaiApiKeyEnc"
-              : "geminiApiKeyEnc";
-        updates[encCol] = input.apiKey === "" ? null : encryptSecret(input.apiKey);
+        updates[KEY_COLUMN[input.provider]] = input.apiKey === "" ? null : encryptSecret(input.apiKey);
       }
       if (input.model !== undefined) {
-        const modelCol =
-          input.provider === "anthropic"
-            ? "anthropicModel"
-            : input.provider === "openai"
-              ? "openaiModel"
-              : "geminiModel";
-        updates[modelCol] = input.model === "" ? null : input.model;
+        updates[MODEL_COLUMN[input.provider]] = input.model === "" ? null : input.model;
       }
 
       if (Object.keys(updates).length > 0) {
@@ -191,6 +200,8 @@ export const aiCredentialsRouter = router({
       const a = reenc(from.anthropicApiKeyEnc); if (a) { updates.anthropicApiKeyEnc = a; updates.anthropicModel = from.anthropicModel ?? null; copied.push("anthropic"); }
       const o = reenc(from.openaiApiKeyEnc); if (o) { updates.openaiApiKeyEnc = o; updates.openaiModel = from.openaiModel ?? null; copied.push("openai"); }
       const g = reenc(from.geminiApiKeyEnc); if (g) { updates.geminiApiKeyEnc = g; updates.geminiModel = from.geminiModel ?? null; copied.push("gemini"); }
+      const fromDeepseek = await deepseekSettings(input.fromWorkspaceId);
+      const d = reenc(fromDeepseek.keyEnc); if (d) { updates.deepseekApiKeyEnc = d; updates.deepseekModel = fromDeepseek.model ?? null; copied.push("deepseek"); }
       if (from.aiDefaultProvider) updates.aiDefaultProvider = from.aiDefaultProvider;
       if (copied.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The source workspace has no AI keys to copy" });
       await db.update(workspaceSettings).set(updates).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));

@@ -221,6 +221,10 @@ describe("assistant product knowledge digest", () => {
     const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
     expect(AI_TIERS.map((t) => AI_TIER_LABEL[t])).toEqual(["Fast", "Standard", "Deep"]);
     expect(para).toContain("three tiers, Fast, Standard and Deep.");
+    // The providers she names are the ones the picker lists (DeepSeek joined them 2026-11-16).
+    const { AI_PROVIDER_IDS } = await import("../shared/aiTiers");
+    expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek"]);
+    expect(para).toContain("an admin picks a provider that has a key (Anthropic, OpenAI, Gemini or DeepSeek) and types a model name, then Save;");
     // Each default the paragraph states is the catalog's.
     const said: Record<string, string[]> = {
       deep: ["outreach", "targeting"],
@@ -234,7 +238,7 @@ describe("assistant product knowledge digest", () => {
     // The model box really is empty and free text, and the card sits below the keys.
     const card = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
     expect(card).toContain('placeholder="Model name, exactly as the provider lists it"');
-    expect(card).not.toMatch(/claude-|gpt-|gemini-/);
+    expect(card).not.toMatch(/claude-|gpt-|gemini-|deepseek-/);
     const settings = read("../client/src/pages/usip/Settings.tsx");
     const section = settings.slice(settings.indexOf("function AIProvidersSection("), settings.indexOf("function ProposalsTab("));
     expect(section.indexOf("{AI_PROVIDERS.map((p) => {")).toBeGreaterThan(-1);

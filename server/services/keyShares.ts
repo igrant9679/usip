@@ -25,9 +25,10 @@ import { and, eq, inArray } from "drizzle-orm";
 import { prospectSourceCredentials, workspaceKeyShares, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { deepseekSettings } from "./deepseekSettings";
 
 /** Keys kept as a column on the lender's workspace_settings row. */
-export const SETTINGS_SHARE_KINDS = ["anthropic", "openai", "gemini", "xai", "apollo", "reoon", "quickenrich"] as const;
+export const SETTINGS_SHARE_KINDS = ["anthropic", "openai", "gemini", "deepseek", "xai", "apollo", "reoon", "quickenrich"] as const;
 /** Keys kept as the lender's prospect_source_credentials row (the source's slug). */
 export const SOURCE_SHARE_KINDS = ["warmysender", "leadocean"] as const;
 export const SHARE_KINDS = [...SETTINGS_SHARE_KINDS, ...SOURCE_SHARE_KINDS] as const;
@@ -40,6 +41,7 @@ export const SHARE_KIND_LABEL: Record<ShareKind, string> = {
   anthropic: "Anthropic (Claude)",
   openai: "OpenAI",
   gemini: "Google Gemini",
+  deepseek: "DeepSeek",
   xai: "xAI (voice agents)",
   apollo: "Apollo",
   reoon: "Reoon email verifier",
@@ -48,7 +50,12 @@ export const SHARE_KIND_LABEL: Record<ShareKind, string> = {
   leadocean: "LeadOcean",
 };
 
-const SETTINGS_COLUMN: Record<SettingsShareKind, "anthropicApiKeyEnc" | "openaiApiKeyEnc" | "geminiApiKeyEnc" | "xaiApiKeyEnc" | "apolloApiKeyEnc" | "reoonApiKeyEnc" | "quickenrichApiKeyEnc"> = {
+/**
+ * The column each kind is kept in, for the kinds read together in one select.
+ * DeepSeek's column came later (migration 0443) and is read by itself, through
+ * services/deepseekSettings, which says why.
+ */
+const SETTINGS_COLUMN: Record<Exclude<SettingsShareKind, "deepseek">, "anthropicApiKeyEnc" | "openaiApiKeyEnc" | "geminiApiKeyEnc" | "xaiApiKeyEnc" | "apolloApiKeyEnc" | "reoonApiKeyEnc" | "quickenrichApiKeyEnc"> = {
   anthropic: "anthropicApiKeyEnc",
   openai: "openaiApiKeyEnc",
   gemini: "geminiApiKeyEnc",
@@ -127,7 +134,8 @@ export async function linkedKeys(workspaceId: number, kinds: readonly SettingsSh
     for (const kind of kinds) {
       const owner = lenders[kind];
       if (!owner) continue;
-      const key = tryDecryptSecret(byOwner.get(owner)?.[SETTINGS_COLUMN[kind]]);
+      const enc = kind === "deepseek" ? (await deepseekSettings(owner)).keyEnc : byOwner.get(owner)?.[SETTINGS_COLUMN[kind]];
+      const key = tryDecryptSecret(enc);
       if (key) out[kind] = { ownerWorkspaceId: owner, key };
     }
     return out;
@@ -254,7 +262,10 @@ export async function ownKeyKinds(workspaceId: number): Promise<Set<ShareKind>> 
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  for (const kind of SETTINGS_SHARE_KINDS) if (tryDecryptSecret(row?.[SETTINGS_COLUMN[kind]])) out.add(kind);
+  const deepseekEnc = (await deepseekSettings(workspaceId)).keyEnc;
+  for (const kind of SETTINGS_SHARE_KINDS) {
+    if (tryDecryptSecret(kind === "deepseek" ? deepseekEnc : row?.[SETTINGS_COLUMN[kind]])) out.add(kind);
+  }
   const sources = await db
     .select({ slug: prospectSourceCredentials.sourceSlug, status: prospectSourceCredentials.status, enc: prospectSourceCredentials.credentialsEnc })
     .from(prospectSourceCredentials)

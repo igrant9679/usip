@@ -183,7 +183,7 @@ describe("the rules", () => {
     expect(cleanTierModels("fast")).toEqual({});
     expect(cleanTierModels({
       fast: { provider: "anthropic", model: "  f  " },
-      standard: { provider: "deepseek", model: "x" }, // not a provider this build can call
+      standard: { provider: "mistral", model: "x" }, // not a provider this build can call
       deep: { provider: "openai", model: "" },
       turbo: { provider: "openai", model: "y" },
     })).toEqual({ fast: { provider: "anthropic", model: "f" } });
