@@ -24,7 +24,9 @@ const registryHrefs = new Set(TOOLS.map((t) => t.href));
 // Paths the digest names that are deliberately not registry tools.
 // /v2/library is the page that LISTS the registry, so it is not in it; the
 // shell's own LIBRARY_LINK and the route are checked below.
-const KNOWN_NON_TOOL_PATHS = new Set(["/help/articles", "/v2/library"]);
+// /are/settings is a tab of the Revenue Engine (AreSubNav), not a tool of
+// its own; its route and its tab are checked where the digest names it.
+const KNOWN_NON_TOOL_PATHS = new Set(["/help/articles", "/v2/library", "/are/settings"]);
 /**
  * The Settings hub's sections, read from the page that renders them: its
  * `internal` rows each open at /v2/settings/<id> (2026-11-15).
@@ -71,7 +73,15 @@ describe("assistant product knowledge digest", () => {
     // where every control in the top bar and the sidebar is, and lists the
     // hub's sections with what each holds (about 1,900 characters). The two
     // tests below hold that text to the real shell and the real hub.
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(12500);
+    //
+    // 2026-11-16: 12500 → 13000. The digest sat at 12,497 when a live check
+    // showed one of its older lines was wrong: "keys + on/off under Settings
+    // → Data sources". Only the keys are there; a source is switched on and
+    // ordered on the Revenue Engine's own settings tab. Elsie repeated the
+    // error as "a toggle to turn the key on/off" and "drag to reorder".
+    // Saying where each really is costs about 200 characters, and the
+    // routines had already been cut twice to pay for earlier fixes.
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13000);
   });
 
   it("says where Settings is, and names every section the hub has", () => {
@@ -117,7 +127,12 @@ describe("assistant product knowledge digest", () => {
     for (const vendor of ["Apollo", "QuickEnrich", "WarmySender", "LeadOcean", "Reoon"]) expect(dataSources.toLowerCase(), vendor).toContain(vendor.toLowerCase());
     // The same day she called Apollo's entry "a row in a table". Each vendor
     // is a card of its own with its key field, and the order is its own card.
-    expect(hub).toContain("data-sources (Data sources: a card per vendor with its key, and the checking order, for Apollo");
+    expect(hub).toContain("data-sources (Data sources: a read-only table of the vendors in checking order, then a card per vendor with its key field, for Apollo");
+    // The table at the top of that section is the registry, and it only reports.
+    const registry = read("../client/src/components/usip/settings/ProspectSourceRegistryCard.tsx");
+    expect(dataSources.indexOf("<ProspectSourceRegistryCard />")).toBeLessThan(dataSources.indexOf("<WarmySenderSourceCard />"));
+    expect(registry).toContain("<table");
+    expect(registry).not.toMatch(/<Switch\b|useMutation\(/);
     for (const card of ["<ProspectSourceRegistryCard />", "<WarmySenderSourceCard />", "<QuickEnrichSourceCard />", "<ApolloSourceCard />", "<LeadOceanSourceCard />", "<ReoonVerifierCard />"]) expect(dataSources, card).toContain(card);
     expect(read("../client/src/components/usip/settings/ApolloSourceCard.tsx")).toContain('aria-label="Apollo API key"');
     // And the rule that stops the next invented detail.
@@ -125,6 +140,34 @@ describe("assistant product knowledge digest", () => {
     const security = legacy.slice(legacy.indexOf("function SecurityTab("), legacy.indexOf("function NotificationsTab("));
     expect(security).toContain("IP allowlist");
     expect(security).toContain("Session timeout");
+  });
+
+  // 2026-11-16: the digest said "keys + on/off under Settings → Data sources"
+  // from the day it was written, and Elsie told the owner the Apollo card had
+  // an on/off toggle and a drag handle. Neither is on that page.
+  it("sends on/off and the order of a source to the Revenue Engine's settings, not to Data sources", () => {
+    const start = PRODUCT_KNOWLEDGE.indexOf("Prospect sources (");
+    expect(start).toBeGreaterThan(-1);
+    const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
+    expect(para).toContain("Keys: Settings → Data sources.");
+    expect(para).toContain("On/off and the order are NOT there: Revenue Engine → ARE Settings tab (/are/settings), the Prospect Sources & Checking Order card: arrows and a toggle per source, then Save.");
+    expect(PRODUCT_KNOWLEDGE).not.toContain("on/off under Settings");
+    // The page, its tab, and the card with those controls.
+    expect(read("../client/src/App.tsx")).toContain('<Route path="/are/settings">');
+    expect(read("../client/src/components/usip/are/AreSubNav.tsx")).toContain('{ href: "/are/settings", label: "ARE Settings",');
+    const are = read("../client/src/pages/usip/ARESettings.tsx");
+    const card = are.slice(are.indexOf('title="Prospect Sources & Checking Order"'));
+    expect(card.length).toBeGreaterThan(500);
+    const body = card.slice(0, 5000);
+    expect(body).toContain("aria-label={`Move ${meta.label} up`}");
+    expect(body).toContain("aria-label={`Move ${meta.label} down`}");
+    expect(body).toContain("<Toggle label={meta.label} checked={active}");
+    // Both only mark the page as changed: nothing is saved until Save.
+    expect(body).toContain("mark();");
+    expect(are).toMatch(/disabled=\{save\.isPending \|\| !dirty\}/);
+    // And no vendor card on Data sources carries an on/off switch for the source.
+    const apollo = read("../client/src/components/usip/settings/ApolloSourceCard.tsx");
+    expect(apollo).not.toMatch(/<Switch\b|<Toggle\b/);
   });
 
   it("puts each control where the shell puts it", () => {
