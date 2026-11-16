@@ -431,7 +431,7 @@ export async function generateInviteNote(
 Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links, and NEVER an em dash. Return ONLY the note text.`;
   const use = await researchUseFor(workspaceId, "outreach", who.ref ?? {});
   try {
-    const res = await invokeLLM({ task: "outreach", sendersBrand: true, workspaceId, research: { ...use, prospectTitle: who.title ?? use.prospectTitle ?? null }, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
+    const res = await invokeLLM({ sendersBrand: true, workspaceId, task: "outreach", research: { ...use, prospectTitle: who.title ?? use.prospectTitle ?? null }, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
     const txt = (res as any)?.choices?.[0]?.message?.content;
     if (typeof txt === "string" && txt.trim()) return humanizeAiCopy(txt.trim().replace(/^["']|["']$/g, "")).slice(0, 195);
   } catch (err) {

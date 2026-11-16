@@ -1060,8 +1060,8 @@ async function evaluateSequenceQuality(
       })()
     : "(no dossier supplied — judge specificity only on what the text itself names)";
   const result = await invokeLLM({
-    task: "scoring",
     workspaceId,
+    task: "scoring",
     messages: [
       { role: "system", content:
         `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.\n\n` +
