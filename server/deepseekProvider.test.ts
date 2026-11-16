@@ -61,6 +61,13 @@ vi.mock("@anthropic-ai/sdk", () => ({
         h.anthropic.push({ apiKey: this.apiKey, model: p.model });
         return { id: "msg", model: p.model, content: [{ type: "text", text: "from anthropic" }], stop_reason: "end_turn", usage: { input_tokens: 3, output_tokens: 2 } };
       },
+      stream: (p: any) => {
+        h.anthropic.push({ apiKey: this.apiKey, model: p.model });
+        return (async function* () {
+          yield { type: "message_start", message: { model: p.model, usage: { input_tokens: 3 } } };
+          yield { type: "content_block_delta", delta: { type: "text_delta", text: "from anthropic" } };
+        })();
+      },
     };
   },
 }));
@@ -427,6 +434,21 @@ describe("a streamed reply", () => {
     for await (const piece of streamLLM({ workspaceId: B, task: "documents", messages: [{ role: "user", content: "Go" }] })) out += piece;
     expect(out).toBe("ok");
     expect(h.fetches[0].body.model).toBe("deepseek-v4-pro");
+    // Fast is not set: that work streams from the default provider.
+    out = "";
+    for await (const piece of streamLLM({ workspaceId: B, task: "scoring", messages: [{ role: "user", content: "Go" }] })) out += piece;
+    expect(out).toBe("from anthropic");
+    expect(h.fetches.length).toBe(1);
+  });
+
+  it("a DeepSeek key alone does not move a stream to DeepSeek", async () => {
+    settings(B).deepseekApiKeyEnc = encryptSecret(DS_KEY_B);
+    let out = "";
+    for await (const piece of streamLLM({ workspaceId: B, task: "documents", messages: [{ role: "user", content: "Go" }] })) out += piece;
+    expect(out).toBe("from anthropic");
+    expect(h.fetches).toEqual([]);
+    expect(h.anthropic).toEqual([{ apiKey: "env-anthropic-key", model: HAIKU }]);
+    expect(h.ledger[0]).toMatchObject({ vendor: "anthropic", keySource: "shared" });
   });
 });
 
