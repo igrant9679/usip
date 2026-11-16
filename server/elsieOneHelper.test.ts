@@ -23,6 +23,7 @@ import {
   READ_ONLY_GROUP,
   READ_ONLY_PATHS,
   buildCatalogFrom,
+  invokeCallerPath,
   redactForModel,
   searchCatalog,
   type CatalogEntry,
@@ -114,6 +115,43 @@ describe("settings-class reads", () => {
     expect(src).toContain("capForModel(entry.readOnly ? redactForModel(r ?? null) : (r ?? null))");
     // A read can never be confirmed as an action: run_action still requires a mutation.
     expect(src).toContain('if (!entry || entry.kind !== "mutation") throw new TRPCError({ code: "BAD_REQUEST", message: `Action ${args.path} is not allowed` });');
+  });
+});
+
+/*
+ * Found on the live site the day the reads shipped (2026-11-15): Elsie asked
+ * for keyShares.overview and got "Unknown procedure keyShares.overview". The
+ * walk down the dotted path required each step to be an OBJECT, and a tRPC
+ * caller is a proxy over a FUNCTION at every level, so the very first step
+ * gave up. That line dates from 2026-09-09: no catalog action, read or
+ * write, had ever run through it. Nothing tested it against a real caller;
+ * these do.
+ */
+describe("a catalog action reaches its procedure through a real caller", () => {
+  const anon = async () => {
+    const { appRouter } = await import("./routers");
+    return appRouter.createCaller({ user: null, req: { headers: {} }, res: {} } as never);
+  };
+
+  it("a public query runs and returns its value", async () => {
+    // auth.me with nobody signed in is null; system.brandingConfig is an object.
+    expect(await invokeCallerPath(await anon(), "auth.me", undefined)).toBeNull();
+    expect(await invokeCallerPath(await anon(), "system.brandingConfig", undefined)).toHaveProperty("brandfetchLogoClientId");
+  });
+
+  it("a workspace read gets as far as the sign-in check, which is the procedure answering", async () => {
+    for (const path of ["keyShares.overview", "aiCredentials.get", "integrations.list", "research.markets.list", "are.campaigns.list"]) {
+      const err = await invokeCallerPath(await anon(), path, undefined).then(() => null, (e: Error) => e);
+      expect(err, path).toBeTruthy();
+      expect(err!.message, path).not.toMatch(/Unknown procedure/);
+      expect((err as { code?: string }).code, path).toMatch(/UNAUTHORIZED|FORBIDDEN/);
+    }
+  });
+
+  it("a path that is not a procedure is refused", async () => {
+    await expect(invokeCallerPath(await anon(), "keyShares.noSuchThing", undefined)).rejects.toThrow(/No procedure found|Unknown procedure/);
+    await expect(invokeCallerPath({}, "a.b", undefined)).rejects.toThrow(/Unknown procedure a\.b/);
+    await expect(invokeCallerPath(null, "a.b", undefined)).rejects.toThrow(/Unknown procedure a\.b/);
   });
 });
 
