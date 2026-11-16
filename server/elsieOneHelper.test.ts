@@ -310,6 +310,19 @@ describe("one Elsie", () => {
     expect(card).toContain("onClick={() => { dismiss(); assistantStore.open(); }}");
   });
 
+  // Owner, 2026-11-15: "widen the tour card". At 20rem the three labels wrapped
+  // onto two lines each (seen on the live Home page). Source pins, as the suite
+  // has no browser: re-check the card at a 375px-wide window before changing them.
+  it("the tour card has room for its three buttons, and never outgrows a phone", () => {
+    const card = elsie.slice(elsie.indexOf("if (!canAsk || !suggestion || drawerOpen) return null;"));
+    const box = card.slice(card.indexOf('<div className="fixed'), card.indexOf(">", card.indexOf('<div className="fixed'))).split(/[\s"]+/);
+    expect(box).toContain("w-96");
+    expect(box).toContain("max-w-[calc(100vw-2rem)]");
+    expect(box).not.toContain("w-80");
+    // A label stays on one line; if the row runs out, a whole button moves down.
+    expect(card).toContain('className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 [&>button]:whitespace-nowrap"');
+  });
+
   it("the chat can hand back a tour: a read tool, never a confirm card", () => {
     expect(READ_TOOLS).toContain("find_tours");
     expect(MUTATING_TOOLS as string[]).not.toContain("find_tours");
