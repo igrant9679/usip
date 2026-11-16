@@ -121,7 +121,9 @@ describe("assistant product knowledge digest", () => {
     // Elsie said Integrations: the digest described that section and left
     // Data sources bare. Each says which keys it holds now, and the vendor
     // cards really are in the Data sources section.
-    expect(hub).toContain("integrations (AI provider keys and webhooks; NOT the data vendors)");
+    expect(hub).toContain("integrations (AI provider keys, model tiers and webhooks; NOT the data vendors)");
+    // Model tiers (2026-11-16) are a card of the AI providers screen, which the Integrations section renders.
+    expect(legacy.slice(legacy.indexOf("function AIProvidersSection("), legacy.indexOf("function ProposalsTab("))).toContain("<ModelTiersCard isAdmin={isAdmin} />");
     expect(hub).toContain("for Apollo, QuickEnrich, WarmySender, LeadOcean and Reoon)");
     const dataSources = hubSource.slice(hubSource.indexOf('{section === "data-sources" && ('), hubSource.indexOf('{section === "workspace" &&'));
     for (const vendor of ["Apollo", "QuickEnrich", "WarmySender", "LeadOcean", "Reoon"]) expect(dataSources.toLowerCase(), vendor).toContain(vendor.toLowerCase());

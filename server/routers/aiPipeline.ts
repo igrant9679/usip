@@ -103,6 +103,7 @@ export async function runPipelineForContact(
     // Stage 1 — Org Research
     const marketResearch = { surface: "research" as const, prospectTitle: title, industry };
     const orgResearchRes = await invokeLLM({
+      task: "enrichment",
       workspaceId,
       research: marketResearch,
       messages: [
@@ -129,6 +130,7 @@ Summarize: (1) what the company does, (2) recent news or growth signals, (3) lik
 
     // Stage 2 — Contact Research
     const contactResearchRes = await invokeLLM({
+      task: "enrichment",
       workspaceId,
       research: marketResearch,
       messages: [
@@ -156,6 +158,7 @@ Summarize: (1) their likely role and decision-making authority, (2) professional
 
     // Stage 3 — Fit Analysis (structured JSON)
     const fitAnalysisRes = await invokeLLM({
+      task: "scoring",
       workspaceId,
       research: marketResearch,
       messages: [
@@ -235,6 +238,7 @@ Return JSON with these exact fields:
     let draftsGenerated = 0;
     for (const { tone, instruction } of tones) {
       const draftRes = await invokeLLM({
+        task: "outreach",
         workspaceId,
         sendersBrand: true,
         research: { surface: "outreach", prospectTitle: title, industry },
@@ -435,6 +439,7 @@ export const aiPipelineRouter = router({
       };
 
       const regenRes = await invokeLLM({
+        task: "outreach",
         sendersBrand: true,
         research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: draft.toContactId, leadId: draft.toLeadId, prospectId: draft.toProspectId }),
         messages: [
@@ -501,6 +506,7 @@ ${HUMAN_COPY_RULES}`,
       if (!draft) throw new TRPCError({ code: "NOT_FOUND" });
 
       const scoreRes = await invokeLLM({
+        task: "scoring",
         messages: [
           {
             role: "system",

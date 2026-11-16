@@ -532,6 +532,7 @@ Return JSON:
 
   try {
     const res = await invokeLLM({
+      task: "chat_agent",
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
       outputSchema: {

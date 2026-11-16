@@ -367,6 +367,7 @@ export const csRouter = router({
     let prep: { wins: string[]; risks: string[]; asks: string[]; agenda: string[] } | null = null;
     try {
       const out = await invokeLLM({
+        task: "documents",
         messages: [
           { role: "system", content: "You prepare quarterly business review briefs. Output JSON only." },
           { role: "user", content: `Customer: ${a?.name}\nARR: $${c?.arr}\nHealth: ${c?.healthTier} (score ${c?.healthScore})\nNPS: ${c?.npsScore}\nUsage: ${c?.usageScore} Engagement: ${c?.engagementScore} Support: ${c?.supportScore}\n\nReturn JSON {wins:[string],risks:[string],asks:[string],agenda:[string]} — 3 items each.` },

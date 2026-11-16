@@ -366,6 +366,7 @@ export async function processSignal(
     const replyText = String(rawPayload.body ?? rawPayload.text ?? rawPayload.message ?? "");
     if (replyText) {
       const sentResult = await invokeLLM({
+        task: "replies",
         // Signals arrive from webhooks and pollers, outside any request.
         workspaceId,
         feature: "are.processSignal",

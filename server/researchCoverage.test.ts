@@ -40,6 +40,7 @@ const EXCLUDED: Record<string, string> = {
   "server/services/campaignProposals.ts::proposeForCluster": "Proposes campaigns from clusters of existing people; follow-up: suggest the matching research sector.",
   "server/services/campaignRouter.ts::routeProspects": INTERNAL + " (Picks which campaign a person belongs in.)",
   "server/routers/aiCredentials.ts::test": "A key test that asks the model for 'pong'.",
+  "server/routers/aiCredentials.ts::testTier": "A model-tier test that asks the model for 'pong'.",
   "server/routers/helpCenter.ts::askAI": "Answers questions about Velocity itself.",
   "server/routers/helpCenter.ts::generateArticleDraft": "Writes help articles about Velocity itself.",
   "server/services/knowledgeBase.ts::generateKnowledgeSummary": "Summarises the workspace's own documents.",

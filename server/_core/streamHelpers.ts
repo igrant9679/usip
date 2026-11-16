@@ -39,6 +39,8 @@ export type StreamHandlerContext = {
 
 export type BuildMessagesResult = {
   messages: Message[];
+  /** The kind of work this stream is (InvokeParams.task): it picks the workspace's model tier. */
+  task: import("@shared/aiTiers").AiTask;
   /** Prospect-facing copy: append the sender's brand (InvokeParams.sendersBrand). */
   sendersBrand?: boolean;
   /** The recipient's market research (InvokeParams.research). */
@@ -187,6 +189,7 @@ export async function runSSEStream(
   try {
     for await (const delta of streamLLM({
       ...built,
+      task: built.task,
       research: built.research,
       workspaceId,
       userId,

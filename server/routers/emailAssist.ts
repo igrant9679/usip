@@ -134,6 +134,7 @@ export const emailAssistRouter = router({
       ].filter(Boolean).join("\n");
 
       const res = await invokeLLM({
+        task: "outreach",
         messages: [
           {
             role: "system",

@@ -452,6 +452,7 @@ export const emailTemplatesRouter = router({
       };
       const prompt = instructionMap[input.instruction] ?? instructionMap.rewrite!;
       const res = await invokeLLM({
+        task: "outreach",
         sendersBrand: true,
         messages: [
           {
@@ -504,6 +505,7 @@ Rules:
       const systemContentWithBrand = brandBlock ? `${systemPrompt}\n\n${brandBlock}` : systemPrompt;
 
       const res = await invokeLLM({
+        task: "outreach",
         messages: [
           { role: "system", content: systemContentWithBrand },
           { role: "user", content: input.prompt },
@@ -554,6 +556,7 @@ Rules:
     )
     .mutation(async ({ ctx, input }) => {
       const res = await invokeLLM({
+        task: "outreach",
         sendersBrand: true,
         messages: [
           {
@@ -771,6 +774,7 @@ export const snippetsRouter = router({
       };
       const desc = categoryDescriptions[input.category] ?? "email content";
       const res = await invokeLLM({
+        task: "outreach",
         sendersBrand: true,
         messages: [
           {

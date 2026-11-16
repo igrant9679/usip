@@ -112,6 +112,7 @@ async function scoreIcpMatch(
   workspaceId: number,
 ): Promise<{ score: number; breakdown: Record<string, number> }> {
   const result = await invokeLLM({
+    task: "scoring",
     workspaceId,
     // Research phase 4: fit is judged with the prospect's market research.
     research: { surface: "research", campaignId: prospect.campaignId, prospectTitle: prospect.title, industry: prospect.industry },
@@ -305,6 +306,7 @@ export async function runEnrichAgent(
 
     // Run deep enrichment via LLM
     const enrichResult = await invokeLLM({
+      task: "enrichment",
       workspaceId,
       research: { surface: "research", campaignId: prospect.campaignId, prospectTitle: prospect.title, industry: prospect.industry },
       messages: [
@@ -788,6 +790,7 @@ export async function generateCampaignTemplate(
     `Return ${stepCount} steps. For each: stepIndex (0-based), day (cumulative from start), channel, archetype (one of: opener | value | social_proof | resource | check_in | break_up), skeleton (1–2 sentences describing what to write — placeholders like {hook}, {pain}, {company}, {firstName} for what the personalizer will fill), and ctaPattern (one short sentence like "Open with question, close with a 15-min Tue/Thu offer").`;
 
   const result = await invokeLLM({
+    task: "outreach",
     sendersBrand: true,
     workspaceId: campaign.workspaceId,
     research: { surface: "outreach", campaignId: campaign.id },
@@ -942,6 +945,7 @@ async function personalizeForProspect(
     `Return one filled step per template step (same stepIndex, day, channel). Keep emails under 120 words. Use {{firstName}} / {{company}} merge tags where natural. When a step's CTA is to book a meeting, make the ask a Markdown link to the sender's scheduling page — [grab 15 minutes]({{bookingLink}}) — instead of proposing specific times; {{bookingLink}} is substituted at send time. Never paste {{bookingLink}} as a raw token.`;
 
   const result = await invokeLLM({
+    task: "outreach",
     workspaceId: campaign.workspaceId,
     research: { surface: "outreach", campaignId: campaign.id, prospectTitle: prospect.title, industry: prospect.industry },
     messages: [
@@ -1056,6 +1060,7 @@ async function evaluateSequenceQuality(
       })()
     : "(no dossier supplied — judge specificity only on what the text itself names)";
   const result = await invokeLLM({
+    task: "scoring",
     workspaceId,
     messages: [
       { role: "system", content:

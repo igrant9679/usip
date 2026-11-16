@@ -166,6 +166,7 @@ export async function routeProspects(
     // Close call: let the model choose among the contenders only.
     try {
       const res = await invokeLLM({
+        task: "scoring",
         workspaceId,
         messages: [
           { role: "system", content: "You route a B2B prospect to the single best-fitting outbound campaign. Choose ONLY among the candidates given. Return JSON." },

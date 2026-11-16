@@ -5,6 +5,7 @@
  *   aiCredentials.get     — return masked + boolean status of all 3 providers (any role)
  *   aiCredentials.upsert  — set/clear API key + model per provider (admin only)
  *   aiCredentials.test    — issue a tiny "ping" call against a provider (admin only)
+ *   aiCredentials.getTiers / setTier / setTaskTier / testTier — model tiers (shared/aiTiers.ts)
  */
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
@@ -19,10 +20,26 @@ import {
 } from "../_core/crypto";
 import { invokeLLM, type ProviderName } from "../_core/llm";
 import { borrowedKeys } from "../services/keyShares";
+import { forgetTierConfig } from "../services/aiTiers";
+import { AI_TASK_IDS, AI_TIERS, cleanTaskTiers, cleanTierModels, type AiTask } from "@shared/aiTiers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
 const providerEnum = z.enum(["anthropic", "openai", "gemini"]);
+const tierEnum = z.enum(AI_TIERS);
+const taskEnum = z.enum(AI_TASK_IDS as [AiTask, ...AiTask[]]);
+
+/** The two tier columns, as only their well-formed parts. Separate from `get`: it must work before the columns exist. */
+async function readTiers(workspaceId: number) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+  const [row] = await db
+    .select({ tiers: workspaceSettings.aiTierModels, taskTiers: workspaceSettings.aiTaskTiers })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  return { db, tiers: cleanTierModels(row?.tiers), taskTiers: cleanTaskTiers(row?.taskTiers) };
+}
 
 async function ensureSettingsRow(workspaceId: number): Promise<void> {
   const db = await getDb();
@@ -196,6 +213,79 @@ export const aiCredentialsRouter = router({
     }),
 
   /**
+   * Model tiers: what each of the three tiers is set to, and which tasks this
+   * workspace has moved off their default tier. The catalog of tasks and the
+   * defaults are code (shared/aiTiers.ts), so the screen imports them.
+   */
+  getTiers: workspaceProcedure.query(async ({ ctx }) => {
+    const { tiers, taskTiers } = await readTiers(ctx.workspace.id);
+    return { tiers, taskTiers };
+  }),
+
+  /** Set one tier's provider and model; an empty model clears the tier. Admins only. */
+  setTier: adminWsProcedure
+    .input(z.object({ tier: tierEnum, provider: providerEnum, model: z.string().trim().max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_api_keys");
+      await ensureSettingsRow(ctx.workspace.id);
+      const { db, tiers } = await readTiers(ctx.workspace.id);
+      const before = tiers[input.tier] ?? null;
+      const next = { ...tiers };
+      if (input.model) next[input.tier] = { provider: input.provider, model: input.model };
+      else delete next[input.tier];
+      await db
+        .update(workspaceSettings)
+        .set({ aiTierModels: Object.keys(next).length > 0 ? next : null })
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      forgetTierConfig(ctx.workspace.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_model_tier", entityId: ctx.workspace.id, before: { tier: input.tier, ...before }, after: { tier: input.tier, ...(next[input.tier] ?? { provider: null, model: null }) } });
+      return { ok: true as const, tiers: next };
+    }),
+
+  /** Move one kind of work to a tier; `tier: ""` puts it back on its default. Admins only. */
+  setTaskTier: adminWsProcedure
+    .input(z.object({ task: taskEnum, tier: tierEnum.or(z.literal("")) }))
+    .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_api_keys");
+      await ensureSettingsRow(ctx.workspace.id);
+      const { db, taskTiers } = await readTiers(ctx.workspace.id);
+      const before = taskTiers[input.task] ?? null;
+      const next = { ...taskTiers };
+      if (input.tier) next[input.task] = input.tier;
+      else delete next[input.task];
+      await db
+        .update(workspaceSettings)
+        .set({ aiTaskTiers: Object.keys(next).length > 0 ? next : null })
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      forgetTierConfig(ctx.workspace.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_task_tier", entityId: ctx.workspace.id, before: { task: input.task, tier: before }, after: { task: input.task, tier: input.tier || null } });
+      return { ok: true as const, taskTiers: next };
+    }),
+
+  /** The same tiny "ping" as `test`, against the model a tier is set to. */
+  testTier: adminWsProcedure
+    .input(z.object({ tier: tierEnum }))
+    .mutation(async ({ ctx, input }) => {
+      const { tiers } = await readTiers(ctx.workspace.id);
+      const set = tiers[input.tier];
+      if (!set) throw new TRPCError({ code: "BAD_REQUEST", message: "This tier has no model set." });
+      const start = Date.now();
+      try {
+        // Names its provider and model, so the tiers do not reroute their own test.
+        const res = await invokeLLM({
+          workspaceId: ctx.workspace.id,
+          provider: set.provider as ProviderName,
+          model: set.model,
+          messages: [{ role: "user", content: "Reply with the single word: pong" }],
+          max_tokens: 8,
+        });
+        return { ok: true as const, model: res.model, latencyMs: Date.now() - start };
+      } catch (err) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Model test failed" });
+      }
+    }),
+
+  /**
    * Send a tiny prompt to verify the configured key + model work end-to-end.
    * Returns { ok, model, latencyMs } on success, throws TRPC error on failure.
    */
@@ -204,6 +294,7 @@ export const aiCredentialsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const start = Date.now();
       try {
+        // No task: this tests the provider it names, whatever the tiers say.
         const res = await invokeLLM({
           workspaceId: ctx.workspace.id,
           provider: input.provider as ProviderName,

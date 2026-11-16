@@ -204,6 +204,7 @@ export async function scrapeGoogleBusiness(
     if (!rawContent.trim()) break;
 
     const result = await invokeLLM({
+      task: "enrichment",
       messages: [
         {
           role: "system",
@@ -259,6 +260,7 @@ export async function scrapeWeb(
   if (!rawContent.trim()) return [];
 
   const result = await invokeLLM({
+    task: "enrichment",
     messages: [
       {
         role: "system",
@@ -300,6 +302,7 @@ export async function scrapeNews(
   if (!rawContent.trim()) return [];
 
   const result = await invokeLLM({
+    task: "enrichment",
     messages: [
       {
         role: "system",

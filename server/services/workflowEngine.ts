@@ -345,6 +345,7 @@ async function runAction(
         let body = "";
         try {
           const out = await invokeLLM({
+            task: "outreach",
             sendersBrand: true,
             workspaceId: ws,
             research: await researchUseFor(ws, "outreach", refFromRelated(entity, ctx.relatedId)),

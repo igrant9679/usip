@@ -985,6 +985,7 @@ export const campaignsRouter = router({
     .input(z.object({ description: z.string().min(3).max(500) }))
     .mutation(async ({ ctx, input }) => {
       const res = await invokeLLM({
+        task: "targeting",
         workspaceId: ctx.workspace.id,
         messages: [
           {

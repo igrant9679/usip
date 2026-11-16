@@ -97,6 +97,7 @@ Return: {
   let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "", returnsAt: "" };
   try {
     const res = await invokeLLM({
+      task: "replies",
       sendersBrand: true,
       research: await researchUseFor(workspaceId, "reply", {
         prospectQueueId: reply.prospectQueueId ?? null,
@@ -524,6 +525,7 @@ Classes (pick exactly one):
   let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "", returnsAt: "" };
   try {
     const res = await invokeLLM({
+      task: "replies",
       messages: [{ role: "user", content: prompt }],
       outputSchema: {
         name: "reply_classification",

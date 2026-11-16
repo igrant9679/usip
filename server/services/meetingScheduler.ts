@@ -458,6 +458,7 @@ ${HUMAN_COPY_RULES}`;
   let confidence = 60;
   try {
     const res = await invokeLLM({
+      task: "outreach",
       research: await researchUseFor(workspaceId, "outreach", refFromRelated(target.relatedType, target.relatedId)),
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).

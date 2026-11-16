@@ -207,6 +207,7 @@ export async function proposeForCluster(workspaceId: number, cluster: Cluster, e
   const seniorities = topValues(cluster.people, (p) => p.seniority, 4);
   try {
     const res = await invokeLLM({
+      task: "targeting",
       workspaceId,
       messages: [
         { role: "system", content: "You design outbound B2B campaigns. Given an audience that no existing campaign targets, propose ONE campaign for it. Be specific to the audience; never invent facts about the sender. Return JSON only." },

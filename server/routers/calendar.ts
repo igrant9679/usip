@@ -414,6 +414,7 @@ Provide a structured summary with these sections:
 Be concise and professional. Use markdown formatting.`;
 
       const llmResult = await invokeLLM({
+        task: "suggestions",
         messages: [
           { role: "system", content: "You are a sales CRM assistant that generates concise, actionable meeting summaries." },
           { role: "user", content: prompt },

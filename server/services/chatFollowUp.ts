@@ -175,6 +175,7 @@ ${HUMAN_COPY_RULES}`;
 
   try {
     const res = await invokeLLM({
+      task: "outreach",
       workspaceId: opts.workspaceId,
       research: opts.research,
       messages: [{ role: "user", content: prompt }],

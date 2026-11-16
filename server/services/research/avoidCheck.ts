@@ -72,6 +72,7 @@ export async function checkBrief(workspaceId: number, use: Omit<ResearchUse, "su
       `Copy:\n${copyText(steps)}`,
     ].filter(Boolean);
     const res = await invokeLLM({
+      task: "scoring",
       workspaceId,
       maxTokens: 1500,
       messages: [

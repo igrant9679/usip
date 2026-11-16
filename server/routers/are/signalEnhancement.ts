@@ -126,6 +126,7 @@ export async function runSignalEnhancement(
           : "accepted your LinkedIn connection";
 
     const result = await invokeLLM({
+      task: "enrichment",
       workspaceId,
       feature: "are.signalEnhancement",
       messages: [

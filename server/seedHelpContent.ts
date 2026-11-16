@@ -179,6 +179,9 @@ A time the prospect picked themselves through your **booking link** is booked st
     pageKey: "help",
     bodyMarkdown: `A summary of what changed in Velocity between late September and mid November 2026, grouped by area. Each item names the article with the details where there is one.
 
+**AI model tiers (November 16)**
+- **A model for each kind of work.** Settings → Integrations → **Model tiers** lets an admin set a Fast, a Standard and a Deep model, and choose which tier each kind of AI work runs on. A tier left blank uses the default model, so nothing changes until one is set. See "Settings hub".
+
 **One page for each job (November 7 and 8)**
 - **One Inbox.** Replies, Mailbox, LinkedIn & social, Calls and Notifications are tabs of **Inbox**. The old Inbox, My Mailbox, Conversations and Unified Inbox links open the matching tab. See "The Inbox: replies, mailbox, social chats, calls and notifications".
 - **One home page.** Home has a **Today** view and a **Pipeline** view. **Dashboard** in the sidebar opens the Pipeline view, and **Set as home** chooses which one opens first.
@@ -1030,6 +1033,8 @@ The left rail groups everything:
 **Search.** The **Search settings** box at the top of the rail matches section names and common words such as "mfa", "smtp", "webhook" or "signature".
 
 **Switching workspace.** The workspace switcher at the top of the rail lets an admin of several workspaces change another workspace's settings without leaving the page. The section reloads for the workspace you pick.
+
+**Model tiers.** Under **Integrations**, below the AI provider keys, **Model tiers** decides which AI model does which kind of work. There are three tiers: **Fast** (the cheapest model you trust for sorting, scoring and short suggestions), **Standard** (Elsie's chat, help answers, research on a record) and **Deep** (what a prospect reads, and who a campaign targets). For each tier an admin picks a provider that has a key and types the model's name exactly as the provider lists it, then **Save**; **Test** sends that model a one-word request. Below the tiers, every kind of work has a row showing the tier it runs on and the model that means right now; change the tier there and it applies to the next AI call of that kind, and **Reset** puts it back on its default. A tier left blank uses the default provider's model, so a workspace that sets nothing behaves as it always has. Two things move a request up one tier when a stronger tier is set: Elsie's answer after she has looked things up, and a reply that had to be structured data and came back as plain text.
 
 Profile changes save with the **Save** button. Your colour theme syncs to your account, so it follows you across browsers. **Workspace overview** also holds the workspace time zone, the fiscal calendar and currency, and the **send window** (see "The send window"). To let another workspace use one of this workspace's keys, see "Running multiple workspaces".`,
   },

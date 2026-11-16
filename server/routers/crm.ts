@@ -1209,6 +1209,7 @@ Contact:
 Return a JSON object with ONLY the fields you can reasonably suggest from this information. Possible fields: title, phone, linkedinUrl, city, seniority. For seniority use one of: c_suite, vp, director, manager, individual_contributor. Do not hallucinate — only suggest values you are reasonably confident about based on the name, email domain, and company.`;
 
       const response = await invokeLLM({
+        task: "enrichment",
         messages: [
           { role: "system", content: "You are a B2B data enrichment assistant. Return only valid JSON." },
           { role: "user", content: prompt },

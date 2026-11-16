@@ -82,6 +82,7 @@ export const subjectABRouter = router({
       let variants: { subject: string; rationale: string }[] = [];
       try {
         const out = await invokeLLM({
+          task: "outreach",
           sendersBrand: true,
           research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: draft.toContactId, leadId: draft.toLeadId, prospectId: draft.toProspectId }),
           messages: [

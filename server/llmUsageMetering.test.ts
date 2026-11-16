@@ -100,9 +100,23 @@ describe("llmTokens", () => {
   });
 
   it("counts every provider — none returns early past the meter", () => {
-    const fn = llm.slice(llm.indexOf("export async function invokeLLM"), llm.indexOf("export async function invokeLLM") + 1400);
+    // 2026-11-16 (model tiers): the provider call and its meter moved into
+    // callProvider, because a reply that fails its format check is now tried
+    // once more one tier up, and BOTH calls were made, so both are counted.
+    const start = llm.indexOf("async function callProvider(");
+    expect(start, "`callProvider` not found: re-anchor this test").toBeGreaterThan(-1);
+    const fn = llm.slice(start, start + 1400);
     for (const p of ["anthropic", "openai", "gemini"]) expect(fn).toContain(`case "${p}":`);
     expect((fn.match(/result = await invokeVia/g) ?? []).length).toBe(3);
+    // The meter is in the same function as the provider call, after it.
+    const whole = llm.slice(start, llm.indexOf("\n}\n", start));
+    expect(whole).toMatch(/await recordLlmTokens\(workspaceId, result\.usage\?\.total_tokens \?\? 0\)/);
+    expect(whole).toContain("await recordAiUsage({");
+    // And invokeLLM reaches a provider only through it: no call skips the meter.
+    const invoke = llm.slice(llm.indexOf("export async function invokeLLM"), llm.indexOf("export function failedItsFormat("));
+    expect(invoke.length).toBeGreaterThan(500);
+    expect(invoke).not.toMatch(/invokeVia(Anthropic|OpenAI|Gemini)\(/);
+    expect((invoke.match(/callProvider\(/g) ?? []).length).toBe(2);
   });
 });
 

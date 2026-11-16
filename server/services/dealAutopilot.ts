@@ -97,6 +97,7 @@ Return: {
 
     try {
       const res = await invokeLLM({
+        task: "suggestions",
         messages: [{ role: "user", content: prompt }],
         // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
         outputSchema: {

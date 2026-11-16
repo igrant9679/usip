@@ -2066,6 +2066,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   openaiModel: varchar("openaiModel", { length: 128 }),
   geminiModel: varchar("geminiModel", { length: 128 }),
   aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini'
+  // AI model tiers (Migration 0441, shared/aiTiers.ts). NULL = nothing set,
+  // and every call uses the default provider and model above, as before.
+  aiTierModels: json("aiTierModels"), // { fast?: {provider, model}, standard?: …, deep?: … }
+  aiTaskTiers: json("aiTaskTiers"), // { <task>: "fast" | "standard" | "deep" }, only the tasks moved off their default
   // Grok voice agents (Migration 0120) — xAI API key for the Voice Agent API
   // (wss://api.x.ai/v1/realtime + SIP). Same AES-256-GCM BYOK pattern as above.
   xaiApiKeyEnc: text("xaiApiKeyEnc"),

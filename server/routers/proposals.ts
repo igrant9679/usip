@@ -1043,6 +1043,7 @@ ${budget ? `Budget: $${budget.toLocaleString()}` : ""}
 
 Write 2-4 paragraphs of professional proposal content for this section. Be specific and persuasive.`;
       const response = await invokeLLM({
+        task: "documents",
         sendersBrand: true,
         messages: [
           { role: "system", content: systemPrompt },

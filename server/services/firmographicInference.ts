@@ -46,6 +46,7 @@ type Inference = { industry: string | null; country: string | null; confidence: 
 
 async function inferOne(workspaceId: number, facts: { name: string | null; domain: string | null; website: string | null; description: string | null; city: string | null; state: string | null; titles: string[] }): Promise<Inference> {
   const res = await invokeLLM({
+    task: "scoring",
     workspaceId,
     messages: [
       { role: "system", content: "You classify organisations for a B2B CRM. From the facts given, choose the organisation's industry from the list and its headquarters country. If the facts do not support a confident answer, say Unknown — never guess a country from a name alone. Return JSON only." },

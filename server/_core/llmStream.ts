@@ -24,6 +24,7 @@ import { checkLlmBurst, checkMonthlyCap, type InvokeParams, type ProviderName, t
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
+import { applyTier } from "../services/aiTiers";
 
 const DEFAULT_MODELS = {
   anthropic: "claude-haiku-4-5-20251001",
@@ -376,6 +377,8 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);
+  // The workspace's tier for this kind of work decides the model, as in invokeLLM.
+  params = (await applyTier(params, workspaceId, creds)).params;
   const provider = resolveProvider(params.provider, creds);
   const signal = params.signal ?? new AbortController().signal;
   const usage: StreamUsage = { model: null, input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };

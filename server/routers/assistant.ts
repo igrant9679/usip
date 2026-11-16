@@ -469,6 +469,12 @@ export const assistantRouter = router({
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
         const res = await invokeLLM({
+          task: "elsie",
+          // Round 0 reads the question and decides what to look up. Any later
+          // round is her answering from what she looked up, or proposing an
+          // action: the part where a wrong detail costs something. That part
+          // runs one tier up when the workspace has a model set there.
+          stepUp: round > 0 ? 1 : 0,
           messages,
           tools: ASSISTANT_TOOLS,
           toolChoice: "auto",
@@ -583,7 +589,7 @@ export const assistantRouter = router({
       // call WITHOUT tools forces it to answer from what it gathered.
       if (!answer && pendingActions.length === 0 && !question) {
         messages.push({ role: "user", content: "[assistant_note]: Tool budget for this turn is used up. Answer the user's question now from the tool results above; say plainly if something is still missing." });
-        const res = await invokeLLM({ messages, maxTokens: 1400, workspaceId: ctx.workspace.id });
+        const res = await invokeLLM({ task: "elsie", stepUp: 1, messages, maxTokens: 1400, workspaceId: ctx.workspace.id });
         const msg = res.choices[0]?.message;
         answer = (typeof msg?.content === "string" ? msg.content : "") || "";
       }

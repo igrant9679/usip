@@ -2574,6 +2574,7 @@ export const emailDraftsRouter = router({
       let body = "";
       try {
         const out = await invokeLLM({
+          task: "outreach",
           research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: input.toContactId, leadId: input.toLeadId }),
           messages: [
             {

@@ -110,6 +110,7 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
       let rationale = "Insufficient data for AI assessment.";
       try {
         const res = await invokeLLM({
+          task: "scoring",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 120,
@@ -159,7 +160,7 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
         const prompt = `Customer success AI. Churn risk JSON only.
 Customer: ${acct?.name ?? "Unknown"}, ARR $${Number(cust.arr ?? 0).toLocaleString()}, health ${cust.healthScore}/100 (${cust.healthTier}), NPS ${cust.npsScore}, renewal stage ${renewalStage}, days to renewal ${daysToRenewal ?? "unknown"}.
 Return: { "churnRiskScore": <0-100>, "rationale": "<one sentence>" }`;
-        const res = await invokeLLM({ messages: [{ role: "user", content: prompt }], response_format: { type: "json_object" }, max_tokens: 100 });
+        const res = await invokeLLM({ task: "scoring", messages: [{ role: "user", content: prompt }], response_format: { type: "json_object" }, max_tokens: 100 });
         const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         const score = Math.max(0, Math.min(100, Math.round(Number(parsed.churnRiskScore ?? 50))));
         const label = churnLabelFromScore(score);
@@ -217,6 +218,7 @@ Return: { "action": "call|email|linkedin|wait", "note": "<one sentence explainin
       let note = "Send a personalised follow-up email.";
       try {
         const res = await invokeLLM({
+          task: "suggestions",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 150,
@@ -282,6 +284,7 @@ Return: { "relStrengthScore": <0-100>, "label": "cold|warm|active|strong" }
       let label = "cold";
       try {
         const res = await invokeLLM({
+          task: "scoring",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 80,
@@ -361,6 +364,7 @@ priceMin/priceMax should bracket the recommended selling range. discountCeil is 
 
       try {
         const res = await invokeLLM({
+          task: "suggestions",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 150,
@@ -431,6 +435,7 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
       // PROSE for Anthropic, so JSON.parse threw and this silently produced 0
       // suggestions. Force a real JSON schema and parse the content.
       const res = await invokeLLM({
+        task: "suggestions",
         messages: [{ role: "user", content: prompt }],
         outputSchema: {
           name: "workflow_suggestions",
@@ -667,6 +672,7 @@ Include 3-4 highlights covering the most important metrics.`;
     let highlights: Array<{ label: string; value: string; sentiment: string }> = [];
     try {
       const res = await invokeLLM({
+        task: "suggestions",
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
         max_tokens: 400,
@@ -761,6 +767,7 @@ Return: { "label": "urgent|follow_up|fyi|no_action", "confidence": <50-99>, "rat
 
       try {
         const res = await invokeLLM({
+          task: "scoring",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 100,
@@ -814,6 +821,7 @@ Labels: urgent=needs immediate reply, follow_up=needs reply soon, fyi=informatio
 
       try {
         const res = await invokeLLM({
+          task: "scoring",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           max_tokens: 500,
