@@ -144,13 +144,23 @@ describe("assistant product knowledge digest", () => {
 
   // 2026-11-16: the digest said "keys + on/off under Settings → Data sources"
   // from the day it was written, and Elsie told the owner the Apollo card had
-  // an on/off toggle and a drag handle. Neither is on that page.
-  it("sends on/off and the order of a source to the Revenue Engine's settings, not to Data sources", () => {
+  // an on/off toggle and a drag handle. Neither is on that card.
+  //
+  // Later the same day, two corrections to that fix. It said on/off is "NOT"
+  // on Data sources at all, which is wrong for two vendors: the WarmySender
+  // and LeadOcean cards each carry a Use switch that saves at once. And it
+  // ended "then Save", which Elsie turned into "Save at the bottom of the
+  // card": the page has one Save Settings button, in a bar under its last
+  // section.
+  it("sends the order and every source's on/off to the Revenue Engine's settings, and says which key cards have a switch", () => {
     const start = PRODUCT_KNOWLEDGE.indexOf("Prospect sources (");
     expect(start).toBeGreaterThan(-1);
     const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
     expect(para).toContain("Keys: Settings → Data sources.");
-    expect(para).toContain("On/off and the order are NOT there: Revenue Engine → ARE Settings tab (/are/settings), the Prospect Sources & Checking Order card: arrows and a toggle per source, then Save.");
+    expect(para).toContain("The order, and on/off for every source: Revenue Engine → ARE Settings tab (/are/settings), the Prospect Sources & Checking Order card: arrows and a toggle per source; nothing saves until Save Settings, the page's one save button, in the bar under its last section.");
+    expect(para).toContain("Only the WarmySender and LeadOcean key cards also have a Use switch (saves at once); Apollo's and QuickEnrich's have no on/off.");
+    expect(para).not.toContain("NOT there");
+    expect(para).not.toContain("then Save.");
     expect(PRODUCT_KNOWLEDGE).not.toContain("on/off under Settings");
     // The page, its tab, and the card with those controls.
     expect(read("../client/src/App.tsx")).toContain('<Route path="/are/settings">');
@@ -165,9 +175,23 @@ describe("assistant product knowledge digest", () => {
     // Both only mark the page as changed: nothing is saved until Save.
     expect(body).toContain("mark();");
     expect(are).toMatch(/disabled=\{save\.isPending \|\| !dirty\}/);
-    // And no vendor card on Data sources carries an on/off switch for the source.
-    const apollo = read("../client/src/components/usip/settings/ApolloSourceCard.tsx");
-    expect(apollo).not.toMatch(/<Switch\b|<Toggle\b/);
+    // One save button for the whole page, named Save Settings, in a bar that
+    // comes after every section and before the danger zone.
+    expect(are.split("Save Settings").length - 1).toBe(1);
+    const saveAt = are.indexOf("Save Settings");
+    const lastSection = are.lastIndexOf("<Section");
+    const danger = are.indexOf("Danger Zone");
+    expect(lastSection).toBeGreaterThan(-1);
+    expect(danger).toBeGreaterThan(-1);
+    expect(saveAt).toBeGreaterThan(lastSection);
+    expect(saveAt).toBeLessThan(danger);
+    expect(are.slice(saveAt - 400, saveAt)).toContain("onClick={handleSave}");
+    // Which key cards carry a switch for the source, and which do not.
+    const cardFile = (name: string) => read(`../client/src/components/usip/settings/${name}.tsx`);
+    expect(cardFile("ApolloSourceCard")).not.toMatch(/<Switch\b|<Toggle\b|setEnabled/);
+    expect(cardFile("QuickEnrichSourceCard")).not.toMatch(/<Switch\b|<Toggle\b|setEnabled/);
+    expect(cardFile("WarmySenderSourceCard")).toMatch(/<Switch aria-label="Use WarmySender"[^>]*\n?\s*onCheckedChange=\{\(v\) => setEnabled\.mutate\(\{ slug: "warmysender", enabled: v \}\)\}/);
+    expect(cardFile("LeadOceanSourceCard")).toMatch(/<Switch aria-label="Use LeadOcean"[^>]*\n?\s*onCheckedChange=\{\(v\) => setEnabled\.mutate\(\{ slug: "leadocean", enabled: v \}\)\}/);
   });
 
   it("puts each control where the shell puts it", () => {
