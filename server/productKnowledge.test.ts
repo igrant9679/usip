@@ -81,7 +81,11 @@ describe("assistant product knowledge digest", () => {
     // error as "a toggle to turn the key on/off" and "drag to reorder".
     // Saying where each really is costs about 200 characters, and the
     // routines had already been cut twice to pay for earlier fixes.
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13000);
+    //
+    // 2026-11-16, later: 13000 → 13300. Elsie Assist shipped: a second
+    // button in the top bar and a pane she is asked about by name. Two
+    // sentences say what it is, where it opens and what its buttons do.
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13300);
   });
 
   it("says where Settings is, and names every section the hub has", () => {
@@ -139,6 +143,10 @@ describe("assistant product knowledge digest", () => {
     expect(read("../client/src/components/usip/settings/ApolloSourceCard.tsx")).toContain('aria-label="Apollo API key"');
     // And the rule that stops the next invented detail.
     expect(PRODUCT_KNOWLEDGE).toContain("never place a control, or describe a layout (table, row, top of the page), that this manual does not.");
+    // Elsie Assist: what she is told matches the pane (four pages, three shown, one button each).
+    expect(PRODUCT_KNOWLEDGE).toContain("opens a pane beside the page with up to three suggestions for Home, a campaign's page, Inbox or a person's record; each has a reason and one button, which opens a page or asks you");
+    expect(read("../shared/elsieAssist.ts")).toContain("export const ASSIST_MAX_SHOWN = 3;");
+    expect(read("../shared/elsieAssist.ts")).toContain('export type AssistPlace = "home" | "campaign" | "inbox" | "person";');
     const security = legacy.slice(legacy.indexOf("function SecurityTab("), legacy.indexOf("function NotificationsTab("));
     expect(security).toContain("IP allowlist");
     expect(security).toContain("Session timeout");
@@ -236,7 +244,11 @@ describe("assistant product knowledge digest", () => {
       expect(at, needle).toBeGreaterThan(-1);
       return at;
     });
-    const said = ["Elsie, Search", "colour theme", "? (help", "the bell"].map((needle) => {
+    // 2026-11-16: the Assist button sits between Elsie's and Search.
+    const assistAt = shell.lastIndexOf("<ElsieAssistButton />");
+    expect(assistAt).toBeGreaterThan(bar[0]);
+    expect(assistAt).toBeLessThan(bar[2]);
+    const said = ["Elsie, Assist, Search", "colour theme", "? (help", "the bell"].map((needle) => {
       const at = frame.indexOf(needle);
       expect(at, needle).toBeGreaterThan(-1);
       return at;

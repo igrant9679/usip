@@ -35,9 +35,11 @@ type State = {
   conversationId: number | null;
   messages: AssistantMessage[];
   loading: boolean;
+  /** A request waiting to be sent for the user (the Assist pane's "Ask Elsie" buttons); the chat sends it and clears it. */
+  pendingPrompt: string | null;
 };
 
-let state: State = { open: false, conversationId: null, messages: [], loading: false };
+let state: State = { open: false, conversationId: null, messages: [], loading: false, pendingPrompt: null };
 const listeners = new Set<() => void>();
 
 function emit() { for (const l of Array.from(listeners)) l(); }
@@ -53,6 +55,9 @@ export const assistantStore = {
   open: () => set({ open: true }),
   close: () => set({ open: false }),
   toggle: () => set((s) => ({ open: !s.open })),
+  /** Open the drawer and send this for the user, as if they had typed it. */
+  ask: (prompt: string) => set({ open: true, pendingPrompt: prompt }),
+  clearPendingPrompt: () => set({ pendingPrompt: null }),
   setConversationId: (id: number | null) => set({ conversationId: id }),
   setLoading: (loading: boolean) => set({ loading }),
   push: (m: AssistantMessage) => set((s) => ({ messages: [...s.messages, m] })),

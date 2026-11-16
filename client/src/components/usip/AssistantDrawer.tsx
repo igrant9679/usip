@@ -19,6 +19,7 @@ import { ELSIE_NAME, pageKeyForRoute, useElsieTourOffers } from "@/components/us
 import { addressOf } from "@/lib/lastPage";
 import { AssistantChat } from "@/components/usip/AssistantChat";
 import { assistantStore, useAssistantStore } from "@/lib/assistantStore";
+import { useAssistPaneToggle } from "@/components/usip/ElsieAssistPane";
 
 export function AssistantDrawer() {
   const { open } = useAssistantStore();
@@ -26,6 +27,7 @@ export function AssistantDrawer() {
   const search = useSearch();
   const pageKey = pageKeyForRoute(location) ?? undefined;
   const [offers, toggleOffers] = useElsieTourOffers();
+  const [assist, toggleAssist] = useAssistPaneToggle();
 
   useEffect(() => {
     if (!open) return;
@@ -55,6 +57,16 @@ export function AssistantDrawer() {
               className={`h-7 px-2 rounded-lg text-[11px] font-medium transition-colors ${offers ? "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300" : "text-muted-foreground hover:bg-muted"}`}
             >
               Tour offers {offers ? "on" : "off"}
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={assist}
+              onClick={toggleAssist}
+              title={assist ? `${ELSIE_NAME} Assist is open beside the page. Click to close it.` : `Open ${ELSIE_NAME} Assist: her suggestions for the page you are on, beside the page.`}
+              className={`h-7 px-2 rounded-lg text-[11px] font-medium transition-colors ${assist ? "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              Assist {assist ? "on" : "off"}
             </button>
             <Link href="/v2/ai-assistant" onClick={() => assistantStore.close()} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-muted text-muted-foreground" title="Open full page">
               <Maximize2 className="size-3.5" />

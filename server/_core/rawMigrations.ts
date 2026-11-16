@@ -5488,6 +5488,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `workspace_settings` ADD COLUMN `aiTaskTiers` json NULL",
     ],
   },
+
+  // ── 0442: Elsie Assist (owner ask 2026-11-16) ────────────────────────────
+  // "A pane … where she can be advising, recommending … as the user is
+  // navigating." Each user's own settings for it (open or closed, kinds
+  // muted) in a new table, so nothing that reads `users` depends on this
+  // migration; and the workspace's daily number of model passes for the pane
+  // (NULL = the default in code). Both additive.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0442_elsie_assist.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `elsie_assist_prefs` (`userId` int NOT NULL PRIMARY KEY, `prefs` json NULL, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `elsieAssistDailyCap` int NULL",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

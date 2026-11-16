@@ -87,7 +87,7 @@ export function suggestionsFor(pageKey: string | undefined): string[] {
 
 export function AssistantChat({ pageKey, pagePath, compact = false }: { pageKey?: string; pagePath?: string; compact?: boolean }) {
   const accent = useAccentColor();
-  const { conversationId, messages, loading } = useAssistantStore();
+  const { conversationId, messages, loading, pendingPrompt } = useAssistantStore();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const startConv = trpc.helpCenter.startConversation.useMutation({ onError: (e) => toast.error(e.message) });
@@ -136,6 +136,15 @@ export function AssistantChat({ pageKey, pagePath, compact = false }: { pageKey?
       assistantStore.setLoading(false);
     }
   }
+
+  // A request handed over by the Assist pane: sent once, as if typed. Cleared
+  // first, so a re-render while it is in flight cannot send it twice.
+  useEffect(() => {
+    if (!pendingPrompt || loading) return;
+    assistantStore.clearPendingPrompt();
+    void send(pendingPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPrompt, loading]);
 
   async function runPending(index: number, action: PendingAction) {
     assistantStore.setLoading(true);

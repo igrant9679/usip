@@ -69,6 +69,11 @@ export const AI_TASKS = {
     detail: "Her answers and the actions she proposes. A turn that looks things up moves up one tier for its answer.",
     defaultTier: "standard",
   },
+  assist: {
+    label: "Elsie Assist suggestions",
+    detail: "The order and wording of the suggestions in the Assist pane. The suggestions themselves come from rules, not a model.",
+    defaultTier: "fast",
+  },
   help: {
     label: "Help Center answers",
     detail: "Ask AI in the Help Center, and article drafts.",
