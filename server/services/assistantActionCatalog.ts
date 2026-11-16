@@ -493,9 +493,19 @@ export function describeGenericAction(a: CatalogEntry, input: unknown): string {
   return `${prefix}Run ${a.title}: ${a.description} Input: ${short}`;
 }
 
-/** Walk a dotted path on the tRPC caller and invoke it. */
+/**
+ * Walk a dotted path on the tRPC caller and invoke it.
+ *
+ * A tRPC caller is a proxy over a FUNCTION at every level (createRecursiveProxy),
+ * so `typeof caller` is "function", not "object". Until 2026-11-15 this walk
+ * stepped only through objects, gave up on the first segment, and every
+ * catalog action, read or write, ended in "Unknown procedure". The paths are
+ * safe to walk either way: getAction has already matched the path against the
+ * catalog before this is called.
+ */
 export async function invokeCallerPath(caller: unknown, path: string, input: unknown): Promise<unknown> {
-  const fn = path.split(".").reduce<unknown>((o, k) => (o && typeof o === "object" ? (o as Record<string, unknown>)[k] : undefined), caller);
+  const walkable = (o: unknown): o is Record<string, unknown> => o != null && (typeof o === "object" || typeof o === "function");
+  const fn = path.split(".").reduce<unknown>((o, k) => (walkable(o) ? o[k] : undefined), caller);
   if (typeof fn !== "function") throw new Error(`Unknown procedure ${path}`);
   return (fn as (i: unknown) => Promise<unknown>)(input);
 }

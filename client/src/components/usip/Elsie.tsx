@@ -308,7 +308,9 @@ export function ElsieController() {
   if (!canAsk || !suggestion || drawerOpen) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-[9980] w-80 rounded-xl border bg-popover text-popover-foreground shadow-xl p-4 animate-in slide-in-from-bottom-4">
+    // 24rem since 2026-11-15: at 20rem the three buttons had about 218px and
+    // their labels wrapped onto two lines. Never wider than a phone's screen.
+    <div className="fixed bottom-6 right-6 z-[9980] w-96 max-w-[calc(100vw-2rem)] rounded-xl border bg-popover text-popover-foreground shadow-xl p-4 animate-in slide-in-from-bottom-4">
       <div className="flex items-start gap-3">
         <div className="size-8 rounded-full bg-violet-100 dark:bg-violet-500/20 flex items-center justify-center shrink-0">
           <Compass className="size-4 text-violet-600 dark:text-violet-300" />
@@ -319,7 +321,7 @@ export function ElsieController() {
             {suggestion.name}
             {suggestion.estimatedMinutes ? ` · about ${suggestion.estimatedMinutes} min` : ""}
           </p>
-          <div className="flex items-center gap-2 mt-2.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 [&>button]:whitespace-nowrap">
             <button
               onClick={begin}
               disabled={!full.data}

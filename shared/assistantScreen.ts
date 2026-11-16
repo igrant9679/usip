@@ -58,6 +58,18 @@ const RECORD_ROUTES: Array<[RegExp, string, string, string]> = [
 // query (assistantScreen.test.ts checks both), so a renamed page or procedure
 // fails a test instead of sending the model to something that is not there.
 
+/**
+ * Pages that open a record in a side panel and name it in the query, not the
+ * path. Found on the live site on 2026-11-15: People opens a person as
+ * /v2/people?person=6842, which is how most people ever look at a person, and
+ * the first version only knew /prospects/:id.
+ * [path, query key, page name, record kind, lookup]
+ */
+const PANEL_RECORDS: Array<[string, string, string, string, string]> = [
+  ["/v2/people", "person", "a person's record, open on the People page", "person", "get_person with this id"],
+  ["/pipeline", "deal", "a deal, open on the deals pipeline", "deal", "run_read_action opportunities.get with this id"],
+];
+
 /** Longest prefix first. A page with no entry is described by its address alone. */
 const PAGE_NAMES: Array<[string, string]> = [
   ["/v2/settings/data-sources", "Settings: Data sources"],
@@ -123,6 +135,14 @@ export function describeScreen(raw: unknown): ScreenInfo | null {
       const id = Number(m[1]);
       if (Number.isSafeInteger(id) && id > 0) return { path, page, record: { kind, id, lookup }, params };
     }
+  }
+  for (const [panelPath, key, page, kind, lookup] of PANEL_RECORDS) {
+    if (path !== panelPath || !/^\d{1,15}$/.test(params[key] ?? "")) continue;
+    const id = Number(params[key]);
+    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    const rest: Record<string, string> = {};
+    for (const k of Object.keys(params)) if (k !== key) rest[k] = params[k];
+    return { path, page, record: { kind, id, lookup }, params: rest };
   }
   let page = "";
   let best = 0;

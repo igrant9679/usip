@@ -23,6 +23,7 @@ import {
   READ_ONLY_GROUP,
   READ_ONLY_PATHS,
   buildCatalogFrom,
+  invokeCallerPath,
   redactForModel,
   searchCatalog,
   type CatalogEntry,
@@ -109,11 +110,56 @@ describe("settings-class reads", () => {
     expect(searchCatalog(catalog(), undefined, READ_ONLY_GROUP, 100).length).toBe(Object.keys(READ_ONLY_PATHS).length);
   });
 
-  it("the read path scrubs a read-only result and no other", () => {
+  // Widened from "read-only results only" on 2026-11-15: until the caller
+  // walk was fixed no catalog read had ever run, so every query in the open
+  // groups reaches the model for the first time with that fix.
+  it("the read path scrubs every catalog read", () => {
     const src = read("server/routers/assistant.ts");
-    expect(src).toContain("capForModel(entry.readOnly ? redactForModel(r ?? null) : (r ?? null))");
+    const block = src.slice(src.indexOf('case "run_read_action": {'), src.indexOf('case "find_tours": {'));
+    expect(block).toContain("return { result: capForModel(redactForModel(r ?? null)), summary: `Ran ${entry.path}` };");
+    // The one return that carries a result: nothing in this case hands back `r` unscrubbed.
+    expect((block.match(/invokeCallerPath\(/g) ?? []).length).toBe(1);
+    expect(block).not.toMatch(/result: capForModel\(r\b/);
+    expect(block).not.toMatch(/result: r\b/);
     // A read can never be confirmed as an action: run_action still requires a mutation.
     expect(src).toContain('if (!entry || entry.kind !== "mutation") throw new TRPCError({ code: "BAD_REQUEST", message: `Action ${args.path} is not allowed` });');
+  });
+});
+
+/*
+ * Found on the live site the day the reads shipped (2026-11-15): Elsie asked
+ * for keyShares.overview and got "Unknown procedure keyShares.overview". The
+ * walk down the dotted path required each step to be an OBJECT, and a tRPC
+ * caller is a proxy over a FUNCTION at every level, so the very first step
+ * gave up. That line dates from 2026-09-09: no catalog action, read or
+ * write, had ever run through it. Nothing tested it against a real caller;
+ * these do.
+ */
+describe("a catalog action reaches its procedure through a real caller", () => {
+  const anon = async () => {
+    const { appRouter } = await import("./routers");
+    return appRouter.createCaller({ user: null, req: { headers: {} }, res: {} } as never);
+  };
+
+  it("a public query runs and returns its value", async () => {
+    // auth.me with nobody signed in is null; system.brandingConfig is an object.
+    expect(await invokeCallerPath(await anon(), "auth.me", undefined)).toBeNull();
+    expect(await invokeCallerPath(await anon(), "system.brandingConfig", undefined)).toHaveProperty("brandfetchLogoClientId");
+  });
+
+  it("a workspace read gets as far as the sign-in check, which is the procedure answering", async () => {
+    for (const path of ["keyShares.overview", "aiCredentials.get", "integrations.list", "research.markets.list", "are.campaigns.list"]) {
+      const err = await invokeCallerPath(await anon(), path, undefined).then(() => null, (e: Error) => e);
+      expect(err, path).toBeTruthy();
+      expect(err!.message, path).not.toMatch(/Unknown procedure/);
+      expect((err as { code?: string }).code, path).toMatch(/UNAUTHORIZED|FORBIDDEN/);
+    }
+  });
+
+  it("a path that is not a procedure is refused", async () => {
+    await expect(invokeCallerPath(await anon(), "keyShares.noSuchThing", undefined)).rejects.toThrow(/No procedure found|Unknown procedure/);
+    await expect(invokeCallerPath({}, "a.b", undefined)).rejects.toThrow(/Unknown procedure a\.b/);
+    await expect(invokeCallerPath(null, "a.b", undefined)).rejects.toThrow(/Unknown procedure a\.b/);
   });
 });
 
@@ -188,6 +234,26 @@ describe("what is on screen", () => {
     expect(describeScreen("/research/sectors/3/report")!.record).toMatchObject({ kind: "research sector", id: 3 });
     expect(describeScreen("/research/markets/2/report/buyers")!.record).toMatchObject({ kind: "research market", id: 2 });
     expect(describeScreen("/opportunities/55")!.record).toMatchObject({ kind: "deal", id: 55 });
+  });
+
+  it("names the record a side panel shows when the address carries it as a parameter", () => {
+    // How People opens a person, and the pipeline a deal.
+    expect(describeScreen("/v2/people?tier=high&person=6842&page=2")).toEqual({
+      path: "/v2/people",
+      page: "a person's record, open on the People page",
+      record: { kind: "person", id: 6842, lookup: "get_person with this id" },
+      params: { tier: "high", page: "2" },
+    });
+    expect(describeScreen("/pipeline?deal=31")!.record).toEqual({ kind: "deal", id: 31, lookup: "run_read_action opportunities.get with this id" });
+    expect(screenLine(describeScreen("/v2/people?person=6842"))).toContain('It shows the person with id 6842');
+    // Not an id, or the wrong page: an ordinary parameter.
+    expect(describeScreen("/v2/people?person=abc")!.record).toBeNull();
+    expect(describeScreen("/v2/people?person=0")!.record).toBeNull();
+    expect(describeScreen("/v2/lists?person=5")!.record).toBeNull();
+    // The pages really read these parameters.
+    expect(read("client/src/pages/usip/People.tsx")).toContain('useUrlState("person", urlParam.id())');
+    expect(read("client/src/pages/usip/Pipeline.tsx")).toContain('useUrlState("deal", urlParam.id())');
+    expect(catalog().find((a) => a.path === "opportunities.get")?.kind).toBe("query");
   });
 
   it("names a list page and carries the address's filters", () => {
@@ -308,6 +374,19 @@ describe("one Elsie", () => {
     const card = elsie.slice(elsie.indexOf("export function ElsieController()"));
     expect(card).toContain("Ask {ELSIE_NAME}");
     expect(card).toContain("onClick={() => { dismiss(); assistantStore.open(); }}");
+  });
+
+  // Owner, 2026-11-15: "widen the tour card". At 20rem the three labels wrapped
+  // onto two lines each (seen on the live Home page). Source pins, as the suite
+  // has no browser: re-check the card at a 375px-wide window before changing them.
+  it("the tour card has room for its three buttons, and never outgrows a phone", () => {
+    const card = elsie.slice(elsie.indexOf("if (!canAsk || !suggestion || drawerOpen) return null;"));
+    const box = card.slice(card.indexOf('<div className="fixed'), card.indexOf(">", card.indexOf('<div className="fixed'))).split(/[\s"]+/);
+    expect(box).toContain("w-96");
+    expect(box).toContain("max-w-[calc(100vw-2rem)]");
+    expect(box).not.toContain("w-80");
+    // A label stays on one line; if the row runs out, a whole button moves down.
+    expect(card).toContain('className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 [&>button]:whitespace-nowrap"');
   });
 
   it("the chat can hand back a tour: a read tool, never a confirm card", () => {
