@@ -88,7 +88,7 @@ describe("assistant product knowledge digest", () => {
     expect(hubLinkRows.sort()).toEqual(["Data enrichment", "Imports and exports", "Tour builder"]);
     for (const label of hubLinkRows) expect(hub, label).toContain(label);
     // Where the digest gives a section a label, it is the hub's own.
-    for (const [id, label] of [["workspace", "Workspace overview"], ["knowledge", "Knowledge base"], ["billing", "Billing and credits"], ["system-activity", "Audit log"]]) {
+    for (const [id, label] of [["workspace", "Workspace overview"], ["knowledge", "Knowledge base"], ["data-sources", "Data sources"], ["billing", "Billing and credits"], ["system-activity", "Audit log"]]) {
       expect(hubSections.find((s) => s.id === id)?.label, id).toBe(label);
       expect(hub).toContain(`${id} (${label}`);
     }
@@ -100,6 +100,14 @@ describe("assistant product knowledge digest", () => {
     expect(legacy).toContain('aria-label="Pause all outbound"');
     const billing = legacy.slice(legacy.indexOf("function BillingTab("), legacy.indexOf("function DangerTab("));
     expect(billing).toContain('title="Monthly AI budget"');
+    // Asked where to change an Apollo key after the first version shipped,
+    // Elsie said Integrations: the digest described that section and left
+    // Data sources bare. Each says which keys it holds now, and the vendor
+    // cards really are in the Data sources section.
+    expect(hub).toContain("integrations (AI provider keys and webhooks; NOT the data vendors)");
+    expect(hub).toContain("for Apollo, QuickEnrich, WarmySender, LeadOcean and Reoon)");
+    const dataSources = hubSource.slice(hubSource.indexOf('{section === "data-sources" && ('), hubSource.indexOf('{section === "workspace" &&'));
+    for (const vendor of ["Apollo", "QuickEnrich", "WarmySender", "LeadOcean", "Reoon"]) expect(dataSources.toLowerCase(), vendor).toContain(vendor.toLowerCase());
     const security = legacy.slice(legacy.indexOf("function SecurityTab("), legacy.indexOf("function NotificationsTab("));
     expect(security).toContain("IP allowlist");
     expect(security).toContain("Session timeout");
@@ -126,6 +134,17 @@ describe("assistant product knowledge digest", () => {
     expect(Array.from(menu.matchAll(/label: "([^"]+)"/g)).map((m) => m[1])).toEqual(["Users and Teams", "Audit Log", "Security", "Integrations"]);
     expect(shell).toContain("All settings");
     expect(frame).toContain("Users and Teams, Audit Log, Security, Integrations and All settings");
+    // The same answer said "click your name at the bottom of the sidebar,
+    // then Settings". The name row has a help link and Sign out and nothing
+    // else, and the digest gives the clicks in so many words.
+    expect(frame).toContain("clicking the name opens nothing");
+    expect(frame).toContain("Admin Settings → All settings → the section in the hub's left list");
+    const rowStart = shell.indexOf('{(user?.name ?? "?").slice(0, 1).toUpperCase()}');
+    expect(rowStart).toBeGreaterThan(-1);
+    const userRow = shell.slice(rowStart, shell.indexOf("</aside>", rowStart));
+    expect(userRow).toContain('<Link href="/help"');
+    expect(userRow).toContain("logout()");
+    expect(userRow).not.toContain("/v2/settings");
     // A member who is not an admin gets a plain Settings row there.
     expect(shell).toContain('renderNavLink({ ...l, href: "/v2/settings/profile", label: "Settings", trailingChevron: false })');
     // The top bar's controls, in the order the digest lists them.
