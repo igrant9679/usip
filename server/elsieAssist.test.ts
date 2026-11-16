@@ -426,6 +426,13 @@ describe("the pane changes nothing, and costs nothing while closed", () => {
     const setPrefs = r.slice(r.indexOf("  setPrefs: workspaceProcedure"), r.indexOf("  /** `cap: null`"));
     expect(setPrefs).toContain("loadAssistPrefs(db, ctx.user.id)");
     expect(setPrefs).toContain("saveAssistPrefs(db, ctx.user.id, next)");
+    // One row per user: a second save updates it (a plain insert would fail on the primary key).
+    const svc = read("server/services/elsieAssist.ts");
+    const save = svc.slice(svc.indexOf("export async function saveAssistPrefs("));
+    expect(save).toContain("await db.insert(elsieAssistPrefs).values({ userId, prefs: clean }).onDuplicateKeyUpdate({ set: { prefs: clean } });");
+    // And reading them fails to "closed, nothing muted", never to an error in the shell.
+    const load = svc.slice(svc.indexOf("export async function loadAssistPrefs("), svc.indexOf("export async function saveAssistPrefs("));
+    expect(load).toMatch(/\} catch \{\s*return cleanAssistPrefs\(null\);/);
     const schema = read("drizzle/schema.ts");
     expect(schema).toContain('export const elsieAssistPrefs = mysqlTable("elsie_assist_prefs", {');
     const usersTable = schema.slice(schema.indexOf("export const users = mysqlTable("), schema.indexOf("export const", schema.indexOf("export const users = mysqlTable(") + 20));
