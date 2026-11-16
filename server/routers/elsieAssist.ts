@@ -62,6 +62,7 @@ export const elsieAssistRouter = router({
       const candidates = await buildCandidates({
         db,
         workspaceId: ctx.workspace.id,
+        userId: ctx.user.id,
         caller: await getCaller(ctx),
         place: where.place,
         id: where.id,

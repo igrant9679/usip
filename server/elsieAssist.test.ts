@@ -213,7 +213,8 @@ describe("a person's record", () => {
     const out = personCandidates({ ...base, repliesWaiting: 1, latestReplyClass: "willing_to_meet", overdueTasks: 2, campaigns: [{ name: "Alpha", status: "replied" }] });
     expect(out.map((c) => c.kind)).toEqual(["person_reply", "person_tasks"]);
     expect(out[0].why).toBe("1 reply from them has not been handled; the latest was classified as willing to meet.");
-    expect(out[1].title).toBe("2 tasks for this person are overdue");
+    expect(out[1].title).toBe("2 of your tasks for this person are overdue");
+    expect(out[1].why).toBe("2 tasks assigned to you and linked to this person are past their due date.");
     expect(out[1].action).toEqual({ type: "navigate", label: "Open overdue tasks", href: "/v2/tasks?view=overdue" });
   });
 
@@ -415,6 +416,11 @@ describe("the pane changes nothing, and costs nothing while closed", () => {
     // Home and a campaign reuse the pages' own endpoints, so the pane and the page agree.
     expect(build).toContain("caller.attention.summary()");
     expect(build).toContain("caller.are.campaigns.stallReasons({ campaignId: id })");
+    // A person's overdue tasks are counted as the Tasks page's Overdue view counts them:
+    // the user's own, still to be done, due before now.
+    expect(build).toContain("eq(tasks.ownerUserId, args.userId),");
+    expect(build).toContain("inArray(tasks.status, [...WORKABLE_TASK_STATUSES]),");
+    expect(build).not.toMatch(/eq\(tasks\.status, "open"\)/);
     // Every read is scoped to the workspace.
     expect((build.match(/workspaceId, ws\)/g) ?? []).length).toBeGreaterThanOrEqual(8);
   });
@@ -452,7 +458,7 @@ describe("the pane changes nothing, and costs nothing while closed", () => {
     expect(act).toContain('if (s.action.type === "navigate") navigate(s.action.href);');
     expect(act).toContain("else assistantStore.ask(s.action.prompt);");
     // No mutation in the pane reaches anything but its own settings.
-    const mutations = Array.from(pane.matchAll(/trpc\.(\w+)\.(\w+)\.useMutation/g)).map((m) => `${m[1]}.${m[2]}`);
+    const mutations = Array.from(pane.matchAll(/trpc\.([\w.]+)\.useMutation/g)).map((m) => m[1]);
     expect(Array.from(new Set(mutations)).sort()).toEqual(["elsieAssist.setDailyCap", "elsieAssist.setPrefs"]);
     // It is a column of the Shell, with its button beside Elsie's.
     const shell = read("client/src/components/usip/Shell.tsx");

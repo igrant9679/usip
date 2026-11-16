@@ -374,6 +374,7 @@ export type PersonFacts = {
   hasEmail: boolean;
   repliesWaiting: number;
   latestReplyClass: string | null;
+  /** The user's own workable tasks linked to this person, due before now. */
   overdueTasks: number;
   /** Campaign rows for this person's email address. */
   campaigns: Array<{ name: string; status: string }>;
@@ -401,8 +402,8 @@ export function personCandidates(p: PersonFacts): AssistCandidate[] {
       id: `person_tasks:${p.id}:${overdue}`,
       kind: "person_tasks",
       weight: 85,
-      title: `${overdue} ${plural(overdue, "task", "tasks")} for this person ${plural(overdue, "is", "are")} overdue`,
-      why: `${overdue} open ${plural(overdue, "task", "tasks")} linked to this person ${plural(overdue, "is", "are")} past ${plural(overdue, "its", "their")} due date.`,
+      title: `${overdue} of your ${plural(overdue, "tasks", "tasks")} for this person ${plural(overdue, "is", "are")} overdue`,
+      why: `${overdue} ${plural(overdue, "task", "tasks")} assigned to you and linked to this person ${plural(overdue, "is", "are")} past ${plural(overdue, "its", "their")} due date.`,
       action: { type: "navigate", label: "Open overdue tasks", href: "/v2/tasks?view=overdue" },
       facts: { overdueTasks: overdue },
     });

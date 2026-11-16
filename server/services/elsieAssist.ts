@@ -15,12 +15,13 @@
  *     Past it, or when the model fails, the rules' own lines are shown.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, isNull, lt, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 import { areCampaigns, elsieAssistPrefs, emailReplies, prospectQueue, prospects, spendLedger, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { contentText, invokeLLM, jsonFromText } from "../_core/llm";
 import { genuineReplyScope } from "./replyScope";
 import { spendDay } from "./spend";
+import { WORKABLE_TASK_STATUSES } from "@shared/taskRules";
 import {
   ASSIST_DAILY_CAP_MAX,
   ASSIST_DEFAULT_DAILY_CAP,
@@ -60,6 +61,8 @@ const num = (v: unknown) => Number(v ?? 0) || 0;
 export async function buildCandidates(args: {
   db: Db;
   workspaceId: number;
+  /** Whose pane this is: a person's overdue tasks are counted as the Tasks page counts them, the user's own. */
+  userId: number;
   caller: AssistCaller;
   place: AssistPlace;
   id: number | null;
@@ -125,9 +128,12 @@ export async function buildCandidates(args: {
       db.select({ n: sql<number>`count(*)` }).from(tasks)
         .where(and(
           eq(tasks.workspaceId, ws),
+          eq(tasks.ownerUserId, args.userId),
           eq(tasks.relatedType, "prospect"),
           eq(tasks.relatedId, id),
-          eq(tasks.status, "open"),
+          // Overdue as the Tasks page's Overdue view has it (shared/taskRules):
+          // still to be done, and due before now.
+          inArray(tasks.status, [...WORKABLE_TASK_STATUSES]),
           lt(tasks.dueAt, args.now ?? new Date()),
         )),
       email
