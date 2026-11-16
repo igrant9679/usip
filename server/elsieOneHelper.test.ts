@@ -228,6 +228,26 @@ describe("what is on screen", () => {
     expect(describeScreen("/opportunities/55")!.record).toMatchObject({ kind: "deal", id: 55 });
   });
 
+  it("names the record a side panel shows when the address carries it as a parameter", () => {
+    // How People opens a person, and the pipeline a deal.
+    expect(describeScreen("/v2/people?tier=high&person=6842&page=2")).toEqual({
+      path: "/v2/people",
+      page: "a person's record, open on the People page",
+      record: { kind: "person", id: 6842, lookup: "get_person with this id" },
+      params: { tier: "high", page: "2" },
+    });
+    expect(describeScreen("/pipeline?deal=31")!.record).toEqual({ kind: "deal", id: 31, lookup: "run_read_action opportunities.get with this id" });
+    expect(screenLine(describeScreen("/v2/people?person=6842"))).toContain('It shows the person with id 6842');
+    // Not an id, or the wrong page: an ordinary parameter.
+    expect(describeScreen("/v2/people?person=abc")!.record).toBeNull();
+    expect(describeScreen("/v2/people?person=0")!.record).toBeNull();
+    expect(describeScreen("/v2/lists?person=5")!.record).toBeNull();
+    // The pages really read these parameters.
+    expect(read("client/src/pages/usip/People.tsx")).toContain('useUrlState("person", urlParam.id())');
+    expect(read("client/src/pages/usip/Pipeline.tsx")).toContain('useUrlState("deal", urlParam.id())');
+    expect(catalog().find((a) => a.path === "opportunities.get")?.kind).toBe("query");
+  });
+
   it("names a list page and carries the address's filters", () => {
     const s = describeScreen("/v2/inbox?tab=mailbox&q=renewal%20quote")!;
     expect(s.page).toBe("Inbox");
