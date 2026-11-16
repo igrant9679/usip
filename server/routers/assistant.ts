@@ -347,9 +347,14 @@ async function runReadTool(
       if (entry.kind !== "query") return { result: { error: `${entry.path} changes data — propose it with run_action instead` }, summary: `${entry.path} is a mutation` };
       const input = entry.parse(args.input ?? {});
       const r = await invokeCallerPath(caller, entry.path, input);
-      // A settings-class read is scrubbed of anything named like a secret
-      // before the model, or the stored digest, can hold it (2026-11-15).
-      return { result: capForModel(entry.readOnly ? redactForModel(r ?? null) : (r ?? null)), summary: `Ran ${entry.path}` };
+      // EVERY catalog read is scrubbed of anything named like a secret before
+      // the model, or the stored digest, can hold it. First written for the
+      // settings-class reads only; widened the same day (2026-11-15) when it
+      // turned out no catalog read had ever run (invokeCallerPath), so none of
+      // the 300-odd queries in the open groups had ever shown the model its
+      // result. A share link's token is hidden with the rest: the user is
+      // sent to the page for the link instead.
+      return { result: capForModel(redactForModel(r ?? null)), summary: `Ran ${entry.path}` };
     }
     case "find_tours": {
       const db = await getDb();

@@ -110,9 +110,17 @@ describe("settings-class reads", () => {
     expect(searchCatalog(catalog(), undefined, READ_ONLY_GROUP, 100).length).toBe(Object.keys(READ_ONLY_PATHS).length);
   });
 
-  it("the read path scrubs a read-only result and no other", () => {
+  // Widened from "read-only results only" on 2026-11-15: until the caller
+  // walk was fixed no catalog read had ever run, so every query in the open
+  // groups reaches the model for the first time with that fix.
+  it("the read path scrubs every catalog read", () => {
     const src = read("server/routers/assistant.ts");
-    expect(src).toContain("capForModel(entry.readOnly ? redactForModel(r ?? null) : (r ?? null))");
+    const block = src.slice(src.indexOf('case "run_read_action": {'), src.indexOf('case "find_tours": {'));
+    expect(block).toContain("return { result: capForModel(redactForModel(r ?? null)), summary: `Ran ${entry.path}` };");
+    // The one return that carries a result: nothing in this case hands back `r` unscrubbed.
+    expect((block.match(/invokeCallerPath\(/g) ?? []).length).toBe(1);
+    expect(block).not.toMatch(/result: capForModel\(r\b/);
+    expect(block).not.toMatch(/result: r\b/);
     // A read can never be confirmed as an action: run_action still requires a mutation.
     expect(src).toContain('if (!entry || entry.kind !== "mutation") throw new TRPCError({ code: "BAD_REQUEST", message: `Action ${args.path} is not allowed` });');
   });
