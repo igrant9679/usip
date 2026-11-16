@@ -81,7 +81,18 @@ describe("assistant product knowledge digest", () => {
     // error as "a toggle to turn the key on/off" and "drag to reorder".
     // Saying where each really is costs about 200 characters, and the
     // routines had already been cut twice to pay for earlier fixes.
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13000);
+    //
+    // 2026-11-16, later: 13000 → 13300. Elsie Assist shipped: a second
+    // button in the top bar and a pane she is asked about by name. Two
+    // sentences say what it is, where it opens and what its buttons do.
+    //
+    // 2026-11-16, later still: 13300 → 13900. The day model tiers shipped,
+    // the digest only NAMED them ("AI provider keys, model tiers and
+    // webhooks"), and asked about them on the live site Elsie made up the
+    // rest: tiers called Standard and Advanced, one each for email, tasks
+    // and the phone agent, and model names. A bare name is an invitation.
+    // The paragraph that replaces the guess costs about 600 characters.
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13900);
   });
 
   it("says where Settings is, and names every section the hub has", () => {
@@ -139,6 +150,10 @@ describe("assistant product knowledge digest", () => {
     expect(read("../client/src/components/usip/settings/ApolloSourceCard.tsx")).toContain('aria-label="Apollo API key"');
     // And the rule that stops the next invented detail.
     expect(PRODUCT_KNOWLEDGE).toContain("never place a control, or describe a layout (table, row, top of the page), that this manual does not.");
+    // Elsie Assist: what she is told matches the pane (four pages, three shown, one button each).
+    expect(PRODUCT_KNOWLEDGE).toContain("opens a pane beside the page with up to three suggestions for Home, a campaign's page, Inbox or a person's record; each has a reason and one button, which opens a page or asks you");
+    expect(read("../shared/elsieAssist.ts")).toContain("export const ASSIST_MAX_SHOWN = 3;");
+    expect(read("../shared/elsieAssist.ts")).toContain('export type AssistPlace = "home" | "campaign" | "inbox" | "person";');
     const security = legacy.slice(legacy.indexOf("function SecurityTab("), legacy.indexOf("function NotificationsTab("));
     expect(security).toContain("IP allowlist");
     expect(security).toContain("Session timeout");
@@ -196,6 +211,36 @@ describe("assistant product knowledge digest", () => {
     expect(cardFile("LeadOceanSourceCard")).toMatch(/<Switch aria-label="Use LeadOcean"[^>]*\n?\s*onCheckedChange=\{\(v\) => setEnabled\.mutate\(\{ slug: "leadocean", enabled: v \}\)\}/);
   });
 
+  // 2026-11-16: asked where to choose models, Elsie invented "Standard or
+  // Advanced" tiers for "email writing, task descriptions and the phone
+  // agent". The digest now says what the card has, checked against the catalog.
+  it("describes model tiers as the card has them", async () => {
+    const { AI_TASKS, AI_TIERS, AI_TIER_LABEL } = await import("../shared/aiTiers");
+    const start = PRODUCT_KNOWLEDGE.indexOf("Model tiers (on integrations");
+    expect(start).toBeGreaterThan(-1);
+    const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
+    expect(AI_TIERS.map((t) => AI_TIER_LABEL[t])).toEqual(["Fast", "Standard", "Deep"]);
+    expect(para).toContain("three tiers, Fast, Standard and Deep.");
+    // Each default the paragraph states is the catalog's.
+    const said: Record<string, string[]> = {
+      deep: ["outreach", "targeting"],
+      standard: ["elsie", "help", "chat_agent", "enrichment", "documents"],
+      fast: ["replies", "scoring", "suggestions"],
+    };
+    for (const [tier, tasks] of Object.entries(said)) for (const t of tasks) expect(AI_TASKS[t as keyof typeof AI_TASKS].defaultTier, t).toBe(tier);
+    expect(para).toContain("emails to prospects and campaign targeting default to Deep; your chat, Help answers, website chat, research and proposals to Standard; reading replies, scoring and suggestions to Fast.");
+    expect(para).toContain("A tier left blank uses the default provider's model, so setting nothing changes nothing.");
+    expect(para).toContain("nothing is pre-filled and Velocity names no model");
+    // The model box really is empty and free text, and the card sits below the keys.
+    const card = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
+    expect(card).toContain('placeholder="Model name, exactly as the provider lists it"');
+    expect(card).not.toMatch(/claude-|gpt-|gemini-/);
+    const settings = read("../client/src/pages/usip/Settings.tsx");
+    const section = settings.slice(settings.indexOf("function AIProvidersSection("), settings.indexOf("function ProposalsTab("));
+    expect(section.indexOf("{AI_PROVIDERS.map((p) => {")).toBeGreaterThan(-1);
+    expect(section.slice(section.indexOf("{AI_PROVIDERS.map((p) => {"))).toContain("<ModelTiersCard isAdmin={isAdmin} />");
+  });
+
   it("puts each control where the shell puts it", () => {
     const start = PRODUCT_KNOWLEDGE.indexOf("Where the controls are.");
     expect(start).toBeGreaterThan(-1);
@@ -236,7 +281,11 @@ describe("assistant product knowledge digest", () => {
       expect(at, needle).toBeGreaterThan(-1);
       return at;
     });
-    const said = ["Elsie, Search", "colour theme", "? (help", "the bell"].map((needle) => {
+    // 2026-11-16: the Assist button sits between Elsie's and Search.
+    const assistAt = shell.lastIndexOf("<ElsieAssistButton />");
+    expect(assistAt).toBeGreaterThan(bar[0]);
+    expect(assistAt).toBeLessThan(bar[2]);
+    const said = ["Elsie, Assist, Search", "colour theme", "? (help", "the bell"].map((needle) => {
       const at = frame.indexOf(needle);
       expect(at, needle).toBeGreaterThan(-1);
       return at;

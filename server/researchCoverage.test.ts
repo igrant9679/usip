@@ -41,6 +41,7 @@ const EXCLUDED: Record<string, string> = {
   "server/services/campaignRouter.ts::routeProspects": INTERNAL + " (Picks which campaign a person belongs in.)",
   "server/routers/aiCredentials.ts::test": "A key test that asks the model for 'pong'.",
   "server/routers/aiCredentials.ts::testTier": "A model-tier test that asks the model for 'pong'.",
+  "server/services/elsieAssist.ts::suggestionsFor": "Orders and rewords the Assist pane's suggestions from their own facts; it is told to add nothing, and a line with a number the facts lack is discarded.",
   "server/routers/helpCenter.ts::askAI": "Answers questions about Velocity itself.",
   "server/routers/helpCenter.ts::generateArticleDraft": "Writes help articles about Velocity itself.",
   "server/services/knowledgeBase.ts::generateKnowledgeSummary": "Summarises the workspace's own documents.",

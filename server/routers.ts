@@ -23,6 +23,7 @@ import { optimizationRouter } from "./routers/optimization";
 import { emailTemplatesRouter, snippetsRouter, brandVoiceRouter, emailPromptTemplatesRouter } from "./routers/emailBuilder";
 import { emailAssistRouter } from "./routers/emailAssist";
 import { attentionRouter } from "./routers/attention";
+import { elsieAssistRouter } from "./routers/elsieAssist";
 import { graphRouter } from "./routers/graph";
 import { savedSectionsRouter } from "./routers/savedSections";
 import { importsRouter } from "./routers/imports";
@@ -139,6 +140,8 @@ export const appRouter = router({
   linkedinLimits: linkedinLimitsRouter,
   emailAssist: emailAssistRouter,
   attention: attentionRouter,
+  // The Assist pane: what Elsie suggests on the page the user is on (shared/elsieAssist.ts).
+  elsieAssist: elsieAssistRouter,
   graph: graphRouter,
   sequenceAb: sequenceAbRouter,
   cs: csRouter,

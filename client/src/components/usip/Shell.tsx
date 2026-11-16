@@ -87,6 +87,7 @@ import { PageTransition } from "@/components/PageTransition";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { HelpDrawer } from "@/components/usip/HelpDrawer";
 import { AssistantDrawer } from "@/components/usip/AssistantDrawer";
+import { ElsieAssistButton, ElsieAssistPane } from "@/components/usip/ElsieAssistPane";
 import { assistantStore } from "@/lib/assistantStore";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -923,6 +924,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               Ctrl+J); the sparkles button that used to open "AI Assistant"
               beside the theme toggle is gone, because it was the same thing. */}
           <ElsieButton />
+          {/* Her suggestions for this page, as a column beside it (2026-11-16). */}
+          <ElsieAssistButton />
 
           {/* Opens the palette. It was a text box with no handler: typing in it
               did nothing at all (G66). */}
@@ -988,6 +991,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           </ErrorBoundary>
         </main>
       </div>
+      {/* Elsie Assist: a column beside the page on a wide screen, over its
+          right edge on a narrow one. Renders nothing while closed. */}
+      <ElsieAssistPane />
     </div>
     </AccentContext.Provider>
   );

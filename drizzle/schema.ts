@@ -2070,6 +2070,9 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // and every call uses the default provider and model above, as before.
   aiTierModels: json("aiTierModels"), // { fast?: {provider, model}, standard?: …, deep?: … }
   aiTaskTiers: json("aiTaskTiers"), // { <task>: "fast" | "standard" | "deep" }, only the tasks moved off their default
+  // Elsie Assist (Migration 0442): model passes the pane may make per UTC day.
+  // NULL = the default in shared/elsieAssist.ts; 0 = the rules' own lines only.
+  elsieAssistDailyCap: int("elsieAssistDailyCap"),
   // Grok voice agents (Migration 0120) — xAI API key for the Voice Agent API
   // (wss://api.x.ai/v1/realtime + SIP). Same AES-256-GCM BYOK pattern as above.
   xaiApiKeyEnc: text("xaiApiKeyEnc"),
@@ -7035,3 +7038,16 @@ export const clientErrors = mysqlTable(
   (t) => ({ byWsCreated: index("ix_ce_ws_created").on(t.workspaceId, t.createdAt) }),
 );
 export type ClientErrorRow = typeof clientErrors.$inferSelect;
+
+/**
+ * Elsie Assist: each user's own settings for the pane (Migration 0442,
+ * shared/elsieAssist.ts): open or closed, and the kinds of suggestion they
+ * asked her to stop. A table of its own, not a column on `users`: every
+ * signed-in request reads `users`, and the migration runs after the server
+ * starts.
+ */
+export const elsieAssistPrefs = mysqlTable("elsie_assist_prefs", {
+  userId: int("userId").primaryKey(),
+  prefs: json("prefs"), // { open: boolean, muted: string[] }
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
