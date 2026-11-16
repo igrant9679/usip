@@ -98,6 +98,13 @@ describe("assistant product knowledge digest", () => {
     const general = legacy.slice(legacy.indexOf("function GeneralTab("), legacy.indexOf("function MyProfileTab("));
     expect(general).toContain("<SendWindowSection");
     expect(legacy).toContain('aria-label="Pause all outbound"');
+    // 2026-11-16: asked where the pause switch is, Elsie put it "at the top"
+    // of Workspace overview. It is inside the Send window card, and flipping
+    // it saves at once (no Save button). The digest says both.
+    expect(hub).toContain("the Send window card, whose Pause all outbound switch holds all email, LinkedIn and invites as soon as it is flipped");
+    const sendWindow = legacy.slice(legacy.indexOf("function SendWindowSection("), legacy.indexOf("function ", legacy.indexOf("function SendWindowSection(") + 10));
+    expect(sendWindow).toContain('title="Send window"');
+    expect(sendWindow).toMatch(/aria-label="Pause all outbound"\s*onCheckedChange=\{\(v\) => save\(\{ outboundPaused: v \}\)\}/);
     const billing = legacy.slice(legacy.indexOf("function BillingTab("), legacy.indexOf("function DangerTab("));
     expect(billing).toContain('title="Monthly AI budget"');
     // Asked where to change an Apollo key after the first version shipped,
@@ -108,6 +115,13 @@ describe("assistant product knowledge digest", () => {
     expect(hub).toContain("for Apollo, QuickEnrich, WarmySender, LeadOcean and Reoon)");
     const dataSources = hubSource.slice(hubSource.indexOf('{section === "data-sources" && ('), hubSource.indexOf('{section === "workspace" &&'));
     for (const vendor of ["Apollo", "QuickEnrich", "WarmySender", "LeadOcean", "Reoon"]) expect(dataSources.toLowerCase(), vendor).toContain(vendor.toLowerCase());
+    // The same day she called Apollo's entry "a row in a table". Each vendor
+    // is a card of its own with its key field, and the order is its own card.
+    expect(hub).toContain("data-sources (Data sources: a card per vendor with its key, and the checking order, for Apollo");
+    for (const card of ["<ProspectSourceRegistryCard />", "<WarmySenderSourceCard />", "<QuickEnrichSourceCard />", "<ApolloSourceCard />", "<LeadOceanSourceCard />", "<ReoonVerifierCard />"]) expect(dataSources, card).toContain(card);
+    expect(read("../client/src/components/usip/settings/ApolloSourceCard.tsx")).toContain('aria-label="Apollo API key"');
+    // And the rule that stops the next invented detail.
+    expect(PRODUCT_KNOWLEDGE).toContain("never place a control, or describe a layout (table, row, top of the page), that this manual does not.");
     const security = legacy.slice(legacy.indexOf("function SecurityTab("), legacy.indexOf("function NotificationsTab("));
     expect(security).toContain("IP allowlist");
     expect(security).toContain("Session timeout");
