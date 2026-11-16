@@ -5473,6 +5473,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `workspace_key_shares` (`id` int AUTO_INCREMENT PRIMARY KEY, `ownerWorkspaceId` int NOT NULL, `targetWorkspaceId` int NOT NULL, `keyKind` varchar(32) NOT NULL, `createdByUserId` int NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `uq_wks_target_kind` (`targetWorkspaceId`, `keyKind`), KEY `ix_wks_owner` (`ownerWorkspaceId`))",
     ],
   },
+
+  // ── 0441: AI model tiers (owner ask 2026-11-16) ──────────────────────────
+  // "Can she use a low cost model … pick based on the level of complexity?"
+  // A workspace had one model for every AI call. Now three tiers (fast,
+  // standard, deep), each a provider and model its admin picks, and a tier per
+  // kind of work (shared/aiTiers.ts). Both columns NULL = nothing set, and
+  // every call uses the default provider and model exactly as before.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0441_ai_model_tiers.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiTierModels` json NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiTaskTiers` json NULL",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

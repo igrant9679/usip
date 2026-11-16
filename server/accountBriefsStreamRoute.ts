@@ -146,6 +146,7 @@ Keep each section to 2-3 sentences. Be specific, actionable, and sales-focused.`
       let accumulated = "";
       try {
         for await (const delta of streamLLM({
+          task: "documents",
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: prompt },

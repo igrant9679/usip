@@ -246,6 +246,7 @@ async function aggregateBehaviorMany(workspaceId: number, leadIds: number[]): Pr
 async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput | null> {
   try {
     const out = await invokeLLM({
+      task: "scoring",
       // Named: lead scoring also runs from background recalculations.
       workspaceId: lead.workspaceId,
       // Research phase 4: "fit" means fit to the lead's researched market.

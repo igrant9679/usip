@@ -331,6 +331,7 @@ Based on this data, produce a comprehensive ICP with:
   // workspaceId: the cron runs outside any request, so without it this call
   // used the platform key and was counted nowhere (A39).
   const result = await invokeLLM({
+    task: "targeting",
     workspaceId,
     feature: "are.icpInference",
     messages: [

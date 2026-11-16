@@ -8,6 +8,8 @@ import { ENV } from "./env";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
+import { applyTier } from "../services/aiTiers";
+import type { AiTask } from "@shared/aiTiers";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -126,6 +128,20 @@ export type InvokeParams = {
    * the tRPC path of the request, else "background"; engines name themselves.
    */
   feature?: string;
+  /**
+   * The KIND of work this call is (shared/aiTiers.ts): it picks the tier, and
+   * so the model, the workspace has set for that kind of work. Every call
+   * names one (server/aiTiers.test.ts). A workspace with no tiers set ignores
+   * it and uses its default model, as every call did before 2026-11-16.
+   * A call that names its own `provider` or `model` is left alone.
+   */
+  task?: AiTask;
+  /**
+   * Run this call that many tiers above its task's tier, when the workspace
+   * has a model set there. For a turn that turned out harder than its kind
+   * of work usually is: Elsie, once she has looked things up.
+   */
+  stepUp?: number;
 };
 
 type ResolvedCreds = {
@@ -1144,6 +1160,32 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);
+  // The workspace's tier for this kind of work decides the model (unless the
+  // caller named one, or no tier is set: then it is the default, as before).
+  const routed = await applyTier(params, workspaceId, creds);
+  const first = await callProvider(routed.params, creds, workspaceId);
+  // A reply that had to be JSON and is not is a failed call: its caller will
+  // throw or fall back. When the workspace has a stronger model set above
+  // this tier, try once more there instead. Both calls were made, so both are
+  // metered (inside callProvider).
+  if (routed.canStepUp && failedItsFormat(routed.params, first)) {
+    const higher = await applyTier(params, workspaceId, creds, (params.stepUp ?? 0) + 1);
+    return callProvider(higher.params, creds, workspaceId);
+  }
+  return first;
+}
+
+/** True for a call that asked for JSON and got a reply with none in it. */
+export function failedItsFormat(params: InvokeParams, result: InvokeResult): boolean {
+  const format = params.responseFormat ?? params.response_format;
+  const wantsJson = !!(params.outputSchema ?? params.output_schema) || (!!format && format.type !== "text");
+  if (!wantsJson) return false;
+  const msg = result.choices[0]?.message;
+  if (msg?.tool_calls?.length) return false;
+  return jsonFromText(contentText(msg?.content as MessageContent | MessageContent[] | null | undefined)) === null;
+}
+
+async function callProvider(params: InvokeParams, creds: ResolvedCreds, workspaceId: number | undefined): Promise<InvokeResult> {
   const provider = resolveProvider(params.provider, creds);
   await acquireLlmSlot();
   let result: InvokeResult;

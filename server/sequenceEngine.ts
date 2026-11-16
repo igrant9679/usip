@@ -185,6 +185,7 @@ async function generateDynamicEmail(
 
   try {
     const out = await invokeLLM({
+      task: "outreach",
       sendersBrand: true,
       workspaceId,
       research,

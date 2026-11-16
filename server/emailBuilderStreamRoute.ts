@@ -82,6 +82,7 @@ ${HUMAN_COPY_RULES}`;
 
       try {
         for await (const delta of streamLLM({
+          task: "outreach",
           sendersBrand: true,
           messages: [
             { role: "system", content: systemPrompt },

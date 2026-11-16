@@ -104,6 +104,7 @@ export function registerMailboxStreamRoutes(app: Express) {
           .join("\n\n---\n\n");
 
         return {
+          task: "outreach",
           messages: [
             {
               role: "system",
@@ -146,6 +147,7 @@ ${HUMAN_COPY_RULES}`,
         const threadSummary = `From: ${original.fromName || original.fromEmail} <${original.fromEmail}>\nSubject: ${original.subject}\n${original.bodyText.slice(0, 1000)}`;
 
         return {
+          task: "outreach",
           messages: [
             {
               role: "system",

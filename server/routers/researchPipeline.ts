@@ -122,6 +122,7 @@ type Recipient = Awaited<ReturnType<typeof getRecipientContext>>;
 async function llmJson<T>(workspaceId: number, stage: string, messages: any[], schema: any, opts?: { sendersBrand?: boolean }, research?: ResearchUse): Promise<T> {
   try {
     const out = await invokeLLM({
+      task: opts?.sendersBrand ? "outreach" : "enrichment",
       workspaceId,
       messages,
       sendersBrand: opts?.sendersBrand,

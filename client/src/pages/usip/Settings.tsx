@@ -12,6 +12,7 @@ import { Link, Redirect, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { AI_KEY_KINDS, KeySharingCard } from "@/components/usip/settings/KeySharingCard";
+import { ModelTiersCard } from "@/components/usip/settings/ModelTiersCard";
 import { usePermissions } from "@/hooks/usePermissions";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
@@ -1493,6 +1494,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
           })}
         </div>
       )}
+      <div className="mt-4"><ModelTiersCard isAdmin={isAdmin} /></div>
       <div className="mt-4"><KeySharingCard kinds={AI_KEY_KINDS} /></div>
     </Section>
   );

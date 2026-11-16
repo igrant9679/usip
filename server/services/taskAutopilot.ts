@@ -118,6 +118,7 @@ Return: {
 
     try {
       const res = await invokeLLM({
+        task: "suggestions",
         messages: [{ role: "user", content: prompt }],
         // outputSchema (not response_format) — the invokeLLM layer only forces
         // valid JSON for Anthropic via the json_schema path; response_format

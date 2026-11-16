@@ -370,6 +370,7 @@ ${articleContext}`;
 
       // Call LLM
       const result = await invokeLLM({
+        task: "help",
         messages,
         maxTokens: 600,
         outputSchema: {
@@ -471,6 +472,7 @@ ${articleContext}`;
     )
     .mutation(async ({ ctx, input }) => {
       const result = await invokeLLM({
+        task: "help",
         messages: [
           {
             role: "system",

@@ -147,6 +147,7 @@ interface ExtractVerdict { usable: boolean; officialName: string; acronym: strin
 
 async function extractOfficialName(domain: string, signals: PageSignals, workspaceId: number): Promise<ExtractVerdict> {
   const res = await invokeLLM({
+    task: "scoring",
     workspaceId,
     feature: "nameVerification",
     messages: [
