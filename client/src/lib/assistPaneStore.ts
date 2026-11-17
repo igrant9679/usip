@@ -30,9 +30,9 @@ function cache(open: boolean) {
   }
 }
 
-type State = { open: boolean; adopted: boolean; dismissed: ReadonlySet<string> };
+type State = { open: boolean; adopted: boolean; dismissed: ReadonlySet<string>; tourSlot: HTMLElement | null };
 
-let state: State = { open: false, adopted: false, dismissed: new Set() };
+let state: State = { open: false, adopted: false, dismissed: new Set(), tourSlot: null };
 let booted = false;
 const listeners = new Set<() => void>();
 
@@ -62,6 +62,17 @@ export const assistPaneStore = {
     const dismissed = new Set(state.dismissed);
     dismissed.add(id);
     state = { ...state, dismissed };
+    emit();
+  },
+  /**
+   * The place inside the open pane that takes Elsie's tour offer: the pane's
+   * ref callback, so the element while the pane is on screen and null once it
+   * is not. Elsie.tsx puts the offer there instead of floating it, because the
+   * floating card and the pane's footer are the same corner of the window.
+   */
+  setTourSlot: (el: HTMLElement | null) => {
+    if (state.tourSlot === el) return;
+    state = { ...state, tourSlot: el };
     emit();
   },
 };
