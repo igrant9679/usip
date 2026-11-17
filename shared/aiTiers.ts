@@ -33,8 +33,15 @@ export const AI_TIER_HINT: Record<AiTier, string> = {
   deep: "Your strongest model: what a prospect reads, and who a campaign targets.",
 };
 
-export const AI_PROVIDER_IDS = ["anthropic", "openai", "gemini"] as const;
+export const AI_PROVIDER_IDS = ["anthropic", "openai", "gemini", "deepseek"] as const;
 export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
+
+export const AI_PROVIDER_LABEL: Record<AiProviderId, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+};
 
 export type AiTaskInfo = { label: string; detail: string; defaultTier: AiTier };
 

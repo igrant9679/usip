@@ -11,6 +11,8 @@ export const ENV = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
+  // DeepSeek is never reached by the fallback order above unless it is the only key there is.
+  deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
   aiDefaultProvider: process.env.AI_DEFAULT_PROVIDER ?? "",
 
   // Symmetric key used to encrypt secrets at rest (workspace AI keys, etc.).

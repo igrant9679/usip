@@ -33,6 +33,7 @@ export type SpendVendor =
   | "anthropic"
   | "openai"
   | "gemini"
+  | "deepseek"
   | "reoon"
   | "quickenrich"
   | "apollo"
@@ -112,7 +113,7 @@ export async function recordSpend(e: SpendEvent): Promise<void> {
   }
 }
 
-export type AiVendor = "anthropic" | "openai" | "gemini";
+export type AiVendor = "anthropic" | "openai" | "gemini" | "deepseek";
 
 /** One model call's usage, in the units the provider bills. */
 export type AiUsage = {

@@ -177,6 +177,7 @@ export const VENDOR_LABEL: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Gemini",
+  deepseek: "DeepSeek",
   reoon: "Reoon",
   quickenrich: "QuickEnrich",
   apollo: "Apollo",

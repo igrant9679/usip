@@ -4,12 +4,13 @@ import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { linkedKey, linkedKeys } from "../services/keyShares";
+import { deepseekSettings } from "../services/deepseekSettings";
 import { ENV } from "./env";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
 import { applyTier } from "../services/aiTiers";
-import type { AiTask } from "@shared/aiTiers";
+import type { AiProviderId, AiTask } from "@shared/aiTiers";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -82,7 +83,8 @@ export type ToolChoice =
   | ToolChoiceByName
   | ToolChoiceExplicit;
 
-export type ProviderName = "anthropic" | "openai" | "gemini";
+/** The providers a call can run on: one list, shared with the settings screen (shared/aiTiers.ts). */
+export type ProviderName = AiProviderId;
 
 export type InvokeParams = {
   messages: Message[];
@@ -148,9 +150,11 @@ type ResolvedCreds = {
   anthropicApiKey: string;
   openaiApiKey: string;
   geminiApiKey: string;
+  deepseekApiKey: string;
   anthropicModel: string;
   openaiModel: string;
   geminiModel: string;
+  deepseekModel: string;
   defaultProvider: string;
   /** Whose account each provider's key bills: the workspace's own, or the deployment's env key. */
   sources: Record<ProviderName, KeySource>;
@@ -209,6 +213,8 @@ const DEFAULT_MODELS: Record<ProviderName, string> = {
   anthropic: "claude-haiku-4-5-20251001",
   openai: "gpt-4o-mini",
   gemini: "gemini-2.5-flash",
+  // DeepSeek's low-cost model id (their model list, read 2026-11-16).
+  deepseek: "deepseek-flash",
 };
 
 // ---------------------------------------------------------------------------
@@ -375,11 +381,13 @@ const ENV_CREDS: ResolvedCreds = {
   anthropicApiKey: ENV.anthropicApiKey,
   openaiApiKey: ENV.openaiApiKey,
   geminiApiKey: ENV.geminiApiKey,
+  deepseekApiKey: ENV.deepseekApiKey,
   anthropicModel: DEFAULT_MODELS.anthropic,
   openaiModel: DEFAULT_MODELS.openai,
   geminiModel: DEFAULT_MODELS.gemini,
+  deepseekModel: DEFAULT_MODELS.deepseek,
   defaultProvider: ENV.aiDefaultProvider,
-  sources: { anthropic: "shared", openai: "shared", gemini: "shared" },
+  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared" },
 };
 
 async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
@@ -404,14 +412,18 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
     const row = rows[0];
     if (!row) return ENV_CREDS;
 
+    // DeepSeek's key and model are read apart from the select above, and a
+    // failed read there is "no DeepSeek key" (services/deepseekSettings).
+    const deepseek = await deepseekSettings(workspaceId);
     const own = {
       anthropic: tryDecryptSecret(row.anthropicApiKeyEnc),
       openai: tryDecryptSecret(row.openaiApiKeyEnc),
       gemini: tryDecryptSecret(row.geminiApiKeyEnc),
+      deepseek: tryDecryptSecret(deepseek.keyEnc),
     };
     // A key another workspace lends this one counts as its own for every
     // purpose here (services/keyShares): own first, then lent, then the env.
-    const missing = (["anthropic", "openai", "gemini"] as const).filter((p) => !own[p]);
+    const missing = (["anthropic", "openai", "gemini", "deepseek"] as const).filter((p) => !own[p]);
     if (missing.length > 0) {
       const lent = await linkedKeys(workspaceId, missing);
       for (const p of missing) if (lent[p]) own[p] = lent[p]!.key;
@@ -420,14 +432,17 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       anthropicApiKey: own.anthropic || ENV.anthropicApiKey,
       openaiApiKey: own.openai || ENV.openaiApiKey,
       geminiApiKey: own.gemini || ENV.geminiApiKey,
+      deepseekApiKey: own.deepseek || ENV.deepseekApiKey,
       anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
       openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
       geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
+      deepseekModel: deepseek.model || DEFAULT_MODELS.deepseek,
       defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
       sources: {
         anthropic: own.anthropic ? "workspace" : "shared",
         openai: own.openai ? "workspace" : "shared",
         gemini: own.gemini ? "workspace" : "shared",
+        deepseek: own.deepseek ? "workspace" : "shared",
       },
     };
   } catch (err) {
@@ -975,6 +990,189 @@ async function invokeViaGemini(
 }
 
 // ---------------------------------------------------------------------------
+// DeepSeek (OpenAI-format chat completions at api.deepseek.com)
+// ---------------------------------------------------------------------------
+
+export const DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions";
+
+/**
+ * Sent on every DeepSeek request, here and in llmStream.
+ *
+ * DeepSeek THINKS unless a request turns it off (api-docs.deepseek.com, read
+ * 2026-11-16), and with thinking on: a forced tool choice is a 400,
+ * temperature is ignored, and every later request in a conversation that has
+ * tools must carry the earlier reasoning back or it is a 400 too. Nothing
+ * here does that, and callers size max_tokens for the answer alone. So it is
+ * off, and a DeepSeek model answers the way the other three providers' do.
+ */
+export const DEEPSEEK_THINKING_OFF = { type: "disabled" } as const;
+
+type DeepSeekUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+};
+
+/**
+ * DeepSeek's usage in this module's terms. Its prompt_tokens COUNTS the
+ * cached part (hit + miss) and it bills the two at different prices, so the
+ * hits go where Anthropic's cache reads go and only the misses are input.
+ */
+export function deepseekUsage(u: DeepSeekUsage | null | undefined): { input: number; output: number; cacheRead: number } {
+  const hit = Math.max(0, Number(u?.prompt_cache_hit_tokens ?? 0));
+  const prompt = Math.max(0, Number(u?.prompt_tokens ?? 0));
+  const miss = u?.prompt_cache_miss_tokens != null ? Math.max(0, Number(u.prompt_cache_miss_tokens)) : Math.max(0, prompt - hit);
+  return { input: miss, output: Math.max(0, Number(u?.completion_tokens ?? 0)), cacheRead: hit };
+}
+
+/** A message as DeepSeek takes it: text only, as the Gemini path sends it. */
+function deepseekMessage(message: Message): Record<string, unknown> {
+  if (message.role === "tool" || message.role === "function") return normalizeMessageOpenAI(message);
+  const text = ensureArray(message.content)
+    .map((p) => (typeof p === "string" ? p : p.type === "text" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n");
+  return { role: message.role, ...(message.name ? { name: message.name } : {}), content: text };
+}
+
+/**
+ * The request body. What differs from OpenAI's:
+ *   - `thinking` is turned off (above).
+ *   - response_format has "json_object" and NO "json_schema". A schema call
+ *     goes as json_object with the schema written into the system prompt.
+ *   - JSON output needs the word "json" somewhere in the prompt; a call that
+ *     asks for a JSON object and never says the word has it said for it.
+ * As on Anthropic, a call that brings its own tools is not also put in JSON
+ * mode: its tool call is its structure.
+ */
+export function deepseekPayload(params: InvokeParams, model: string): { payload: Record<string, unknown>; wantsJson: boolean } {
+  const messages = params.messages.map(deepseekMessage);
+  const tools = params.tools && params.tools.length > 0 ? params.tools : undefined;
+  const format = normalizeResponseFormat(params);
+  const wantsJson = !tools && (format?.type === "json_schema" || format?.type === "json_object");
+
+  if (wantsJson) {
+    const instruction =
+      format?.type === "json_schema"
+        ? `Reply with one JSON object and nothing else. It must match this JSON schema:\n${JSON.stringify(format.json_schema.schema)}`
+        : messages.some((m) => /json/i.test(String(m.content ?? "")))
+          ? ""
+          : "Reply with one JSON object and nothing else.";
+    if (instruction) {
+      const system = messages.find((m) => m.role === "system");
+      if (system) system.content = `${String(system.content ?? "")}\n\n${instruction}`;
+      else messages.unshift({ role: "system", content: instruction });
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages,
+    max_tokens: params.maxTokens ?? params.max_tokens ?? (wantsJson ? 8192 : 4096),
+    thinking: DEEPSEEK_THINKING_OFF,
+  };
+  if (typeof params.temperature === "number") payload.temperature = params.temperature;
+  if (tools) {
+    payload.tools = tools;
+    const choice = normalizeToolChoiceOpenAI(params.toolChoice || params.tool_choice, tools);
+    if (choice) payload.tool_choice = choice;
+  }
+  if (wantsJson) payload.response_format = { type: "json_object" };
+  return { payload, wantsJson };
+}
+
+type DeepSeekResponse = {
+  id?: string;
+  created?: number;
+  model?: string;
+  choices?: Array<{
+    index?: number;
+    message?: { role?: string; content?: string | null; tool_calls?: ToolCall[] };
+    finish_reason?: string | null;
+  }>;
+  usage?: DeepSeekUsage;
+};
+
+async function invokeViaDeepSeek(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.deepseekApiKey) {
+    throw new Error(
+      "DeepSeek API key is not configured (workspace or DEEPSEEK_API_KEY env)"
+    );
+  }
+  const model = params.model ?? creds.deepseekModel;
+  const { payload, wantsJson } = deepseekPayload(params, model);
+
+  // Overload and rate-limit answers clear in seconds; the same three tries,
+  // 0s, 1s, 3s, the Gemini path makes. The error carries its status so a
+  // background job can tell a transient failure from a hard one.
+  const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+  const send = async (): Promise<DeepSeekResponse> => {
+    let status = 0;
+    let statusText = "";
+    let errorText = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(DEEPSEEK_CHAT_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${creds.deepseekApiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) return (await response.json()) as DeepSeekResponse;
+      status = response.status;
+      statusText = response.statusText;
+      errorText = await response.text();
+      if (!RETRYABLE.has(status) || attempt === 2) break;
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 1000 : 3000));
+    }
+    throw Object.assign(new Error(`DeepSeek invoke failed: ${status} ${statusText} – ${errorText}`), { status });
+  };
+
+  const blank = (d: DeepSeekResponse) => {
+    const m = d.choices?.[0]?.message;
+    return !m?.tool_calls?.length && !String(m?.content ?? "").trim();
+  };
+
+  let data = await send();
+  let used = deepseekUsage(data.usage);
+  // A JSON-mode reply the API could not read as JSON comes back as blank
+  // content with finish_reason "stop". DeepSeek's documented remedy is to ask
+  // again; once, and both requests are billed, so both are counted.
+  if (wantsJson && blank(data)) {
+    data = await send();
+    const again = deepseekUsage(data.usage);
+    used = { input: used.input + again.input, output: used.output + again.output, cacheRead: used.cacheRead + again.cacheRead };
+  }
+
+  return {
+    id: data.id ?? `deepseek-${Date.now()}`,
+    created: data.created ?? Math.floor(Date.now() / 1000),
+    model: data.model ?? model,
+    choices: (data.choices ?? []).map((c, i) => ({
+      index: c.index ?? i,
+      message: {
+        role: "assistant" as const,
+        content: c.message?.content ?? "",
+        ...(c.message?.tool_calls?.length ? { tool_calls: c.message.tool_calls } : {}),
+      },
+      finish_reason: c.finish_reason ?? null,
+    })),
+    usage: {
+      prompt_tokens: used.input,
+      completion_tokens: used.output,
+      total_tokens: used.input + used.output,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: used.cacheRead,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Provider selection
 // ---------------------------------------------------------------------------
 
@@ -987,14 +1185,17 @@ function resolveProvider(
   if (preferred === "openai" && creds.openaiApiKey) return "openai";
   if (preferred === "gemini" && creds.geminiApiKey) return "gemini";
   if (preferred === "anthropic" && creds.anthropicApiKey) return "anthropic";
+  if (preferred === "deepseek" && creds.deepseekApiKey) return "deepseek";
 
-  // Fallback order: Anthropic → OpenAI → Gemini.
+  // Fallback order: Anthropic → OpenAI → Gemini → DeepSeek. DeepSeek is last:
+  // a workspace reaches it unasked only when it is the one key there is.
   if (creds.anthropicApiKey) return "anthropic";
   if (creds.openaiApiKey) return "openai";
   if (creds.geminiApiKey) return "gemini";
+  if (creds.deepseekApiKey) return "deepseek";
 
   throw new Error(
-    "No AI provider configured. Set a workspace key in Settings → Integrations, or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY in env."
+    "No AI provider configured. Set a workspace key in Settings → Integrations, or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY in env."
   );
 }
 
@@ -1199,6 +1400,9 @@ async function callProvider(params: InvokeParams, creds: ResolvedCreds, workspac
         break;
       case "gemini":
         result = await invokeViaGemini(params, creds);
+        break;
+      case "deepseek":
+        result = await invokeViaDeepSeek(params, creds);
         break;
       default:
         throw new Error(`Unsupported provider: ${provider as string}`);

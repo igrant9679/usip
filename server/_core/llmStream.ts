@@ -19,8 +19,9 @@ import { workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { linkedKeys } from "../services/keyShares";
+import { deepseekSettings } from "../services/deepseekSettings";
 import { ENV } from "./env";
-import { checkLlmBurst, checkMonthlyCap, type InvokeParams, type ProviderName, type TextContent } from "./llm";
+import { DEEPSEEK_CHAT_URL, DEEPSEEK_THINKING_OFF, checkLlmBurst, checkMonthlyCap, deepseekUsage, type InvokeParams, type ProviderName, type TextContent } from "./llm";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
@@ -30,15 +31,18 @@ const DEFAULT_MODELS = {
   anthropic: "claude-haiku-4-5-20251001",
   openai: "gpt-4o-mini",
   gemini: "gemini-2.5-flash",
+  deepseek: "deepseek-flash",
 } as const;
 
 type ResolvedCreds = {
   anthropicApiKey: string;
   openaiApiKey: string;
   geminiApiKey: string;
+  deepseekApiKey: string;
   anthropicModel: string;
   openaiModel: string;
   geminiModel: string;
+  deepseekModel: string;
   defaultProvider: string;
   sources: Record<ProviderName, KeySource>;
 };
@@ -47,11 +51,13 @@ const ENV_CREDS: ResolvedCreds = {
   anthropicApiKey: ENV.anthropicApiKey,
   openaiApiKey: ENV.openaiApiKey,
   geminiApiKey: ENV.geminiApiKey,
+  deepseekApiKey: ENV.deepseekApiKey,
   anthropicModel: DEFAULT_MODELS.anthropic,
   openaiModel: DEFAULT_MODELS.openai,
   geminiModel: DEFAULT_MODELS.gemini,
+  deepseekModel: DEFAULT_MODELS.deepseek,
   defaultProvider: ENV.aiDefaultProvider,
-  sources: { anthropic: "shared", openai: "shared", gemini: "shared" },
+  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared" },
 };
 
 async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
@@ -75,14 +81,17 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
 
     const row = rows[0];
     if (!row) return ENV_CREDS;
+    // Read apart from the select above; a failed read is "no DeepSeek key" (services/deepseekSettings).
+    const deepseek = await deepseekSettings(workspaceId);
     const own = {
       anthropic: tryDecryptSecret(row.anthropicApiKeyEnc),
       openai: tryDecryptSecret(row.openaiApiKeyEnc),
       gemini: tryDecryptSecret(row.geminiApiKeyEnc),
+      deepseek: tryDecryptSecret(deepseek.keyEnc),
     };
     // A key another workspace lends this one counts as its own for every
     // purpose here (services/keyShares): own first, then lent, then the env.
-    const missing = (["anthropic", "openai", "gemini"] as const).filter((p) => !own[p]);
+    const missing = (["anthropic", "openai", "gemini", "deepseek"] as const).filter((p) => !own[p]);
     if (missing.length > 0) {
       const lent = await linkedKeys(workspaceId, missing);
       for (const p of missing) if (lent[p]) own[p] = lent[p]!.key;
@@ -91,14 +100,17 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       anthropicApiKey: own.anthropic || ENV.anthropicApiKey,
       openaiApiKey: own.openai || ENV.openaiApiKey,
       geminiApiKey: own.gemini || ENV.geminiApiKey,
+      deepseekApiKey: own.deepseek || ENV.deepseekApiKey,
       anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
       openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
       geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
+      deepseekModel: deepseek.model || DEFAULT_MODELS.deepseek,
       defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
       sources: {
         anthropic: own.anthropic ? "workspace" : "shared",
         openai: own.openai ? "workspace" : "shared",
         gemini: own.gemini ? "workspace" : "shared",
+        deepseek: own.deepseek ? "workspace" : "shared",
       },
     };
   } catch (err) {
@@ -116,9 +128,12 @@ function resolveProvider(
   if (preferred === "openai" && creds.openaiApiKey) return "openai";
   if (preferred === "gemini" && creds.geminiApiKey) return "gemini";
   if (preferred === "anthropic" && creds.anthropicApiKey) return "anthropic";
+  if (preferred === "deepseek" && creds.deepseekApiKey) return "deepseek";
   if (creds.anthropicApiKey) return "anthropic";
   if (creds.openaiApiKey) return "openai";
   if (creds.geminiApiKey) return "gemini";
+  // Last, as in invokeLLM: reached unasked only when it is the one key there is.
+  if (creds.deepseekApiKey) return "deepseek";
   throw new Error("No AI provider configured");
 }
 
@@ -320,7 +335,67 @@ async function* streamGemini(
   });
 }
 
-// ─── SSE parser shared by OpenAI + Gemini ───────────────────────────────────
+// ─── DeepSeek ───────────────────────────────────────────────────────────────
+
+/** OpenAI's stream format at DeepSeek's address, with thinking off (see DEEPSEEK_THINKING_OFF). */
+async function* streamDeepSeek(
+  params: InvokeParams,
+  creds: ResolvedCreds,
+  signal: AbortSignal,
+  usage: StreamUsage,
+): AsyncGenerator<string> {
+  if (!creds.deepseekApiKey) throw new Error("DeepSeek API key not configured");
+  const { system, turns } = flatten(params);
+  const model = params.model ?? creds.deepseekModel;
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages: [...(system ? [{ role: "system", content: system }] : []), ...turns],
+    max_tokens: params.maxTokens ?? params.max_tokens ?? 4096,
+    thinking: DEEPSEEK_THINKING_OFF,
+    stream: true,
+    // The last chunk then carries what the stream used.
+    stream_options: { include_usage: true },
+  };
+  if (typeof params.temperature === "number") payload.temperature = params.temperature;
+
+  const res = await fetch(DEEPSEEK_CHAT_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${creds.deepseekApiKey}`,
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`DeepSeek stream failed: ${res.status} ${res.statusText} – ${text}`);
+  }
+
+  usage.model = model;
+  yield* parseSSE(res.body, line => {
+    if (line === "[DONE]") return null;
+    try {
+      const j = JSON.parse(line);
+      if (typeof j?.model === "string") usage.model = j.model;
+      if (j?.usage) {
+        // Cache hits are billed apart from the rest of the prompt (deepseekUsage).
+        const u = deepseekUsage(j.usage);
+        usage.input = u.input;
+        usage.output = u.output;
+        usage.cacheRead = u.cacheRead;
+      }
+      const delta = j?.choices?.[0]?.delta?.content;
+      return typeof delta === "string" ? delta : null;
+    } catch {
+      return null;
+    }
+  });
+}
+
+// ─── SSE parser shared by OpenAI, Gemini and DeepSeek ───────────────────────
 
 async function* parseSSE(
   body: ReadableStream<Uint8Array>,
@@ -392,6 +467,9 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
         return;
       case "gemini":
         yield* streamGemini(params, creds, signal, usage);
+        return;
+      case "deepseek":
+        yield* streamDeepSeek(params, creds, signal, usage);
         return;
     }
   } finally {

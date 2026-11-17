@@ -1363,6 +1363,13 @@ const AI_PROVIDERS = [
     docsUrl: "https://aistudio.google.com/app/apikey",
     modelPlaceholder: "gemini-2.5-flash",
   },
+  {
+    id: "deepseek" as const,
+    name: "DeepSeek",
+    hint: "Lower-cost models, a fit for the Fast tier. Velocity calls them with DeepSeek's thinking mode off.",
+    docsUrl: "https://platform.deepseek.com/api_keys",
+    modelPlaceholder: "deepseek-flash",
+  },
 ];
 
 function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
@@ -1388,7 +1395,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
   const data = credsQ.data;
 
   return (
-    <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, or Gemini. Keys are encrypted at rest. Falls back to server-level keys if none set.">
+    <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, Gemini or DeepSeek. Keys are encrypted at rest. Falls back to server-level keys if none set.">
       {credsQ.isLoading ? (
         <div className="p-4 md:p-5 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : (

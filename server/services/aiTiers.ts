@@ -62,7 +62,8 @@ export function __resetTierConfigForTests(): void {
   cache.clear();
 }
 
-type KeyHolder = { anthropicApiKey: string; openaiApiKey: string; geminiApiKey: string };
+/** The resolved key per provider (own, lent, or the deployment's), as both model funnels hold them. */
+type KeyHolder = Record<`${AiProviderId}ApiKey`, string>;
 type Routable = { provider?: AiProviderId; model?: string; task?: AiTask; stepUp?: number };
 
 export type Routed<P> = {
@@ -87,8 +88,7 @@ export async function applyTier<P extends Routable>(
 ): Promise<Routed<P>> {
   if (params.provider || params.model || !workspaceId) return { params, pick: null, canStepUp: false };
   const cfg = await loadTierConfig(workspaceId);
-  const hasKey = (p: AiProviderId) =>
-    p === "anthropic" ? !!creds.anthropicApiKey : p === "openai" ? !!creds.openaiApiKey : !!creds.geminiApiKey;
+  const hasKey = (p: AiProviderId) => !!creds[`${p}ApiKey`];
   const pick = pickTierModel({ task: params.task, stepUp, tiers: cfg.tiers, taskTiers: cfg.taskTiers, hasKey });
   return {
     params: pick.use ? { ...params, provider: pick.use.provider, model: pick.use.model } : params,
