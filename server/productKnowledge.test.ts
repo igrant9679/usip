@@ -220,11 +220,11 @@ describe("assistant product knowledge digest", () => {
     expect(start).toBeGreaterThan(-1);
     const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
     expect(AI_TIERS.map((t) => AI_TIER_LABEL[t])).toEqual(["Fast", "Standard", "Deep"]);
-    expect(para).toContain("three tiers, Fast, Standard and Deep.");
+    expect(para).toContain("Model tiers (on integrations, below the AI keys): Fast, Standard and Deep. For each,");
     // The providers she names are the ones the picker lists (DeepSeek joined them 2026-11-16).
     const { AI_PROVIDER_IDS } = await import("../shared/aiTiers");
     expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek"]);
-    expect(para).toContain("an admin picks a provider that has a key (Anthropic, OpenAI, Gemini or DeepSeek) and types a model name, then Save;");
+    expect(para).toContain("an admin picks a provider that has a key (Anthropic, OpenAI, Gemini or DeepSeek) and types a model name, then that tier's Save;");
     // Each default the paragraph states is the catalog's.
     const said: Record<string, string[]> = {
       deep: ["outreach", "targeting"],
@@ -238,10 +238,30 @@ describe("assistant product knowledge digest", () => {
     // changed, and asked on the live site Elsie answered "You can't change
     // which kind of work runs on which tier". It can: that is what the row's
     // picker is for (owner 2026-11-16: "editable per workspace").
-    expect(para).toContain("a row per kind of AI work with the tier it runs on, and an admin can change it there:");
+    expect(para).toContain("a row per kind of AI work with the tier it runs on, and an admin can change it there (saves at once):");
     const tierCard = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
     expect(tierCard).toContain('onValueChange={(v) => setTaskTier.mutate({ task, tier: v === info.defaultTier ? "" : (v as AiTier) })}');
     expect(tierCard).toContain("aria-label={`Tier for ${info.label}`}");
+    // 2026-11-17, later: the digest said "then Save" for a tier and nothing
+    // about saving for a row, and on the live site Elsie added "there is no
+    // separate save button for this card". Half right: a row's picker saves as
+    // it is picked, but each of the three tiers has a Save button of its own.
+    // The digest says both, and the card is held to both here.
+    const rowsAt = tierCard.indexOf("{AI_TASK_IDS.map((task) => {");
+    const tiersAt = tierCard.indexOf("{AI_TIERS.map((tier) => {");
+    expect(tiersAt).toBeGreaterThan(-1);
+    expect(rowsAt).toBeGreaterThan(tiersAt);
+    const tierRows = tierCard.slice(tiersAt, rowsAt);
+    const taskRows = tierCard.slice(rowsAt);
+    // One Save in the block drawn once per tier, and it is what writes the tier's model.
+    expect((tierRows.match(/>Save<\/Button>/g) ?? []).length).toBe(1);
+    expect(tierRows).toMatch(/onClick=\{\(\) => setTier\.mutate\(\{ tier, provider: draft\.provider, model: draft\.model\.trim\(\) \}[^\n]*\n\s*>Save<\/Button>/);
+    // Typing or picking in a tier only changes the draft: nothing is written before Save.
+    expect(tierRows).toContain("onValueChange={(v) => setDraft({ provider: v as AiProviderId })}");
+    expect(tierRows).toContain("onChange={(e) => setDraft({ model: e.target.value })}");
+    // The rows have no Save, and the write is in the picker itself.
+    expect(taskRows).not.toMatch(/>\s*Save\s*</);
+    expect(taskRows).toContain("onValueChange={(v) => setTaskTier.mutate(");
     expect(para).toContain("nothing is pre-filled and Velocity names no model");
     // The model box really is empty and free text, and the card sits below the keys.
     const card = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
