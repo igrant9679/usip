@@ -35,6 +35,7 @@
  *   • the unprompted card gained "Ask Elsie", so an offer is never a dead end
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -42,6 +43,7 @@ import { useTourEngine, type Tour } from "./TourEngine";
 import { Compass, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { assistantStore, useAssistantStore } from "@/lib/assistantStore";
+import { useAssistPane } from "@/lib/assistPaneStore";
 
 /** Her name, in one place, so renaming her is a one-line change. */
 export const ELSIE_NAME = "Elsie";
@@ -258,6 +260,9 @@ export function ElsieController() {
   const { startTour, activeTour } = useTourEngine();
   // Her drawer is the same corner of the screen: no card over an open chat.
   const { open: drawerOpen } = useAssistantStore();
+  // The Assist pane is that corner too. While it is on screen it gives the
+  // offer a place of its own; null whenever the pane is closed or not mounted.
+  const { tourSlot } = useAssistPane();
 
   const pageKey = useMemo(() => pageKeyForRoute(location), [location]);
   const [dismissed, setDismissed] = useState(false);
@@ -306,6 +311,36 @@ export function ElsieController() {
   }, [pageKey]);
 
   if (!canAsk || !suggestion || drawerOpen) return null;
+
+  // With the Assist pane open the offer goes inside it, above its footer.
+  // Floating, the card lay over that footer (the pane's Ask button and its
+  // AI-wording line) at every window width: beside the page on a wide screen
+  // and over it on a narrow one, the pane is the bottom-right corner. It needs
+  // no Ask button of its own here, the pane's is the next thing down.
+  if (tourSlot) {
+    return createPortal(
+      <div className="rounded-lg border bg-background p-3" data-elsie-tour-offer="pane">
+        <p className="text-[13px] font-semibold">{ELSIE_NAME} can walk you through this</p>
+        <p className="text-[12px] text-muted-foreground mt-0.5">
+          {suggestion.name}
+          {suggestion.estimatedMinutes ? ` · about ${suggestion.estimatedMinutes} min` : ""}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 [&>button]:whitespace-nowrap">
+          <button
+            onClick={begin}
+            disabled={!full.data}
+            className="px-3 py-1.5 text-[12px] font-medium text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-60 rounded-lg"
+          >
+            Show me
+          </button>
+          <button onClick={dismiss} className="px-2 py-1.5 text-[12px] text-muted-foreground hover:text-foreground">
+            Not now
+          </button>
+        </div>
+      </div>,
+      tourSlot,
+    );
+  }
 
   return (
     // 24rem since 2026-11-15: at 20rem the three buttons had about 218px and

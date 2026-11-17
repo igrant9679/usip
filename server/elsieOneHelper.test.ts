@@ -389,6 +389,44 @@ describe("one Elsie", () => {
     expect(card).toContain('className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2.5 [&>button]:whitespace-nowrap"');
   });
 
+  // Owner, 2026-11-17: "fix the tour card covering the Assist pane footer". The
+  // floating card and the pane's footer are both the bottom-right corner of the
+  // window, at every width, so while the pane is on screen the offer is put
+  // inside it. Source pins, as the suite has no browser: re-check with the pane
+  // open, wide and at 375px, before changing them.
+  it("with the Assist pane open, the tour offer sits inside the pane and nothing floats over its footer", () => {
+    const store = read("client/src/lib/assistPaneStore.ts");
+    const pane = read("client/src/components/usip/ElsieAssistPane.tsx");
+    // The pane gives the offer a place directly above its own Ask button, one
+    // that takes no room while it is empty.
+    const footer = pane.slice(pane.indexOf('<div className="border-t border-border p-3 space-y-2 shrink-0">'));
+    expect(footer).toMatch(/<div ref=\{assistPaneStore\.setTourSlot\} data-elsie-tour-slot className="empty:hidden" \/>\s*<button\s+type="button" onClick=\{\(\) => assistantStore\.open\(\)\}/);
+    // That place exists only while the pane is rendered: React hands the ref
+    // the element on mount and null on unmount, and the store keeps either.
+    expect(pane).toContain("if (!open) return null;");
+    expect(store).toContain("setTourSlot: (el: HTMLElement | null) => {");
+    expect(store).toContain("state = { ...state, tourSlot: el };");
+    // The controller reaches for it before the floating card...
+    const controller = elsie.slice(elsie.indexOf("export function ElsieController()"));
+    expect(controller).toContain("const { tourSlot } = useAssistPane();");
+    const start = controller.indexOf("if (tourSlot) {");
+    expect(start).toBeGreaterThan(-1);
+    const floating = controller.indexOf('<div className="fixed', start);
+    expect(floating).toBeGreaterThan(start);
+    const inPane = controller.slice(start, floating);
+    expect(inPane).toContain("return createPortal(");
+    expect(inPane).toMatch(/<\/div>,\s*tourSlot,\s*\);/);
+    // ...and what it puts there is laid out in the pane, not positioned over it.
+    expect(inPane).not.toMatch(/\b(fixed|absolute|sticky)\b/);
+    // The same conditions still come first: offers off, a tour running, her drawer open.
+    expect(controller.slice(0, start)).toContain("if (!canAsk || !suggestion || drawerOpen) return null;");
+    // Both answers are there. Ask is the pane's own button, the next thing down.
+    expect(inPane).toContain("onClick={begin}");
+    expect(inPane).toContain("onClick={dismiss}");
+    // Without the pane the offer still floats, and only one `fixed` box does.
+    expect((controller.match(/<div className="fixed/g) ?? []).length).toBe(1);
+  });
+
   it("the chat can hand back a tour: a read tool, never a confirm card", () => {
     expect(READ_TOOLS).toContain("find_tours");
     expect(MUTATING_TOOLS as string[]).not.toContain("find_tours");

@@ -188,6 +188,9 @@ export function ElsieAssistPane() {
       </div>
 
       <div className="border-t border-border p-3 space-y-2 shrink-0">
+        {/* Elsie's tour offer for this page is put here while the pane is open
+            (Elsie.tsx). Floating in the corner, it covered this footer. */}
+        <div ref={assistPaneStore.setTourSlot} data-elsie-tour-slot className="empty:hidden" />
         <button
           type="button" onClick={() => assistantStore.open()}
           className="w-full px-3 py-1.5 text-[12px] font-medium rounded-lg border hover:bg-muted"
