@@ -92,7 +92,15 @@ describe("assistant product knowledge digest", () => {
     // rest: tiers called Standard and Advanced, one each for email, tasks
     // and the phone agent, and model names. A bare name is an invitation.
     // The paragraph that replaces the guess costs about 600 characters.
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(13900);
+    //
+    // 2026-11-17: 13900 → 15000, owner: "raise Elsie's manual limit". The
+    // digest sat at 13,899 after saying how each part of the Model tiers card
+    // saves (#87), a fix that had to cut words elsewhere to fit. Every raise
+    // so far was sized to one fix; this one leaves room for the next few.
+    // It is still a digest: it goes into every Elsie and Help
+    // answer, so each 1,000 characters is about 250 tokens on every call,
+    // and depth still belongs in the Operator's Manual articles.
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(15000);
   });
 
   it("says where Settings is, and names every section the hub has", () => {
