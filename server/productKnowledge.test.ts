@@ -234,6 +234,14 @@ describe("assistant product knowledge digest", () => {
     for (const [tier, tasks] of Object.entries(said)) for (const t of tasks) expect(AI_TASKS[t as keyof typeof AI_TASKS].defaultTier, t).toBe(tier);
     expect(para).toContain("emails to prospects and campaign targeting default to Deep; your chat, Help answers, website chat, research and proposals to Standard; reading replies, scoring and suggestions to Fast.");
     expect(para).toContain("A tier left blank uses the default provider's model, so setting nothing changes nothing.");
+    // 2026-11-17: the digest listed each row's tier and never said it can be
+    // changed, and asked on the live site Elsie answered "You can't change
+    // which kind of work runs on which tier". It can: that is what the row's
+    // picker is for (owner 2026-11-16: "editable per workspace").
+    expect(para).toContain("a row per kind of AI work with the tier it runs on, and an admin can change it there:");
+    const tierCard = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
+    expect(tierCard).toContain('onValueChange={(v) => setTaskTier.mutate({ task, tier: v === info.defaultTier ? "" : (v as AiTier) })}');
+    expect(tierCard).toContain("aria-label={`Tier for ${info.label}`}");
     expect(para).toContain("nothing is pre-filled and Velocity names no model");
     // The model box really is empty and free text, and the card sits below the keys.
     const card = read("../client/src/components/usip/settings/ModelTiersCard.tsx");
