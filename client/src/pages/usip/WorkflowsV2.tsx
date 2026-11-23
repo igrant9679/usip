@@ -23,6 +23,7 @@ import { ruleState, runSummary } from "@/lib/segmentAutoEnrol";
 import { isDeadTrigger } from "@shared/workflowTriggers";
 import { cn } from "@/lib/utils";
 import { groupByEffect } from "@/lib/autopilotEffects";
+import { CommunicationsCard } from "@/components/usip/CommunicationsSwitch";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -339,6 +340,10 @@ export default function WorkflowsV2() {
               <li><b className="text-foreground">Autonomous</b> — it acts on its own and tells you afterwards. Turn this on once Approve has been producing work you'd have sent anyway.</li>
             </ul>
           </div>
+
+          {/* Above the dials: the one switch that holds what all of them
+              send, whatever each is set to (2026-11-23). */}
+          <CommunicationsCard />
 
           {/* Autopilots, grouped by what each does when it acts (audit
               2026-10-20, U20): sends to people, spends credits, changes

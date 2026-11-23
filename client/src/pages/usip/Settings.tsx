@@ -23,6 +23,7 @@ import { SignaturePointer } from "@/components/usip/settings/SignatureSection";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { CommunicationsCard } from "@/components/usip/CommunicationsSwitch";
 import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { isAdminRole } from "@shared/roleRank";
 import { CURRENCY_OPTIONS, MONTH_NAMES } from "@shared/revenueSettings";
@@ -113,6 +114,9 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
       }
     >
       <div className="p-4 space-y-4">
+        {/* Everything at once, AI calls included (2026-11-23). The switch
+            below it is the email and LinkedIn half on its own. */}
+        <CommunicationsCard />
         <div className={cn("rounded-md border p-3 flex items-start gap-3", paused ? "border-rose-300 bg-rose-50 dark:bg-rose-950/30" : "border-border")}>
           <Switch checked={paused} disabled={!canEdit} aria-label="Pause all outbound"
             onCheckedChange={(v) => save({ outboundPaused: v })} />
@@ -233,6 +237,8 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
   const save = trpc.settings.save.useMutation({
     onSuccess: (_d, vars) => {
       utils.settings.get.invalidate();
+      // Pause all outbound is half of the communications switch in the header.
+      if (vars.outboundPaused !== undefined) { utils.communications.status.invalidate(); utils.sendingStatus.current.invalidate(); }
       // The fiscal calendar or currency changed (F29): every quarter and
       // amount re-reads them.
       if (vars.fiscalYearStartMonth !== undefined || vars.currency !== undefined) {

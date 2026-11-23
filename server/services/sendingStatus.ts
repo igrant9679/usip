@@ -70,7 +70,7 @@ export async function sendingStatus(workspaceId: number, now: Date = new Date())
   if (sw.paused) {
     blocks.push({
       key: "outbound_paused", label: "Outbound paused", tone: "stop", surfaces: [...ALL_SURFACES],
-      detail: "Nothing goes to prospects, automatic or by hand, until it is switched off in Settings → Workspace overview → Send window.",
+      detail: "Nothing goes to prospects, automatic or by hand, until an admin resumes: here, with the switch in the page header, or in Settings → Workspace overview → Send window.",
       href: "/v2/settings/workspace",
     });
   } else if (!isWithinSendWindow(nowMs, sw.timezone, sw.window)) {

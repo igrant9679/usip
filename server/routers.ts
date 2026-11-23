@@ -41,6 +41,7 @@ import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { emailActivityRouter } from "./routers/emailActivity";
 import { sequenceTimelineRouter } from "./routers/sequenceTimeline";
 import { sendingStatusRouter } from "./routers/sendingStatus";
+import { communicationsRouter } from "./routers/communications";
 import { linkedinLimitsRouter } from "./routers/linkedinLimits";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
@@ -135,6 +136,8 @@ export const appRouter = router({
   sequenceTimeline: sequenceTimelineRouter,
   // What is stopping sends right now, for the status bar (audit 2026-10-20, U1).
   sendingStatus: sendingStatusRouter,
+  // One switch for email, LinkedIn and AI calls (shared/communications.ts).
+  communications: communicationsRouter,
   emailDrafts: emailDraftsRouter,
   emailActivity: emailActivityRouter,
   linkedinLimits: linkedinLimitsRouter,

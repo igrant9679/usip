@@ -43,7 +43,7 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
-import { AUTONOMY_DIALS, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, redactForModel, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
+import { AUTONOMY_DIALS, COMMUNICATIONS_SWITCH_PATH, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, redactForModel, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
 import { describeScreen, screenLine } from "@shared/assistantScreen";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 import { affectedRowsOf } from "../_core/claim";
@@ -407,12 +407,13 @@ Rules:
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - Sending: you may put email in flight ONLY from the approval queues — send_approved_drafts (drafts already approved) and approve_and_send_meetings (meetings already proposed), or the catalog actions marked "SENDS EMAIL NOW". Each is a confirm card that says email goes out; never propose one the user did not ask for, and never compose-and-send arbitrary mail or LinkedIn messages (those tools do not exist). Approving a draft (emailDrafts.approve / approveAll) sends nothing by itself.
 - Autonomy dials: you may propose an Off / Approve / Auto change only for the dials that are in the catalog, only for an admin, and never fully-unattended campaign autonomy (that is a human's decision on the campaign's own Settings tab, behind an acknowledgement). Social Autopilot, Job Change Autopilot and Email AI auto-send are NOT in the catalog — navigate the user to /v2/workflows for those rather than arming a near-miss dial.
+- Communications switch: communications.status says whether email, LinkedIn and AI calls are on, paused or partly paused. For an admin who asks in so many words to pause or resume all communications (or all outbound, all sending), propose communications.setPaused with run_action: one confirm card that says what stops or starts. Never propose resuming to get past a send that was refused, and never propose either one the user did not ask for. It does not pause or resume a single campaign or sequence; those have their own status.
 - Use navigate to hand the user a link when the answer is "go to this page".
 - ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
 - Be concise and concrete. Short sentences, tight lists, real names and numbers from tool results.
 - The user opened you from this page: ${pageKey ?? "unknown"}. ${screen} Use both to interpret "this page" / "here" / "this record" and to pick navigate targets. The one exception to the id rule above: the id of the record on screen may be used for a LOOKUP; act on it only after that lookup returned the record.
-- Settings, usage, keys, team and mailboxes are READ ONLY for you: the actions in the "Settings (read only)" group (list_actions with that group) answer "which keys are set up", "who is on the team", "what have we spent", "is a key shared with another workspace", "which mailboxes are connected". You never see a key or password, only whether one is set. You cannot change any of them: say what the setting is, then navigate the user to the page that changes it.
+- Settings, usage, keys, team and mailboxes are READ ONLY for you: the actions in the "Settings (read only)" group (list_actions with that group) answer "which keys are set up", "who is on the team", "what have we spent", "is a key shared with another workspace", "which mailboxes are connected". You never see a key or password, only whether one is set. You cannot change any of them (the one exception is the communications switch above): say what the setting is, then navigate the user to the page that changes it.
 - Showing, not only telling: when the user asks to be shown or walked through a page or a job, call find_tours; a matching tour appears as a "Show me" button that starts the on-screen walkthrough. When they would rather you did it, do it (propose the action) and say afterwards what you did.
 - For "what should I do today / this week / this month" call whats_waiting first, then answer as the routine below applied to those real counts — name the queues that are non-empty and skip the ones that are. For "where is X" / "how do I X" answer from the page map and, when depth is needed, help_lookup (the Help Center's Operator's Manual articles cover every page, routine and process).
 
@@ -531,6 +532,10 @@ export const assistantRouter = router({
               if (refusal) { messages.push({ role: "user", content: `[tool_result run_action]: {"error":${JSON.stringify(refusal)}}` }); continue; }
               if (AUTONOMY_DIALS[entry.path] && !isAdminRole(ctx.member.role)) {
                 messages.push({ role: "user", content: `[tool_result run_action]: {"error":"Autonomy dials are admin-only. Point the user at the Autonomy Center (/v2/workflows)."}` });
+                continue;
+              }
+              if (entry.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole(ctx.member.role)) {
+                messages.push({ role: "user", content: `[tool_result run_action]: {"error":"The communications switch is admin-only. Tell the user an admin can pause or resume from the switch in the page header."}` });
                 continue;
               }
               description = describeGenericAction(entry, args.input);
@@ -808,6 +813,9 @@ export const assistantRouter = router({
           if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
           if (AUTONOMY_DIALS[entry.path] && !isAdminRole(ctx.member.role)) {
             throw new TRPCError({ code: "FORBIDDEN", message: "Autonomy dials are admin-only — change them on the Autonomy Center (/v2/workflows)." });
+          }
+          if (entry.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole(ctx.member.role)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "The communications switch is admin-only." });
           }
           const r = await invokeCallerPath(caller, entry.path, parsed);
           const out = JSON.stringify(r ?? null);

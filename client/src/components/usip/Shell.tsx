@@ -88,6 +88,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { HelpDrawer } from "@/components/usip/HelpDrawer";
 import { AssistantDrawer } from "@/components/usip/AssistantDrawer";
 import { ElsieAssistButton, ElsieAssistPane } from "@/components/usip/ElsieAssistPane";
+import { CommunicationsHeaderButton } from "@/components/usip/CommunicationsSwitch";
 import { assistantStore } from "@/lib/assistantStore";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -923,6 +924,10 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           {/* Elsie: one helper (2026-11-15). This button opens her drawer (also
               Ctrl+J); the sparkles button that used to open "AI Assistant"
               beside the theme toggle is gone, because it was the same thing. */}
+          {/* One switch for email, LinkedIn and AI calls, on every page
+              (2026-11-23). A quiet icon while they are on; a red pill that
+              says Paused while they are not. */}
+          <CommunicationsHeaderButton />
           <ElsieButton />
           {/* Her suggestions for this page, as a column beside it (2026-11-16). */}
           <ElsieAssistButton />
