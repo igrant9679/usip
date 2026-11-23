@@ -229,14 +229,16 @@ describe("the two procedures", () => {
 
   it("a non-admin gets no card, and a card cannot be confirmed by one", () => {
     const src = read("./routers/assistant.ts");
-    expect((src.match(/entry\.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole\(ctx\.member\.role\)/g) ?? []).length).toBe(2); // propose, confirm
-    const proposeAt = src.indexOf("entry.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole(ctx.member.role)");
+    // The whole condition, from its `if (`: a gate with anything put in front of it is not this gate.
+    expect((src.match(/\n\s+if \(entry\.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole\(ctx\.member\.role\)\) \{\n/g) ?? []).length).toBe(2); // propose, confirm
+    expect((src.match(/COMMUNICATIONS_SWITCH_PATH/g) ?? []).length).toBe(3); // the import and the two gates
+    const proposeAt = src.indexOf("if (entry.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole(ctx.member.role)) {\n                messages.push(");
     const describeAt = src.indexOf("description = describeGenericAction(entry, args.input);");
     expect(proposeAt).toBeGreaterThan(-1);
     expect(describeAt).toBeGreaterThan(proposeAt);
     // Refused before the card's sentence is written, with nothing in between that could skip it.
     expect(src.slice(proposeAt, describeAt)).toContain("continue;");
-    expect(src).toContain('throw new TRPCError({ code: "FORBIDDEN", message: "The communications switch is admin-only." });');
+    expect(src).toContain('          if (entry.path === COMMUNICATIONS_SWITCH_PATH && !isAdminRole(ctx.member.role)) {\n            throw new TRPCError({ code: "FORBIDDEN", message: "The communications switch is admin-only." });');
   });
 
   it("Elsie is told when she may propose it, and that it is the one settings write", () => {
