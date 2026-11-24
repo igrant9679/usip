@@ -109,7 +109,9 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   // 2026-11-23 (owner: "re-enable/disable all communications ... within the
   // Elsie/AI Assistant also"). A router of exactly two procedures: the read,
   // and the one switch, which is admin-only and proposed as a card.
-  // 2026-11-23 (owner: the search, "within the Elsie/AI Assistant also"). One read.
+  // 2026-11-23 (owner: the search, "within the Elsie/AI Assistant also"). Two
+  // reads and one save: the workspace's own records, the same name looked up
+  // outside, and a found row saved (a confirm card; see LOOKUP_SAVE_PATH).
   search: { group: "CRM", description: "One search across people, companies and leads by name, company or email address" },
   communications: { group: "Outreach", description: "The communications switch: whether email, LinkedIn and AI calls are on, and pausing or resuming them all" },
 };
@@ -121,6 +123,14 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
  * both run_action legs refuse a non-admin before a card is ever made.
  */
 export const COMMUNICATIONS_SWITCH_PATH = "communications.setPaused";
+
+/**
+ * Saving a row an outside lookup found (owner, 2026-11-23: "offer to create a
+ * record in the system"). Its card is written from the row itself
+ * (services/recordLookup.describeLookupSave): who is saved, from which source,
+ * and what it spends, because a source that sells its rows is paid at this step.
+ */
+export const LOOKUP_SAVE_PATH = "search.createFromLookup";
 
 /**
  * Procedures the assistant never sees, whatever router they live in.
@@ -333,6 +343,8 @@ export function titleFor(path: string): string {
 /** Hand-written descriptions for the actions people ask for most. Everything else gets the router's group description. */
 export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "search.records": "Find a person, a company or a lead by name, company, email address or domain, in one read: q is what the user typed. Returns each match with the facts on file (title, company, email and its status, phone, location; a company's domain, industry and size). Use it first for 'who is', 'look up', 'find' and 'do we have'.",
+  "search.lookup": "Look a name up OUTSIDE this workspace, in LinkedIn and the connected prospect databases, when search.records found nobody: q is the name, kind is person or company (an email or a domain is looked up as its company). Returns each match with its source, whether it is here already, and a save value. Costs one LinkedIn search from the account's daily allowance, so call it once per name, and only when the user wants someone found.",
+  "search.createFromLookup": "Save one row that search.lookup found as a record here: pass that row's save value unchanged. A row whose saveCost is above 0 spends that many of the source's credits; say so before proposing it. A record already here is opened, not made twice.",
   // These two avoid the ranking tokens named above AUTONOMY_DIALS.
   "communications.status": "Whether this workspace's email, LinkedIn and AI calls are on, paused or partly paused, since when, and whether this user may change it.",
   "communications.setPaused": "COMMUNICATIONS SWITCH (admin only): pause (disable, turn off) or resume (re-enable, turn back on) all outbound sending. paused=true stops every email, LinkedIn message and invite, meeting invite, chat follow-up and AI call this workspace would send to anyone outside the team, until it is resumed. paused=false resumes them all: held automatic sends go out when the send window is open, and campaigns paused on their own stay paused.",
