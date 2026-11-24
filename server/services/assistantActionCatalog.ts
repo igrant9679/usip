@@ -109,6 +109,8 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   // 2026-11-23 (owner: "re-enable/disable all communications ... within the
   // Elsie/AI Assistant also"). A router of exactly two procedures: the read,
   // and the one switch, which is admin-only and proposed as a card.
+  // 2026-11-23 (owner: the search, "within the Elsie/AI Assistant also"). One read.
+  search: { group: "CRM", description: "One search across people, companies and leads by name, company or email address" },
   communications: { group: "Outreach", description: "The communications switch: whether email, LinkedIn and AI calls are on, and pausing or resuming them all" },
 };
 
@@ -330,6 +332,7 @@ export function titleFor(path: string): string {
 
 /** Hand-written descriptions for the actions people ask for most. Everything else gets the router's group description. */
 export const ACTION_DESCRIPTIONS: Record<string, string> = {
+  "search.records": "Find a person, a company or a lead by name, company, email address or domain, in one read: q is what the user typed. Returns each match with the facts on file (title, company, email and its status, phone, location; a company's domain, industry and size). Use it first for 'who is', 'look up', 'find' and 'do we have'.",
   // These two avoid the ranking tokens named above AUTONOMY_DIALS.
   "communications.status": "Whether this workspace's email, LinkedIn and AI calls are on, paused or partly paused, since when, and whether this user may change it.",
   "communications.setPaused": "COMMUNICATIONS SWITCH (admin only): pause (disable, turn off) or resume (re-enable, turn back on) all outbound sending. paused=true stops every email, LinkedIn message and invite, meeting invite, chat follow-up and AI call this workspace would send to anyone outside the team, until it is resumed. paused=false resumes them all: held automatic sends go out when the send window is open, and campaigns paused on their own stay paused.",
