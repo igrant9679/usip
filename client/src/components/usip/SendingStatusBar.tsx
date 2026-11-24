@@ -7,12 +7,15 @@
  * One component and one server read (sendingStatus.current), the same sources
  * the senders ask; each page names its surface and sees only what holds its
  * sends (the send window holds automatic sends, not what a person sends from
- * the mailbox). Display only. Hidden when nothing is in the way.
+ * the mailbox). Display only, but for one thing: beside "Outbound paused" an
+ * admin gets Resume all (CommunicationsSwitch). Hidden when nothing is in
+ * the way.
  */
 import { Link } from "wouter";
 import { Clock, PauseCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { CommunicationsResumeLink } from "./CommunicationsSwitch";
 
 export type SendingSurface = "sequences" | "emails" | "mailbox" | "meetings" | "social" | "are";
 
@@ -33,6 +36,8 @@ export function SendingStatusBar({ surface, className }: { surface: SendingSurfa
               <span className="font-semibold">{b.label}</span>
               <span className="opacity-90"> — {b.detail}</span>
               {b.href ? <> <Link href={b.href} className="underline underline-offset-2">Open</Link></> : null}
+              {/* The pause can be lifted from here (2026-11-23), by an admin, after a confirm. */}
+              {b.key === "outbound_paused" ? <> <CommunicationsResumeLink /></> : null}
             </span>
           </div>
         );

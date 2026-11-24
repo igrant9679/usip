@@ -25,6 +25,7 @@
  * nothing matching the deny list ever appears in it.
  */
 import { z } from "zod";
+import { COMMUNICATIONS_PAUSE_EFFECT, COMMUNICATIONS_RESUME_EFFECT } from "@shared/communications";
 
 export type ActionKind = "query" | "mutation";
 
@@ -105,7 +106,19 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   dataHealth: { group: "Prospecting", description: "Duplicates, gaps and import audits" },
   emailVerification: { group: "Prospecting", description: "Email verification jobs" },
   helpCenter: { group: "Help", description: "Help articles (read)" },
+  // 2026-11-23 (owner: "re-enable/disable all communications ... within the
+  // Elsie/AI Assistant also"). A router of exactly two procedures: the read,
+  // and the one switch, which is admin-only and proposed as a card.
+  communications: { group: "Outreach", description: "The communications switch: whether email, LinkedIn and AI calls are on, and pausing or resuming them all" },
 };
+
+/**
+ * The communications switch (2026-11-23). The one settings-class WRITE the
+ * assistant may propose, because the owner asked for it by name. It is an
+ * adminWsProcedure, the card leads with what stops or starts (below), and
+ * both run_action legs refuse a non-admin before a card is ever made.
+ */
+export const COMMUNICATIONS_SWITCH_PATH = "communications.setPaused";
 
 /**
  * Procedures the assistant never sees, whatever router they live in.
@@ -317,6 +330,9 @@ export function titleFor(path: string): string {
 
 /** Hand-written descriptions for the actions people ask for most. Everything else gets the router's group description. */
 export const ACTION_DESCRIPTIONS: Record<string, string> = {
+  // These two avoid the ranking tokens named above AUTONOMY_DIALS.
+  "communications.status": "Whether this workspace's email, LinkedIn and AI calls are on, paused or partly paused, since when, and whether this user may change it.",
+  "communications.setPaused": "COMMUNICATIONS SWITCH (admin only): pause (disable, turn off) or resume (re-enable, turn back on) all outbound sending. paused=true stops every email, LinkedIn message and invite, meeting invite, chat follow-up and AI call this workspace would send to anyone outside the team, until it is resumed. paused=false resumes them all: held automatic sends go out when the send window is open, and campaigns paused on their own stay paused.",
   "sequences.create": "Create a sequence (draft) with steps: email {subject, body}, wait {days}, task {body}, linkedin_dm {body}, linkedin_invite {note}.",
   "sequences.update": "Edit a sequence's name, description, status or steps.",
   "sequences.bulkEnroll": "Enroll people (prospectIds) into a sequence.",
@@ -485,6 +501,12 @@ export function describeGenericAction(a: CatalogEntry, input: unknown): string {
   const short = args.length > 300 ? `${args.slice(0, 300)}…` : args;
   const v = (input ?? {}) as Record<string, unknown>;
   const unattended = v.mode === "auto" || v.mode === "full" || v.autonomyMode === "full";
+  if (a.path === COMMUNICATIONS_SWITCH_PATH) {
+    // The card says what stops or starts, in the words the app's own confirm uses.
+    return v.paused === false
+      ? `⚠ Resumes ALL communications — ${COMMUNICATIONS_RESUME_EFFECT}`
+      : `⚠ Pauses ALL communications — ${COMMUNICATIONS_PAUSE_EFFECT}`;
+  }
   const prefix = a.sends
     ? "⚠ Sends now — "
     : AUTONOMY_DIALS[a.path]

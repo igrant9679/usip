@@ -574,13 +574,13 @@ function AiCallsSwitchCard({ isAdmin }: { isAdmin: boolean }) {
   const utils = trpc.useUtils();
   const status = trpc.voiceAgents.plivoStatus.useQuery();
   const set = trpc.voiceAgents.setAiCallsPaused.useMutation({
-    onSuccess: (r) => { toast.success(r.paused ? "AI calls paused" : "AI calls on"); void utils.voiceAgents.plivoStatus.invalidate(); },
+    onSuccess: (r) => { toast.success(r.paused ? "AI calls paused" : "AI calls on"); void utils.voiceAgents.plivoStatus.invalidate(); void utils.communications.status.invalidate(); },
     onError: (e: any) => toast.error(e?.message ?? "Could not change it"),
   });
   const pausedAt = status.data?.aiCallsPausedAt ?? null;
   const on = !pausedAt;
   return (
-    <Card title="AI calls" sub="Whether approved AI calls dial. Calls to an agent's number are always answered. This is separate from Pause all outbound (Settings → Send window), which holds email, LinkedIn and invites.">
+    <Card title="AI calls" sub="Whether approved AI calls dial. Calls to an agent's number are always answered. This is separate from Pause all outbound (Settings → Send window), which holds email, LinkedIn and invites. The communications switch in the page header sets both at once.">
       <label className={cn("flex items-start gap-3 rounded-md border p-3", on ? "border-border" : "border-amber-300 bg-amber-50 dark:bg-amber-950/30")}>
         <Switch checked={on} disabled={!isAdmin || set.isPending || status.isLoading} aria-label="AI calls on"
           onCheckedChange={(v) => set.mutate({ paused: !v })} />
