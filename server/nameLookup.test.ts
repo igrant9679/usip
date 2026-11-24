@@ -17,7 +17,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { LOOKUP_MAX, LOOKUP_TARGET, lookupLimit, lookupSaveCost } from "@shared/recordLookup";
+import { LOOKUP_MAX, LOOKUP_TARGET, carriesMiddleName, lookupLimit, lookupSaveCost, orderByMiddleName, personQuery } from "@shared/recordLookup";
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
 const card = read("../client/src/components/usip/NameLookupCard.tsx");
@@ -43,6 +43,13 @@ describe("how many rows a lookup asks for", () => {
     expect(input.safeParse({ q: "acme", kind: "company", limit: LOOKUP_MAX + 1 }).success).toBe(false);
     expect(input.safeParse({ q: "acme", kind: "company", limit: 0 }).success).toBe(false);
   }, 120_000);
+
+  it("the endpoint hands the limit to the lookup, which clamps it", () => {
+    // A deliberate break showed nothing held this: the schema took a limit the lookup never received.
+    const src = read("./routers/search.ts");
+    const lookup = src.slice(src.indexOf("  lookup: workspaceProcedure"), src.indexOf("  createFromLookup: workspaceProcedure"));
+    expect(lookup).toContain("input.q, input.kind, input.runId ?? null, { limit: input.limit ?? null },");
+  });
 });
 
 describe("what saving a selection spends", () => {
@@ -52,6 +59,57 @@ describe("what saving a selection spends", () => {
     expect(lookupSaveCost([{ saveCost: 1, via: "WarmySender" }])).toEqual({ total: 1, text: "1 WarmySender credit" });
     expect(lookupSaveCost([{ saveCost: 1, via: "WarmySender" }, { saveCost: 0, via: "LinkedIn" }, { saveCost: 1, via: "WarmySender" }, { saveCost: 2, via: "LeadOcean" }]))
       .toEqual({ total: 4, text: "2 WarmySender credits, 2 LeadOcean credits" });
+  });
+});
+
+describe("a person is searched for field by field", () => {
+  it("first and last name do the matching, with the company when given; the middle name never does", () => {
+    expect(personQuery({ first: " Jane ", last: "Doe", company: "Acme" })).toBe("Jane Doe Acme");
+    expect(personQuery({ first: "Jane", last: "Doe" })).toBe("Jane Doe");
+    expect(personQuery({ first: "", last: "Doe", company: "" })).toBe("Doe");
+    expect(personQuery({ first: "", last: "" })).toBe("");
+    const search = between("const search = () => {", "/** Ask the prospect sources.");
+    expect(search).toContain('setAsked(kind === "person" ? personQuery({ first, last, company }) : text);');
+    expect(search).toContain('setAskedMiddle(kind === "person" ? middle : "");');
+    // No record carries a middle name: sent as a search word it would match nobody.
+    expect(search).not.toContain("personQuery({ first, middle");
+  });
+
+  it("a middle name is recognised as a word, or as an initial between the first and last names", () => {
+    expect(carriesMiddleName("Jane Marie Doe", "Marie")).toBe(true);
+    expect(carriesMiddleName("Jane M. Doe", "Marie")).toBe(true);
+    expect(carriesMiddleName("Jane Marie Doe", "M")).toBe(true);
+    expect(carriesMiddleName("Jane Marie Doe", "m.")).toBe(true);
+    expect(carriesMiddleName("Jane Doe", "Marie")).toBe(false);
+    expect(carriesMiddleName("Jane Anne Doe", "Marie")).toBe(false);
+    // The first or last name starting with the letter is not a middle initial.
+    expect(carriesMiddleName("Mary Doe", "M")).toBe(false);
+    expect(carriesMiddleName("Jane Marie Doe", "")).toBe(false);
+  });
+
+  it("it orders the rows and rules nobody out", () => {
+    const rows = [{ name: "Jane Doe" }, { name: "Jane Anne Doe" }, { name: "Jane Marie Doe" }, { name: "Jane M Doe" }];
+    expect(orderByMiddleName(rows, "Marie").map((r) => r.name)).toEqual(["Jane Marie Doe", "Jane M Doe", "Jane Doe", "Jane Anne Doe"]);
+    expect(orderByMiddleName(rows, "Marie")).toHaveLength(rows.length);
+    expect(orderByMiddleName(rows, "  ")).toBe(rows);
+    expect(card).toContain("orderByMiddleName([...records.data.people, ...records.data.leads], askedMiddle)");
+    expect(card).toContain("const people = orderByMiddleName(found?.data?.people ?? [], askedMiddle);");
+  });
+
+  it("the panel has the four fields, and says what the middle name does", () => {
+    for (const label of ["First name", "Middle name (optional)", "Last name", "Company (optional)"]) {
+      expect(card, label).toContain(`aria-label="${label}"`);
+    }
+    expect(card).toContain("the middle name rules nobody out: a match that carries it is listed first.");
+    // Search needs a first or a last name; a middle name or a company alone is not a person.
+    expect(card).toContain('disabled={(kind === "person" ? personQuery({ first, last }) : text.trim()).length < 2}');
+  });
+
+  it("the search by role keeps every field it had", () => {
+    const src = read("../client/src/pages/usip/FindProspects.tsx");
+    for (const label of ["Job title", "Seniority", "Department", "Industry", "Company name (optional)", "Location", "Keywords (intent / triggers)"]) {
+      expect(src, label).toContain(label);
+    }
   });
 });
 

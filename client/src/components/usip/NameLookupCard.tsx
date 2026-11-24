@@ -35,7 +35,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { hitDetail, parseRecordSearch, type RecordHit } from "@shared/recordSearch";
 import {
-  LOOKUP_MAX, LOOKUP_RESUMES, lookupKindsFor, lookupSaveCost, mergeLookup, outsideCompanyDetail, outsidePersonDetail, planLookup, saveLabel,
+  LOOKUP_MAX, LOOKUP_RESUMES, lookupKindsFor, lookupSaveCost, mergeLookup, orderByMiddleName, outsideCompanyDetail, outsidePersonDetail, personQuery, planLookup, saveLabel,
   type LookupKind, type LookupSave, type OutsideLookupResult, type OutsidePerson,
 } from "@shared/recordLookup";
 
@@ -45,9 +45,15 @@ export function NameLookupCard({ variant = "card" }: { variant?: "card" | "bare"
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const [kind, setKind] = useState<LookupKind>("person");
+  /** A company's name or domain. */
   const [text, setText] = useState("");
-  /** A person's company, when known: it narrows the name (owner: "first name and last name and/or company"). */
+  /** A person, field by field (owner: "first name, last name, middle name search option", "and/or company"). */
+  const [first, setFirst] = useState("");
+  const [middle, setMiddle] = useState("");
+  const [last, setLast] = useState("");
   const [company, setCompany] = useState("");
+  /** The middle name Search was pressed with. It orders the rows; it is never searched for. */
+  const [askedMiddle, setAskedMiddle] = useState("");
   /** What Search was last pressed for. Typing alone searches nothing. */
   const [asked, setAsked] = useState("");
   const [outside, setOutside] = useState<Outside | null>(null);
@@ -73,15 +79,17 @@ export function NameLookupCard({ variant = "card" }: { variant?: "card" | "bare"
 
   // What is on file for the kind asked: a person's own matches, or a company and the people there.
   const local: RecordHit[] = !records.data ? []
-    : effective === "person" ? [...records.data.people, ...records.data.leads]
+    : effective === "person" ? orderByMiddleName([...records.data.people, ...records.data.leads], askedMiddle)
     : [...records.data.companies, ...records.data.people];
   const found = outside && q && outside.q === q.text && outside.kind === effective ? outside : null;
 
   const search = () => {
     seq.current += 1;
     setOutside(null); setPicked(new Set()); setSaved({});
-    // A person is searched for by name and, when given, company: every word must match.
-    setAsked(kind === "person" && company.trim() ? `${text} ${company}` : text);
+    // A person is searched for by first and last name and, when given, company: every word must match.
+    // The middle name is kept aside: no record carries one, so it only orders what comes back.
+    setAsked(kind === "person" ? personQuery({ first, last, company }) : text);
+    setAskedMiddle(kind === "person" ? middle : "");
   };
 
   /** Ask the prospect sources. Only ever from the button that asks permission to. */
@@ -107,7 +115,7 @@ export function NameLookupCard({ variant = "card" }: { variant?: "card" | "bare"
     }
   };
 
-  const people = found?.data?.people ?? [];
+  const people = orderByMiddleName(found?.data?.people ?? [], askedMiddle);
   const hrefOf = (p: { ref: string; already: { href: string } | null }) => saved[p.ref] ?? p.already?.href ?? null;
   const fresh = people.filter((p) => !hrefOf(p));
   const chosen = fresh.filter((p) => picked.has(p.ref));
@@ -158,22 +166,29 @@ export function NameLookupCard({ variant = "card" }: { variant?: "card" | "bare"
             </button>
           ))}
         </div>
-        <Input
-          aria-label={kind === "person" ? "Person's name" : "Company name or domain"} className="min-w-[220px] flex-1"
-          value={text} onChange={(e) => setText(e.target.value)} data-name-lookup-input
-          placeholder={kind === "person" ? "First and last name" : "Company name, or its domain (acme.org)"}
-        />
         {kind === "person" ? (
+          <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4" data-name-lookup-person-fields>
+            <Input aria-label="First name" placeholder="First name" value={first} onChange={(e) => setFirst(e.target.value)} data-name-lookup-first />
+            <Input aria-label="Middle name (optional)" placeholder="Middle name (optional)" value={middle} onChange={(e) => setMiddle(e.target.value)} data-name-lookup-middle />
+            <Input aria-label="Last name" placeholder="Last name" value={last} onChange={(e) => setLast(e.target.value)} data-name-lookup-last />
+            <Input aria-label="Company (optional)" placeholder="Company (optional)" value={company} onChange={(e) => setCompany(e.target.value)} data-name-lookup-company />
+          </div>
+        ) : (
           <Input
-            aria-label="Company (optional)" className="min-w-[180px] flex-1"
-            value={company} onChange={(e) => setCompany(e.target.value)} data-name-lookup-company
-            placeholder="Company (optional)"
+            aria-label="Company name or domain" className="min-w-[220px] flex-1"
+            value={text} onChange={(e) => setText(e.target.value)} data-name-lookup-input
+            placeholder="Company name, or its domain (acme.org)"
           />
-        ) : null}
-        <Button type="submit" size="sm" className="gap-1.5" disabled={text.trim().length < 2}>
+        )}
+        <Button type="submit" size="sm" className="gap-1.5" disabled={(kind === "person" ? personQuery({ first, last }) : text.trim()).length < 2}>
           <Search className="size-3.5" /> Search
         </Button>
       </form>
+      {kind === "person" && middle.trim() ? (
+        <p className="text-[12px] text-muted-foreground" data-name-lookup-middle-note>
+          Records hold a first and a last name only, so the middle name rules nobody out: a match that carries it is listed first.
+        </p>
+      ) : null}
 
       {q && kind === "person" && effective === "company" ? (
         <p className="text-[12px] text-muted-foreground">No source finds a person from an email address or a domain, so this looks for the company at {plan?.subject}.</p>

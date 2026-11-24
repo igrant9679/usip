@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { Check, ListOrdered, Loader2 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
-import { ARE_SOURCES, PRIMARY_SOURCE_CHOICES, fallbackSourcesOf, primarySourceOf, type PrimarySourceId } from "@shared/areSources";
+import { ARE_SOURCES, fallbackSourcesOf, primarySourceOf, type PrimarySourceId } from "@shared/areSources";
 
 const labelOf = (id: string) => ARE_SOURCES.find((s) => s.id === id)?.label ?? id;
 
@@ -80,7 +80,8 @@ export function PrimarySourceCard() {
         <div className="text-[12px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Loading…</div>
       ) : (
         <div role="radiogroup" aria-label="Primary prospect source" className="space-y-1.5">
-          {PRIMARY_SOURCE_CHOICES.map((id) => {
+          {/* The primary, then the fallbacks in the order they are tried. */}
+          {[primary, ...fallbacks].map((id) => {
             const chosen = id === primary;
             const why = blocker(id);
             const place = fallbacks.indexOf(id);

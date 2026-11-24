@@ -181,3 +181,35 @@ export function lookupSaveCost(rows: Array<Pick<OutsidePerson, "saveCost" | "via
   by.forEach((n, via) => { total += n; parts.push(`${n} ${via} ${n === 1 ? "credit" : "credits"}`); });
   return { total, text: parts.join(", ") };
 }
+
+/**
+ * A middle name cannot be searched for: people here, and the rows the sources
+ * return, carry a first and a last name only (owner, 2026-11-24: "first name,
+ * last name, middle name search option"). So it rules nobody out. It ORDERS:
+ * a row whose name carries the middle name, or its initial between the first
+ * and last words, is listed first. The order is otherwise left as it came.
+ */
+export function carriesMiddleName(name: string, middle: string): boolean {
+  const tokens = middle.toLowerCase().replace(/[.,]/g, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  const words = name.toLowerCase().replace(/[.,]/g, " ").split(/\s+/).filter(Boolean);
+  const inner = words.slice(1, -1);
+  return tokens.every((t) => (t.length === 1
+    // An initial typed: a word between the first and last names that starts with it.
+    ? inner.some((w) => w.startsWith(t))
+    // A name typed: that word anywhere, or between first and last a longer form of it or its bare initial ("M" for Marie).
+    : words.some((w) => w === t) || inner.some((w) => w.startsWith(t) || (w.length === 1 && t.startsWith(w)))));
+}
+
+export function orderByMiddleName<T extends { name: string }>(rows: T[], middle: string): T[] {
+  if (!middle.trim()) return rows;
+  const first: T[] = [];
+  const rest: T[] = [];
+  for (const r of rows) (carriesMiddleName(r.name, middle) ? first : rest).push(r);
+  return first.concat(rest);
+}
+
+/** What a person is searched for by: first and last name, and the company when given. Never the middle name. */
+export function personQuery(p: { first: string; last: string; company?: string }): string {
+  return [p.first, p.last, p.company ?? ""].map((s) => s.trim()).filter(Boolean).join(" ");
+}
