@@ -77,6 +77,8 @@ export const prospectSourcesRouter = router({
         acceptedEmailStatuses: z.array(z.enum(LEADOCEAN_EMAIL_STATUSES)).min(1).optional(),
         fetchPhones: z.boolean().optional(),
         dailyPeopleCap: z.number().int().min(1).max(10_000_000).nullable().optional(),
+        // WarmySender's: verify an address Reoon could not decide (services/secondVerifier). On unless set false.
+        verifyUndecided: z.boolean().optional(),
       }).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -91,6 +93,7 @@ export const prospectSourcesRouter = router({
         if (c.billingAnniversaryDay !== undefined) config.billingAnniversaryDay = c.billingAnniversaryDay ?? undefined;
         if (c.monthlyLeadAllowance !== undefined) config.monthlyLeadAllowance = c.monthlyLeadAllowance ?? undefined;
         if (c.leadCreditBalance !== undefined) config.leadCreditBalance = c.leadCreditBalance ?? undefined;
+        if (input.slug === "warmysender" && c.verifyUndecided !== undefined) config.verifyUndecided = c.verifyUndecided;
         if (input.slug === "leadocean") {
           if (c.acceptedEmailStatuses !== undefined) config.acceptedEmailStatuses = c.acceptedEmailStatuses;
           if (c.fetchPhones !== undefined) config.fetchPhones = c.fetchPhones;

@@ -53,7 +53,7 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
   const source = describe.data?.find((s) => s.slug === "warmysender");
   const cred = source?.credential;
   const configured = !!cred?.configured;
-  const config = (cred?.config ?? {}) as { billingAnniversaryDay?: number; monthlyLeadAllowance?: number; leadCreditBalance?: number; scopes?: string[]; tier?: string; toolSchemas?: Record<string, unknown>; sampleRowKeys?: string[] };
+  const config = (cred?.config ?? {}) as { billingAnniversaryDay?: number; monthlyLeadAllowance?: number; leadCreditBalance?: number; scopes?: string[]; tier?: string; toolSchemas?: Record<string, unknown>; sampleRowKeys?: string[]; verifyUndecided?: boolean };
   const ledger = trpc.prospectSources.ledger.useQuery({ slug: "warmysender" }, { enabled: configured });
 
   const [key, setKey] = useState("");
@@ -71,7 +71,8 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
 
   const invalidate = () => { utils.prospectSources.describe.invalidate(); utils.prospectSources.ledger.invalidate(); };
   const save = trpc.prospectSources.saveCredentials.useMutation({
-    onSuccess: () => { invalidate(); setKey(""); toast.success("Saved — test the connection to validate the key"); },
+    // Only a new key needs testing; flipping an option does not.
+    onSuccess: (_r, vars) => { invalidate(); setKey(""); toast.success(vars.apiKey ? "Saved — test the connection to validate the key" : "Saved"); },
     onError: (e: any) => toast.error(e?.message ?? "Could not save"),
   });
   const validate = trpc.prospectSources.validate.useMutation({
@@ -91,6 +92,9 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
     onError: (e: any) => toast.error(e?.message ?? "Could not update"),
   });
   const enabled = source ? source.enabled !== false : true;
+  // Verification beside Reoon: on unless switched off; a key known to lack the scope cannot.
+  const verifyOn = config.verifyUndecided !== false;
+  const canVerify = Array.isArray(config.scopes) ? config.scopes.includes("verification:write") : undefined;
 
   const titleNative = source?.capabilities.supportedFilters.includes("jobTitle");
   const status = cred?.status ?? "unvalidated";
@@ -125,6 +129,26 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
         </div>
       )}
 
+      {/* Second opinion beside Reoon (services/secondVerifier). On unless set false. */}
+      {configured && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/40 p-2.5" data-warmysender-verify>
+          <div className="text-[12.5px]">
+            <span className="font-medium">{verifyOn ? "Second opinion on" : "Second opinion off"}</span>
+            <span className="text-muted-foreground">
+              {canVerify === false
+                ? " — this key has no verification:write scope, so it cannot verify. Reissue the key with it, then Test connection."
+                : verifyOn
+                  ? " — when Reoon cannot decide an address, or its check fails, WarmySender is asked. One verification from this plan's allowance each time."
+                  : " — an address Reoon cannot decide stays undecided."}
+              {cred?.sharedFrom ? ` Follows ${cred.sharedFrom}'s setting.` : ""}
+            </span>
+          </div>
+          <Switch aria-label="Verify addresses Reoon cannot decide" checked={verifyOn && canVerify !== false}
+            disabled={!isAdmin || save.isPending || !!cred?.sharedFrom || canVerify === false}
+            onCheckedChange={(v) => save.mutate({ slug: "warmysender", config: { verifyUndecided: v } })} />
+        </div>
+      )}
+
       {source?.circuit.open && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-[12px] text-amber-800 dark:text-amber-300">
           <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
@@ -135,8 +159,8 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
       <div className="space-y-1.5">
         <Label>WarmySender API key</Label>
         <Input aria-label="WarmySender API key" type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={!isAdmin} autoComplete="off"
-          placeholder={configured ? "Enter a new key to replace the saved one" : "Paste a ws_… key with leads:read, leads:write and verification:read"} />
-        <p className="text-[12px] text-muted-foreground">Create it in WarmySender → Settings → API Keys. Grant <code>leads:read</code>, <code>leads:write</code> and <code>verification:read</code>; other scopes are never used.</p>
+          placeholder={configured ? "Enter a new key to replace the saved one" : "Paste a ws_… key with leads:read, leads:write, verification:read and verification:write"} />
+        <p className="text-[12px] text-muted-foreground">Create it in WarmySender → Settings → API Keys. Grant <code>leads:read</code>, <code>leads:write</code>, <code>verification:read</code> and, for the second opinion beside Reoon, <code>verification:write</code>; other scopes are never used.</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

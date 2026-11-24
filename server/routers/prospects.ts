@@ -785,9 +785,10 @@ export const prospectsRouter = router({
       }
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_email_verify",
-        entityId: p.id, before: { email: p.email, emailStatus: p.emailStatus }, after: { email, emailStatus: verdict, reoon: raw.status },
+        entityId: p.id, before: { email: p.email, emailStatus: p.emailStatus }, after: { email, emailStatus: verdict, reoon: raw.status, verifier: raw.decidedBy ?? "reoon" },
       });
-      return { email, status: verdict, reoonStatus: raw.status, replaced, previousEmail: p.email ?? null };
+      // `verifier` says who decided: Reoon, or WarmySender when Reoon could not (services/secondVerifier).
+      return { email, status: verdict, reoonStatus: raw.status, verifier: raw.decidedBy ?? "reoon", replaced, previousEmail: p.email ?? null };
     }),
 
   /**

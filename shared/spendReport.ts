@@ -168,6 +168,7 @@ export const METER_LABEL: Record<string, string> = {
   email_hits: "Emails delivered (1 credit each)",
   searches: "Search requests",
   leads: "Leads exported",
+  verifications: "Addresses verified (second opinion)",
   profile_lookups: "Profile lookups",
   search_records: "Search records (1 per row)",
   lookups: "Lookups (1 record each)",

@@ -33,6 +33,8 @@ export function reoonStatusToUsip(reoonStatus: string): VerificationStatus {
     case "role_account":
     case "disposable":
     case "inbox_full":
+    // Not a Reoon word: the second verifier's "risky" (services/secondVerifier).
+    case "risky":
       return "risky";
     case "invalid":
     case "disabled":
@@ -65,6 +67,11 @@ export type ReoonVerifyResult = {
   is_catch_all: boolean;
   is_deliverable: boolean;
   mx_accepts_mail: boolean;
+  /**
+   * Set when Reoon gave no verdict and the workspace's second verifier did
+   * (services/secondVerifier). Absent = this is Reoon's own answer.
+   */
+  decidedBy?: "warmysender";
 };
 
 export type ReoonBulkCreateResult = {
@@ -209,6 +216,31 @@ export async function reoonVerifySingle(
   mode: ReoonMode,
   meter: ReoonMeter,
 ): Promise<ReoonVerifyResult> {
+  let body: ReoonVerifyResult | null = null;
+  let failure: unknown = null;
+  try {
+    body = await reoonAsk(email, apiKey, mode, meter);
+  } catch (e) {
+    failure = e;
+  }
+  /**
+   * A second opinion, only where Reoon gave none (owner, 2026-11-24: "wire in
+   * WarmySender verification beside Reoon"): a power check that came back
+   * "unknown", or failed. Never for a quick check (the guessed addresses the
+   * pattern finder discards), and never over a verdict Reoon did give. It is
+   * here, in the one function every caller uses, so none can forget it.
+   */
+  if (mode === "power" && (failure !== null || reoonStatusToUsip(body!.status) === "unknown")) {
+    const { warmySenderSecondOpinion } = await import("./secondVerifier");
+    const second = await warmySenderSecondOpinion(meter.workspaceId, email, meter.feature, body);
+    if (second.decided) return second.result;
+  }
+  if (failure !== null) throw failure;
+  return body!;
+}
+
+/** The Reoon call itself. Throws on a non-2xx answer. */
+async function reoonAsk(email: string, apiKey: string, mode: ReoonMode, meter: ReoonMeter): Promise<ReoonVerifyResult> {
   const timeoutMs = mode === "quick" ? 15_000 : 90_000;
   const url = `${REOON_BASE}/verify?email=${encodeURIComponent(email)}&key=${apiKey}&mode=${mode}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
