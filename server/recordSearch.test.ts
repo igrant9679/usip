@@ -274,7 +274,8 @@ describe("the search box", () => {
   it("waits for a pause in typing, and starts empty each time it opens", () => {
     expect(src).toContain("const SEARCH_DEBOUNCE_MS = 250;");
     expect(src).toContain("const t = window.setTimeout(() => setAsked(text), SEARCH_DEBOUNCE_MS);");
-    expect(src).toContain('useEffect(() => { if (!open) { setText(""); setAsked(""); } }, [open]);');
+    // The reset also drops an outside lookup now (recordLookup.test.ts); it still empties the box.
+    expect(src).toContain('if (!open) { setText(""); setAsked(""); setOutside(null);');
   });
 
   it("records come first, each opening its own page, and the pages follow", () => {

@@ -10,6 +10,15 @@
  * the workspace's own records first (search.records), each match showing the
  * facts on file, and the pages follow underneath as before.
  *
+ * When that finds nobody, the box offers to look further (owner, same day:
+ * "the app should go out to the prospect sources to get the info, and offer
+ * to create a record in the system"): search.lookup asks LinkedIn and the
+ * connected databases, and each row it brings back can be saved as a record
+ * (search.createFromLookup). The lookup runs when its row is pressed, never
+ * on a keystroke: each one is a LinkedIn search against the account's daily
+ * allowance. Saving is free unless the row says what it spends, and a row
+ * that spends is pressed twice.
+ *
  * The page list is still the registry (lib/toolRegistry), so the palette
  * knows every page, including the ones with no rail slot.
  *
@@ -17,14 +26,19 @@
  * window event so the rail's Search row (or any other button) can open it
  * without threading state through the Shell.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { Building2, Loader2, Target, User } from "lucide-react";
+import { Building2, Globe, Loader2, Target, User } from "lucide-react";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { trpc } from "@/lib/trpc";
 import { TOOLS, TOOL_GROUPS } from "@/lib/toolRegistry";
 import { RECORD_SEARCH_MIN, hitDetail, parseRecordSearch, type RecordHit } from "@shared/recordSearch";
+import {
+  LOOKUP_RESUMES, lookupKindsFor, mergeLookup, outsideCompanyDetail, outsidePersonDetail, planLookup, saveLabel,
+  type LookupKind, type LookupSave, type OutsideLookupResult,
+} from "@shared/recordLookup";
 
 export const OPEN_PALETTE_EVENT = "velocity:open-palette";
 export const openCommandPalette = () =>
@@ -54,11 +68,22 @@ function RecordRow({ hit, onGo }: { hit: RecordHit; onGo: (href: string) => void
   );
 }
 
+/** One look outside the workspace: what was asked, and what came back. */
+type Outside = { q: string; kind: LookupKind; status: "looking" | "done" | "failed"; data?: OutsideLookupResult; error?: string };
+
 export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [asked, setAsked] = useState("");
+  const [outside, setOutside] = useState<Outside | null>(null);
+  /** A row that spends credits is pressed twice: this is the one pressed once. */
+  const [armed, setArmed] = useState<string | null>(null);
+  const [saving, setSaving] = useState<string | null>(null);
+  /** Only the latest lookup may write its answer. */
+  const lookupSeq = useRef(0);
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
+  const createFromLookup = trpc.search.createFromLookup.useMutation();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -77,7 +102,9 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
   }, []);
 
   // Each opening starts empty: yesterday's search is not today's question.
-  useEffect(() => { if (!open) { setText(""); setAsked(""); } }, [open]);
+  useEffect(() => {
+    if (!open) { setText(""); setAsked(""); setOutside(null); setArmed(null); setSaving(null); lookupSeq.current += 1; }
+  }, [open]);
 
   // The records are asked for once typing pauses, not on every key.
   useEffect(() => {
@@ -101,6 +128,57 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
     navigate(href);
   };
 
+  // What was looked up outside belongs to the text it was looked up for.
+  const found = outside && typed && outside.q === typed.text ? outside : null;
+
+  /** Ask LinkedIn and the databases. Runs on a press, never on a keystroke. */
+  const lookUp = async (kind: LookupKind) => {
+    if (!typed) return;
+    const q = typed.text;
+    const seq = ++lookupSeq.current;
+    const mine = () => seq === lookupSeq.current;
+    setArmed(null);
+    setOutside({ q, kind, status: "looking" });
+    try {
+      // The same name asked again within a minute is answered from memory:
+      // a second press is not a second LinkedIn search.
+      let r = await utils.search.lookup.fetch({ q, kind }, { staleTime: 60_000 });
+      let all = r;
+      for (let i = 0; r.pending && i < LOOKUP_RESUMES && mine(); i++) {
+        setOutside({ q, kind, status: "looking", data: all });
+        r = await utils.search.lookup.fetch({ q, kind, runId: r.pending.runId }, { staleTime: 0 });
+        all = mergeLookup(all, r);
+      }
+      if (mine()) setOutside({ q, kind, status: "done", data: all });
+    } catch (e) {
+      if (mine()) setOutside({ q, kind, status: "failed", error: (e as Error)?.message || "The lookup could not be run." });
+    }
+  };
+
+  /** Save one found row, then open the record it became. */
+  const saveRow = async (ref: string, save: LookupSave) => {
+    if (saving) return;
+    setSaving(ref);
+    try {
+      const r = await createFromLookup.mutateAsync({ save });
+      toast.success(r.message);
+      void utils.search.records.invalidate();
+      go(r.href);
+    } catch (e) {
+      toast.error((e as Error)?.message || "The record could not be saved.");
+    } finally {
+      setSaving(null);
+      setArmed(null);
+    }
+  };
+
+  const pressFound = (row: { ref: string; already: { href: string } | null; save: LookupSave; saveCost?: number }) => {
+    if (row.already) return go(row.already.href);
+    // A row that spends a source's credits says so, and is pressed again to spend them.
+    if ((row.saveCost ?? 0) > 0 && armed !== row.ref) return setArmed(row.ref);
+    void saveRow(row.ref, row.save);
+  };
+
   // The pages: every word typed must appear in a page's name, group, keywords or description.
   const pages = useMemo(() => {
     const visible = TOOLS.filter((t) => !t.adminOnly || isAdmin);
@@ -116,7 +194,7 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogHeader className="sr-only">
         <DialogTitle>Search</DialogTitle>
-        <DialogDescription>Find a person, a company or a lead by name, company or email address, or jump to a page.</DialogDescription>
+        <DialogDescription>Find a person, a company or a lead by name, company or email address, look one up in your prospect sources, or jump to a page.</DialogDescription>
       </DialogHeader>
       <DialogContent className="overflow-hidden p-0" showCloseButton>
         {/* shouldFilter off: the server decides which records match, and the
@@ -167,6 +245,77 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
                 {records.isError && !waiting ? (
                   <div className="px-4 py-3 text-[12.5px] text-rose-700 dark:text-rose-300" data-record-search-state="error">
                     The search could not be run. Try again.
+                  </div>
+                ) : null}
+
+                {/* Look further. Offered once the records have answered; first
+                    in the list when they found nobody, so Enter runs it. */}
+                {!waiting && data ? (
+                  <CommandGroup heading={hits.length === 0 ? "Look outside your records" : "Not the one? Look outside your records"}>
+                    {lookupKindsFor(typed).map((kind) => {
+                      const plan = planLookup(typed, kind);
+                      const looking = found?.status === "looking" && found.kind === kind;
+                      const Icon = looking ? Loader2 : plan.companyDomains.length ? Globe : kind === "person" ? User : Building2;
+                      return (
+                        <CommandItem key={kind} value={`lookup-${kind}`} onSelect={() => void lookUp(kind)} disabled={looking} className="gap-2.5 items-start" data-outside-lookup={kind}>
+                          <Icon className={`size-4 mt-0.5 text-muted-foreground${looking ? " animate-spin" : ""}`} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">
+                              {kind === "person" ? `Look up “${plan.subject}” as a person` : `Look up the company “${plan.subject}”`}
+                            </span>
+                            <span className="block truncate text-[12px] text-muted-foreground">
+                              {looking ? "Asking your prospect sources…"
+                                : plan.note ? "No source finds a person from an email address. This looks up their company."
+                                : kind === "person" ? "LinkedIn and your prospect databases" : "Your prospect databases"}
+                            </span>
+                          </span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                ) : null}
+
+                {found?.data && (found.data.people.length > 0 || found.data.companies.length > 0) ? (
+                  <CommandGroup heading={`Found outside your records${found.data.searched.length ? ` · ${found.data.searched.join(", ")}` : ""}`}>
+                    {found.data.companies.map((c) => (
+                      <CommandItem key={c.ref} value={`out-${c.ref}`} onSelect={() => pressFound(c)} disabled={saving !== null} className="gap-2.5 items-start" data-outside-hit="company">
+                        <Building2 className="size-4 mt-0.5 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{c.name}</span>
+                          <span className="block truncate text-[12px] text-muted-foreground">{c.typed ? "As typed, with no details yet" : outsideCompanyDetail(c)}</span>
+                        </span>
+                        <span className="ml-auto shrink-0 text-[11px] font-medium text-primary">
+                          {saving === c.ref ? "Saving…" : c.already ? "In Companies · open" : "Create company"}
+                        </span>
+                      </CommandItem>
+                    ))}
+                    {found.data.people.map((p) => (
+                      <CommandItem key={p.ref} value={`out-${p.ref}`} onSelect={() => pressFound(p)} disabled={saving !== null} className="gap-2.5 items-start" data-outside-hit="person">
+                        <User className="size-4 mt-0.5 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{p.name}</span>
+                          <span className="block truncate text-[12px] text-muted-foreground">{outsidePersonDetail(p)}</span>
+                        </span>
+                        <span className="ml-auto shrink-0 text-[11px] font-medium text-primary">
+                          {saving === p.ref ? "Saving…" : armed === p.ref ? `Press again to spend ${p.saveCost} ${p.saveCost === 1 ? "credit" : "credits"}` : saveLabel(p)}
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ) : null}
+                {found?.status === "done" && found.data && found.data.people.length === 0 && found.data.companies.length === 0 ? (
+                  <div className="px-4 py-3 text-[12.5px] text-muted-foreground" data-outside-state="none">
+                    Nothing came back for “{found.data.subject}”{found.data.searched.length ? ` from ${found.data.searched.join(", ")}` : ""}.
+                  </div>
+                ) : null}
+                {found?.data && found.data.notes.length > 0 ? (
+                  <div className="px-4 pb-2 text-[12px] text-muted-foreground" data-outside-state="notes">
+                    {found.data.notes.map((n) => <p key={n} className="py-0.5">{n}</p>)}
+                  </div>
+                ) : null}
+                {found?.status === "failed" ? (
+                  <div className="px-4 py-3 text-[12.5px] text-rose-700 dark:text-rose-300" data-outside-state="failed">
+                    {found.error}
                   </div>
                 ) : null}
               </>

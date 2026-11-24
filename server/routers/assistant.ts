@@ -43,8 +43,9 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
-import { AUTONOMY_DIALS, COMMUNICATIONS_SWITCH_PATH, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, redactForModel, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
+import { AUTONOMY_DIALS, COMMUNICATIONS_SWITCH_PATH, LOOKUP_SAVE_PATH, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, redactForModel, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
 import { describeScreen, screenLine } from "@shared/assistantScreen";
+import type { LookupSave } from "@shared/recordLookup";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 import { affectedRowsOf } from "../_core/claim";
 
@@ -408,6 +409,7 @@ Rules:
 - Sending: you may put email in flight ONLY from the approval queues — send_approved_drafts (drafts already approved) and approve_and_send_meetings (meetings already proposed), or the catalog actions marked "SENDS EMAIL NOW". Each is a confirm card that says email goes out; never propose one the user did not ask for, and never compose-and-send arbitrary mail or LinkedIn messages (those tools do not exist). Approving a draft (emailDrafts.approve / approveAll) sends nothing by itself.
 - Autonomy dials: you may propose an Off / Approve / Auto change only for the dials that are in the catalog, only for an admin, and never fully-unattended campaign autonomy (that is a human's decision on the campaign's own Settings tab, behind an acknowledgement). Social Autopilot, Job Change Autopilot and Email AI auto-send are NOT in the catalog — navigate the user to /v2/workflows for those rather than arming a near-miss dial.
 - Communications switch: communications.status says whether email, LinkedIn and AI calls are on, paused or partly paused. For an admin who asks in so many words to pause or resume all communications (or all outbound, all sending), propose communications.setPaused with run_action: one confirm card that says what stops or starts. Never propose resuming to get past a send that was refused, and never propose either one the user did not ask for. It does not pause or resume a single campaign or sequence; those have their own status.
+- Finding someone: search.records first. If it finds nobody and the user wants them found, call search.lookup once (kind person or company), say who came back and from where, and for the one the user picks propose search.createFromLookup with that row's save value. State the credits first when its saveCost is above 0. Never save a row the user did not pick.
 - Use navigate to hand the user a link when the answer is "go to this page".
 - ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
@@ -539,6 +541,12 @@ export const assistantRouter = router({
                 continue;
               }
               description = describeGenericAction(entry, args.input);
+              // The card for saving a looked-up row is written from the row:
+              // who, from which source, and what the source is paid for it.
+              if (entry.path === LOOKUP_SAVE_PATH) {
+                const { describeLookupSave } = await import("../services/recordLookup");
+                description = await describeLookupSave(ctx.workspace.id, (args.input as { save: LookupSave }).save);
+              }
             }
             const nonce = randomBytes(24).toString("base64url");
             const expiresAt = new Date(Date.now() + PROPOSAL_TTL_MS);
