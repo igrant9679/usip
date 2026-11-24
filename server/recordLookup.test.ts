@@ -327,6 +327,12 @@ describe("the lookup", () => {
     expect(g[0]).toMatchObject({ industry: "Nonprofit", size: "1000+" });
   });
 
+  it("the company with the most people is listed first, whichever a source returned first", () => {
+    const row = (companyName: string) => ({ companyName, companyDomain: null, industry: null, headcount: null });
+    const g = groupCompanies([row("Acme Labs"), row("Acme"), row("Acme Inc"), row("Acme")]);
+    expect(g.map((x) => [x.name, x.n])).toEqual([["Acme", 3], ["Acme Labs", 1]]);
+  });
+
   it("a merged row takes the spelling most people carry, and different companies are left apart", () => {
     const g = groupCompanies([
       { companyName: "Acme, Inc.", companyDomain: null, industry: null, headcount: null },
