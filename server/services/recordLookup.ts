@@ -45,7 +45,7 @@ import { credentialView, loadCredentials } from "./prospectSources/credentials";
 import { alreadyInWorkspace, workspaceIdentityIndex, type KnownIdentity } from "./prospectSources/dedupe";
 import type { ProspectRecord } from "./prospectSources/types";
 import { queueIdentityKeys } from "./are/queueIdentity";
-import { normalizeDomain } from "./company/normalize";
+import { normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { companyFromUrl } from "./company/nameRepair";
 import { findWorkspaceAccountMatch, shouldAutoLink } from "./company/matchingService";
 import { createWorkspaceAccount } from "./company/associationService";
@@ -159,22 +159,63 @@ async function peopleFromRun(workspaceId: number, view: RunView, plan: LookupPla
   return { people, records };
 }
 
-/** The companies the found people work at, read off their rows. */
-async function companiesFrom(workspaceId: number, records: ProspectRecord[]): Promise<OutsideCompany[]> {
-  const groups = new Map<string, { name: string; domain: string | null; industry: string | null; size: string | null; n: number }>();
+export type CompanyGroup = { name: string; domain: string | null; industry: string | null; size: string | null; n: number };
+
+/**
+ * The companies the found people work at, read off their rows, ONE row per
+ * company (owner, 2026-11-24: "merge the duplicate company rows into one").
+ *
+ * A source writes one company several ways: with and without "Inc", with a
+ * domain on one person and none on the next. Keyed by domain-or-exact-name,
+ * a lookup of one charity listed it three times, and each row would have made
+ * its own record. So rows are grouped by the NORMALISED name (the matcher's
+ * own rule, which drops legal suffixes and punctuation), and a domain found
+ * on any of them is the company's.
+ *
+ * The one case kept apart: the same name on two DIFFERENT domains. Those are
+ * different organisations that share a name (two chapters of one charity),
+ * so each domain is its own row, and people with no domain, who cannot be
+ * told apart, stay in a row of their own rather than be given to either.
+ */
+export function groupCompanies(records: Array<Pick<ProspectRecord, "companyName" | "companyDomain" | "industry" | "headcount">>): CompanyGroup[] {
+  type Row = { name: string; domain: string | null; industry: string | null; size: string | null };
+  const byName = new Map<string, Row[]>();
   for (let i = 0; i < records.length; i++) {
     const rec = records[i];
     const domain = normalizeDomain(rec.companyDomain) || null;
     const name = clean(rec.companyName) ?? (domain ? companyFromUrl(domain) ?? domain : null);
     if (!name) continue;
-    const key = domain ?? name.toLowerCase();
-    const g = groups.get(key) ?? { name, domain, industry: clean(rec.industry), size: clean(rec.headcount), n: 0 };
-    g.n += 1;
-    g.industry = g.industry ?? clean(rec.industry);
-    g.size = g.size ?? clean(rec.headcount);
-    groups.set(key, g);
+    const key = normalizeCompanyName(name) || domain || name.toLowerCase();
+    const rows = byName.get(key) ?? [];
+    rows.push({ name, domain, industry: clean(rec.industry), size: clean(rec.headcount) });
+    byName.set(key, rows);
   }
-  const top = Array.from(groups.values()).sort((a, b) => b.n - a.n).slice(0, 3);
+  /** One row for these people: the spelling most of them carry, and the first industry and size any has. */
+  const merge = (rows: Row[], domain: string | null): CompanyGroup => {
+    const spellings = new Map<string, number>();
+    for (const r of rows) spellings.set(r.name, (spellings.get(r.name) ?? 0) + 1);
+    let name = rows[0].name;
+    spellings.forEach((n, spelling) => { if (n > (spellings.get(name) ?? 0)) name = spelling; });
+    return {
+      name, domain,
+      industry: rows.find((r) => r.industry)?.industry ?? null,
+      size: rows.find((r) => r.size)?.size ?? null,
+      n: rows.length,
+    };
+  };
+  const out: CompanyGroup[] = [];
+  byName.forEach((rows) => {
+    const domains = rows.map((r) => r.domain).filter((d, k, all): d is string => !!d && all.indexOf(d) === k);
+    if (domains.length <= 1) { out.push(merge(rows, domains[0] ?? null)); return; }
+    for (const d of domains) out.push(merge(rows.filter((r) => r.domain === d), d));
+    const unplaced = rows.filter((r) => !r.domain);
+    if (unplaced.length) out.push(merge(unplaced, null));
+  });
+  return out.sort((a, b) => b.n - a.n);
+}
+
+async function companiesFrom(workspaceId: number, records: ProspectRecord[]): Promise<OutsideCompany[]> {
+  const top = groupCompanies(records).slice(0, 3);
   const out: OutsideCompany[] = [];
   for (let i = 0; i < top.length; i++) {
     const g = top[i];

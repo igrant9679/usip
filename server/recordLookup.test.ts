@@ -74,7 +74,7 @@ vi.mock("./services/discovery", () => ({
   saveFindsAsPeople: async (...args: unknown[]) => { h.savedFinds.push(args); return { runId: 5, prospectsCreated: 1, prospectsUpdated: 0, prospectsSkipped: 0 }; },
 }));
 
-import { describeLookupSave, lookupOutside, matchesLookup, saveFromLookup } from "./services/recordLookup";
+import { describeLookupSave, groupCompanies, lookupOutside, matchesLookup, saveFromLookup } from "./services/recordLookup";
 import { parseRecordSearch } from "@shared/recordSearch";
 import {
   LOOKUP_MAX, LOOKUP_TARGET, NO_EMAIL_LOOKUP_NOTE, lookupKindsFor, mergeLookup, outsidePersonDetail, planLookup, saveLabel,
@@ -290,6 +290,62 @@ describe("the lookup", () => {
     h.match = { accountId: 44, confidence: "exact_match" };
     const again = await lookupOutside(CALLER, "acme", "company");
     expect(again.companies[0].already).toEqual({ href: "/v2/companies/44" });
+  });
+
+  it("one company written three ways is one row, with the domain any of its people carried", async () => {
+    // What a live lookup returned on 2026-11-24: 23 people with no domain, one "… Inc", one with the domain.
+    const plain = Array.from({ length: 4 }, (_, i) => staged(i + 1, "warmysender", record({ externalId: `p${i}`, lastName: `Doe${i}`, companyName: "Habitat for Humanity of Pinellas County", companyDomain: null })));
+    h.run = run([
+      ...plain,
+      staged(10, "warmysender", record({ externalId: "inc", lastName: "Roe", companyName: "Habitat for Humanity of Pinellas County, Inc.", companyDomain: null, industry: null, headcount: null })),
+      staged(11, "warmysender", record({ externalId: "dom", lastName: "Poe", companyName: "Habitat for Humanity of Pinellas County", companyDomain: "www.habitatpinellas.org" })),
+    ]);
+    const r = await lookupOutside(CALLER, "habitat for humanity of pinellas county", "company", null, { limit: LOOKUP_MAX });
+    expect(r.people).toHaveLength(6);
+    expect(r.companies).toHaveLength(1);
+    expect(r.companies[0]).toMatchObject({
+      name: "Habitat for Humanity of Pinellas County", domain: "habitatpinellas.org", peopleFound: 6, typed: false,
+      save: { type: "company", name: "Habitat for Humanity of Pinellas County", domain: "habitatpinellas.org" },
+    });
+    // The record it would make is checked against Companies under that one identity.
+    expect(h.matchCalls[h.matchCalls.length - 1][1]).toEqual({ name: "Habitat for Humanity of Pinellas County", domain: "habitatpinellas.org" });
+  });
+
+  it("the same name on two different domains stays two companies", () => {
+    const g = groupCompanies([
+      { companyName: "Habitat for Humanity", companyDomain: "habitat.org", industry: "Nonprofit", headcount: "1000+" },
+      { companyName: "Habitat for Humanity", companyDomain: "habitat.org", industry: null, headcount: null },
+      { companyName: "Habitat for Humanity Inc", companyDomain: "habitatpinellas.org", industry: null, headcount: null },
+      // No domain: it cannot be told which of the two this person works at.
+      { companyName: "Habitat for Humanity", companyDomain: null, industry: null, headcount: null },
+    ]);
+    expect(g.map((x) => [x.name, x.domain, x.n])).toEqual([
+      ["Habitat for Humanity", "habitat.org", 2],
+      ["Habitat for Humanity Inc", "habitatpinellas.org", 1],
+      ["Habitat for Humanity", null, 1],
+    ]);
+    expect(g[0]).toMatchObject({ industry: "Nonprofit", size: "1000+" });
+  });
+
+  it("the company with the most people is listed first, whichever a source returned first", () => {
+    const row = (companyName: string) => ({ companyName, companyDomain: null, industry: null, headcount: null });
+    const g = groupCompanies([row("Acme Labs"), row("Acme"), row("Acme Inc"), row("Acme")]);
+    expect(g.map((x) => [x.name, x.n])).toEqual([["Acme", 3], ["Acme Labs", 1]]);
+  });
+
+  it("a merged row takes the spelling most people carry, and different companies are left apart", () => {
+    const g = groupCompanies([
+      { companyName: "Acme, Inc.", companyDomain: null, industry: null, headcount: null },
+      { companyName: "Acme", companyDomain: null, industry: null, headcount: "51-200" },
+      { companyName: "ACME", companyDomain: null, industry: "Software", headcount: null },
+      { companyName: "Acme", companyDomain: null, industry: null, headcount: null },
+      { companyName: "Acme Labs", companyDomain: null, industry: null, headcount: null },
+      { companyName: null, companyDomain: "globex.com", industry: null, headcount: null },
+      { companyName: null, companyDomain: null, industry: null, headcount: null },
+    ]);
+    expect(g.map((x) => [x.name, x.domain, x.n])).toEqual([["Acme", null, 4], ["Acme Labs", null, 1], ["globex", "globex.com", 1]]);
+    // The first industry and size any of them has.
+    expect(g[0]).toMatchObject({ industry: "Software", size: "51-200" });
   });
 
   it("when no source returns the company, it can still be created from what was typed", async () => {
