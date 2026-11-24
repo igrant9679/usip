@@ -42,6 +42,7 @@ import { emailActivityRouter } from "./routers/emailActivity";
 import { sequenceTimelineRouter } from "./routers/sequenceTimeline";
 import { sendingStatusRouter } from "./routers/sendingStatus";
 import { communicationsRouter } from "./routers/communications";
+import { searchRouter } from "./routers/search";
 import { linkedinLimitsRouter } from "./routers/linkedinLimits";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
@@ -138,6 +139,8 @@ export const appRouter = router({
   sendingStatus: sendingStatusRouter,
   // One switch for email, LinkedIn and AI calls (shared/communications.ts).
   communications: communicationsRouter,
+  // The header's search box: people, companies and leads in one read (shared/recordSearch.ts).
+  search: searchRouter,
   emailDrafts: emailDraftsRouter,
   emailActivity: emailActivityRouter,
   linkedinLimits: linkedinLimitsRouter,
