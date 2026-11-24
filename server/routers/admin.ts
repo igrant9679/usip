@@ -45,7 +45,7 @@ import { isSupportedCurrency } from "@shared/revenueSettings";
 import { getRequestClientIp } from "../_core/requestContext";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
-import { normalizeSources } from "@shared/areSources";
+import { PRIMARY_SOURCE_CHOICES, normalizeSources } from "@shared/areSources";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import {
@@ -465,6 +465,23 @@ export const settingsRouter = router({
       areSequenceQualityThreshold: (s as any).areSequenceQualityThreshold ?? null,
     };
   }),
+
+  /**
+   * The workspace's primary prospect source (owner, 2026-11-24): the picker on
+   * Settings -> Data sources. It writes the ONE checking order
+   * (areSourceOrder) with the choice moved to the front, so the engine, Source
+   * search and the Search box lookup all try it first and fall back to the
+   * rest in the order they already had. It switches nothing on or off, and it
+   * does not opt a source that bills its previews into searches that did not
+   * tick it.
+   */
+  setPrimarySource: adminWsProcedure
+    .input(z.object({ source: z.enum(PRIMARY_SOURCE_CHOICES) }))
+    .mutation(async ({ ctx, input }) => {
+      await getOrSeedSettings(ctx.workspace.id);
+      const { setPrimarySource } = await import("../services/primarySource");
+      return setPrimarySource(ctx.workspace.id, ctx.user.id, input.source);
+    }),
 
   // Workspace-wide ARE config (autonomy mode, daily cap, auto-approve
   // thresholds, notifications) — admin-only to match the rest of the

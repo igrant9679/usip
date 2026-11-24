@@ -54,6 +54,7 @@ import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard"
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
 import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
+import { PrimarySourceCard } from "@/components/usip/settings/PrimarySourceCard";
 import { ProspectSourceRegistryCard } from "@/components/usip/settings/ProspectSourceRegistryCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { TotpSetupDialog } from "@/components/usip/settings/TotpSetupDialog";
@@ -159,7 +160,7 @@ const GROUPS: HubGroup[] = [
       { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true, keywords: ["notifications", "notify", "policy"] },
       { id: "integrations", label: "Integrations", icon: Plug, internal: true, keywords: ["webhook", "webhooks", "api key", "api keys", "ai providers", "openai", "anthropic", "gemini", "deepseek", "slack", "teams", "google maps", "sendgrid"] },
       { id: "knowledge", label: "Knowledge base", icon: BookOpen, internal: true, keywords: ["documents", "faq", "knowledge"] },
-      { id: "data-sources", label: "Data sources", icon: Database, internal: true, keywords: ["apollo", "reoon", "quickenrich", "warmysender", "leadocean", "vendors", "api key", "api keys", "verification", "providers"] },
+      { id: "data-sources", label: "Data sources", icon: Database, internal: true, keywords: ["apollo", "reoon", "quickenrich", "warmysender", "leadocean", "vendors", "api key", "api keys", "verification", "providers", "primary source", "fallback", "source order"] },
       { id: "email-delivery", label: "Email delivery", icon: Send, internal: true, keywords: ["smtp", "from name", "sender", "deliverability", "email identity", "system email"] },
       { id: "branding", label: "Branding", icon: Palette, internal: true, keywords: ["brand", "logo", "colours", "colors", "brand voice"] },
       { id: "proposals", label: "Proposals", icon: FileText, internal: true, keywords: ["quote", "quotes", "e-signature", "portal", "expiry"] },
@@ -370,6 +371,8 @@ export default function SettingsHub() {
         {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (
           <div className="space-y-4" data-tour-id="settings-data-sources">
+            {/* Which source is tried first; the rest are fallbacks (owner, 2026-11-24). */}
+            <PrimarySourceCard />
             <ProspectSourceRegistryCard />
             <WarmySenderSourceCard />
             <QuickEnrichSourceCard />

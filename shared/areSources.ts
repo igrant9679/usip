@@ -220,3 +220,48 @@ export function selectRunSources(
   }
   return { run, masked, unselected };
 }
+
+/**
+ * The sources a workspace can name as its PRIMARY (owner, 2026-11-24: "each
+ * workspace to pick which leads/prospect source to use as a primary source;
+ * the unselected will be fallback"): the ones that find new people. The
+ * workspace's own contacts, places and news are not a choice of vendor.
+ */
+export const PRIMARY_SOURCE_CHOICES = ["quickenrich", "warmysender", "apollo", "leadocean", "linkedin"] as const satisfies readonly AreSourceId[];
+export type PrimarySourceId = (typeof PRIMARY_SOURCE_CHOICES)[number];
+
+export function isPrimarySourceChoice(id: unknown): id is PrimarySourceId {
+  return typeof id === "string" && (PRIMARY_SOURCE_CHOICES as readonly string[]).indexOf(id) !== -1;
+}
+
+/** The whole checking order a stored order resolves to: nothing masked, nothing unselected. */
+export function fullSourceOrder(orderRaw: unknown): AreSourceId[] {
+  return resolveSourceOrder(orderRaw, {}, ARE_SOURCE_IDS);
+}
+
+/**
+ * The primary source is not a second setting: it is whichever of the choices
+ * the workspace's order checks FIRST. One order, read by the engine, Source
+ * search and the Search box lookup alike, so the picker in Settings can never
+ * say one thing while a search does another.
+ */
+export function primarySourceOf(orderRaw: unknown): PrimarySourceId {
+  const first = fullSourceOrder(orderRaw).find(isPrimarySourceChoice);
+  return first ?? PRIMARY_SOURCE_CHOICES[0];
+}
+
+/** The fallbacks, in the order they are tried after the primary. */
+export function fallbackSourcesOf(orderRaw: unknown): PrimarySourceId[] {
+  const primary = primarySourceOf(orderRaw);
+  return fullSourceOrder(orderRaw).filter(isPrimarySourceChoice).filter((s) => s !== primary);
+}
+
+/**
+ * The order with `primary` moved to the very front. Every other source keeps
+ * its place relative to the rest, so the fallbacks stay in the order the
+ * workspace already had.
+ */
+export function orderWithPrimary(orderRaw: unknown, primary: PrimarySourceId): AreSourceId[] {
+  const rest = fullSourceOrder(orderRaw).filter((s) => s !== primary);
+  return [primary as AreSourceId].concat(rest);
+}
