@@ -38,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { NameLookupCard } from "@/components/usip/NameLookupCard";
 import {
   Dialog,
   DialogContent,
@@ -308,6 +309,8 @@ export default function People() {
   // The open person is in the address too (?person=), so a link opens them.
   const [selectedId, setSelectedId] = useUrlState("person", urlParam.id());
   const [photoBatchOpen, setPhotoBatchOpen] = useState(false);
+  // Find one person, or a company's people, by name: own records first, then the prospect sources on request.
+  const [nameLookupOpen, setNameLookupOpen] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [moreOpen, setMoreOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -944,6 +947,9 @@ export default function People() {
             <button type="button" className="underline hover:text-foreground" onClick={() => setLocation("/leads")}>Leads</button>.
           </p>
           <div className="flex-1" />
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setNameLookupOpen(true)} data-people-name-lookup>
+            <Search className="size-3.5" /> Look up by name
+          </Button>
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setPhotoBatchOpen(true)}>
             <ImagePlus className="size-3.5" /> Photos
           </Button>
@@ -1270,6 +1276,15 @@ export default function People() {
 
       <MoreFiltersDialog open={moreOpen} onClose={() => setMoreOpen(false)} count={total} onPick={pickFilterGroup} />
       <BatchPhotoUpload open={photoBatchOpen} onClose={() => setPhotoBatchOpen(false)} />
+      <Dialog open={nameLookupOpen} onOpenChange={setNameLookupOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Find a person or a company by name</DialogTitle>
+            <DialogDescription>Your own records are searched first. If they are not there, you are asked before your prospect sources are.</DialogDescription>
+          </DialogHeader>
+          <NameLookupCard variant="bare" />
+        </DialogContent>
+      </Dialog>
       <SearchSettingsSheet
         open={settings.open}
         onOpenChange={(o) => setSettings((s) => ({ ...s, open: o }))}

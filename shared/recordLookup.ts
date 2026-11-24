@@ -21,8 +21,19 @@ import type { RecordSearchQuery } from "./recordSearch";
 
 export type LookupKind = "person" | "company";
 
-/** Rows asked of the databases, and of LinkedIn, per lookup. */
+/** Rows asked of the databases, and of LinkedIn, per lookup from the Search box. */
 export const LOOKUP_TARGET = 6;
+/**
+ * The most one lookup may ask for. The name lookup on Find prospects and
+ * People asks for this many (owner, 2026-11-24: "search for a company
+ * (retrieving employees)"): six rows is a glance, not a company's people.
+ */
+export const LOOKUP_MAX = 25;
+/** The limit a lookup runs with: what was asked, within 1 and LOOKUP_MAX; LOOKUP_TARGET when nothing was. */
+export function lookupLimit(asked: number | null | undefined): number {
+  if (asked == null || !Number.isFinite(asked)) return LOOKUP_TARGET;
+  return Math.max(1, Math.min(LOOKUP_MAX, Math.floor(asked)));
+}
 /** How long one call waits for the databases before it answers "still searching". */
 export const LOOKUP_WAIT_MS = 25_000;
 
@@ -159,4 +170,46 @@ export function saveLabel(p: Pick<OutsidePerson, "already" | "saveCost" | "via">
   if (p.already) return "In People · open";
   if (p.saveCost > 0) return `Create · ${p.saveCost} ${p.via} ${p.saveCost === 1 ? "credit" : "credits"}`;
   return "Create record";
+}
+
+/** What saving these rows would spend, in all and by source ("2 WarmySender credits, 1 LeadOcean credit"). */
+export function lookupSaveCost(rows: Array<Pick<OutsidePerson, "saveCost" | "via">>): { total: number; text: string } {
+  const by = new Map<string, number>();
+  for (const r of rows) if (r.saveCost > 0) by.set(r.via, (by.get(r.via) ?? 0) + r.saveCost);
+  const parts: string[] = [];
+  let total = 0;
+  by.forEach((n, via) => { total += n; parts.push(`${n} ${via} ${n === 1 ? "credit" : "credits"}`); });
+  return { total, text: parts.join(", ") };
+}
+
+/**
+ * A middle name cannot be searched for: people here, and the rows the sources
+ * return, carry a first and a last name only (owner, 2026-11-24: "first name,
+ * last name, middle name search option"). So it rules nobody out. It ORDERS:
+ * a row whose name carries the middle name, or its initial between the first
+ * and last words, is listed first. The order is otherwise left as it came.
+ */
+export function carriesMiddleName(name: string, middle: string): boolean {
+  const tokens = middle.toLowerCase().replace(/[.,]/g, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  const words = name.toLowerCase().replace(/[.,]/g, " ").split(/\s+/).filter(Boolean);
+  const inner = words.slice(1, -1);
+  return tokens.every((t) => (t.length === 1
+    // An initial typed: a word between the first and last names that starts with it.
+    ? inner.some((w) => w.startsWith(t))
+    // A name typed: that word anywhere, or between first and last a longer form of it or its bare initial ("M" for Marie).
+    : words.some((w) => w === t) || inner.some((w) => w.startsWith(t) || (w.length === 1 && t.startsWith(w)))));
+}
+
+export function orderByMiddleName<T extends { name: string }>(rows: T[], middle: string): T[] {
+  if (!middle.trim()) return rows;
+  const first: T[] = [];
+  const rest: T[] = [];
+  for (const r of rows) (carriesMiddleName(r.name, middle) ? first : rest).push(r);
+  return first.concat(rest);
+}
+
+/** What a person is searched for by: first and last name, and the company when given. Never the middle name. */
+export function personQuery(p: { first: string; last: string; company?: string }): string {
+  return [p.first, p.last, p.company ?? ""].map((s) => s.trim()).filter(Boolean).join(" ");
 }

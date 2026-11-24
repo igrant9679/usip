@@ -184,7 +184,8 @@ describe("the card in Settings", () => {
     expect(src).toContain("const order = settings.data?.areSourceOrder ?? null;");
     expect(src).toContain("const primary = primarySourceOf(order);");
     expect(src).toContain("const fallbacks = fallbackSourcesOf(order);");
-    expect(src).toContain("{PRIMARY_SOURCE_CHOICES.map((id) => {");
+    // Listed as they are tried: the primary, then Fallback 1, 2, 3…
+    expect(src).toContain("{[primary, ...fallbacks].map((id) => {");
     expect(src).toContain("{chosen ? \"Primary\" : `Fallback ${place + 1}`}");
   });
 

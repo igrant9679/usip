@@ -14,6 +14,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { confirmAction } from "@/components/usip/Common";
+import { NameLookupCard } from "@/components/usip/NameLookupCard";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { foldRedirectUrl } from "./dataEnrichmentTabs";
@@ -618,6 +619,8 @@ export function FindProspectsPanel() {
 
   return (
       <div className="max-w-7xl mx-auto space-y-6">
+        {/* By NAME: one person, or a company and its people. The wizard below searches by role. */}
+        <NameLookupCard />
         {/* ── Search wizard ── */}
         <Card>
           <CardHeader className="pb-3">
