@@ -191,6 +191,16 @@ export interface SkippedSource {
 }
 
 /**
+ * Is this source switched off for the workspace (the "Use …" switch on its
+ * Settings card)? Off means off for everything the source can do, so callers
+ * outside the search waterfall (services/secondVerifier) ask here too.
+ */
+export async function sourceSwitchedOff(workspaceId: number, slug: ProspectSourceSlug): Promise<boolean> {
+  const { mask } = await workspaceOrder(workspaceId);
+  return mask[slug] === false;
+}
+
+/**
  * The waterfall input: eligible sources in checking order, plus why each
  * other source was left out (surfaced in run logs and the source strip).
  * `only` restricts to a campaign's selected sources (its prospectSources).

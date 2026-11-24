@@ -113,7 +113,8 @@ export default function ProspectDetail() {
   // What a Verify spends, said before it runs (audit 2026-10-20, F8).
   const budgets = useSourceBudgets();
   const verify = trpc.prospects.verifyEmail.useMutation({
-    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}`); invalidatePeopleReads(utils); },
+    // Says so when the second verifier decided (services/secondVerifier).
+    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}${r.verifier === "warmysender" ? " · decided by WarmySender, Reoon could not" : ""}`); invalidatePeopleReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.prospects.review.useMutation({

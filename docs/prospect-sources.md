@@ -99,7 +99,13 @@ Reset semantics per vendor:
   purchased credits never expire. The vendor publishes no remaining-lead
   endpoint, so leads are tracked from what Velocity spends.
 - **WarmySender verification** — `GET /verification/allowance` is
-  authoritative; the ledger mirrors local spend.
+  authoritative; the ledger mirrors local spend. Spent by the second opinion
+  beside Reoon (`services/secondVerifier.ts`, since 2026-11-24): inside
+  `reoonVerifySingle`, a power check Reoon answered "unknown" or failed asks
+  `POST /verification/verify` (scope `verification:write`), one unit held
+  before the call. Never a quick check, never over a Reoon verdict; a
+  catch-all is `accept_all`. Off with `config.verifyUndecided: false` (the
+  switch on the card), with the source switched off, or with Reoon off.
 - **QuickEnrich** — uncapped by credits (no balance endpoint); the existing
   daily pull cap (`workspace_settings.quickenrichDailyPullCap`, metered via
   `are_scrape_jobs`) is the brake.
