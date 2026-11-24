@@ -26,6 +26,7 @@ import { isAdminRole, workspaceProcedure } from "../_core/workspace";
 import { recordAudit } from "../audit";
 import { searchRecords } from "../services/recordSearch";
 import { lookupOutside, saveFromLookup } from "../services/recordLookup";
+import { LOOKUP_MAX } from "@shared/recordLookup";
 
 const name = z.string().trim().min(1).max(80);
 const optional = (max: number) => z.string().trim().max(max).nullish();
@@ -48,10 +49,12 @@ export const searchRouter = router({
       kind: z.enum(["person", "company"]),
       /** The rest of a database search that was still going (result.pending.runId). LinkedIn is not asked again. */
       runId: z.number().int().positive().optional(),
+      /** Rows per source: 6 when left out (the Search box), up to LOOKUP_MAX (the name lookup's list of a company's people). */
+      limit: z.number().int().min(1).max(LOOKUP_MAX).optional(),
     }))
     .query(({ ctx, input }) => lookupOutside(
       { workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin: isAdminRole(ctx.member.role) },
-      input.q, input.kind, input.runId ?? null,
+      input.q, input.kind, input.runId ?? null, { limit: input.limit ?? null },
     )),
 
   createFromLookup: workspaceProcedure

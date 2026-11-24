@@ -77,7 +77,7 @@ vi.mock("./services/discovery", () => ({
 import { describeLookupSave, lookupOutside, matchesLookup, saveFromLookup } from "./services/recordLookup";
 import { parseRecordSearch } from "@shared/recordSearch";
 import {
-  LOOKUP_TARGET, NO_EMAIL_LOOKUP_NOTE, lookupKindsFor, mergeLookup, outsidePersonDetail, planLookup, saveLabel,
+  LOOKUP_MAX, LOOKUP_TARGET, NO_EMAIL_LOOKUP_NOTE, lookupKindsFor, mergeLookup, outsidePersonDetail, planLookup, saveLabel,
   type OutsideLookupResult, type OutsidePerson,
 } from "@shared/recordLookup";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
@@ -187,6 +187,23 @@ describe("the lookup", () => {
     expect(criteria).toMatchObject({ keywords: ["Jane Doe"], companyNames: [], companyDomains: [] });
     // null = connected sources whose preview is free; a billed preview is never asked.
     expect(only).toBeNull();
+  });
+
+  it("the name lookup asks for a list, and no caller can ask for more than the cap", async () => {
+    const many = Array.from({ length: 40 }, (_, i) => staged(i + 1, "apollo", record({ externalId: `x${i}`, firstName: "Jane", lastName: `Doe${i}` })));
+    h.run = run(many);
+    const list = await lookupOutside(CALLER, "jane", "person", null, { limit: LOOKUP_MAX });
+    expect(h.linkedinCalls[0].limit).toBe(LOOKUP_MAX);
+    expect(h.startCalls[0][3]).toBe(LOOKUP_MAX);
+    expect(list.people).toHaveLength(LOOKUP_MAX);
+    h.linkedinCalls = []; h.startCalls = [];
+    const greedy = await lookupOutside(CALLER, "jane", "person", null, { limit: 5000 });
+    expect(h.linkedinCalls[0].limit).toBe(LOOKUP_MAX);
+    expect(h.startCalls[0][3]).toBe(LOOKUP_MAX);
+    expect(greedy.people).toHaveLength(LOOKUP_MAX);
+    // Left out, it is still the Search box's six.
+    const box = await lookupOutside(CALLER, "jane", "person");
+    expect(box.people).toHaveLength(LOOKUP_TARGET);
   });
 
   it("a company is not a LinkedIn search", async () => {
@@ -489,7 +506,9 @@ describe("the endpoints, and Elsie", () => {
     const saved = src.slice(src.indexOf("async function personSavedAs"), src.indexOf("/** Save one row a lookup handed out."));
     expect(saved).toContain("eq(prospects.workspaceId, workspaceId)");
     expect(src).not.toMatch(/personInitiated:\s*true/);
-    expect(src).toContain("LOOKUP_TARGET, null)");
+    // null = the free door; the limit is the clamped one, never a caller's raw number.
+    expect(src).toContain("criteria, limit, null)).runId");
+    expect(src).toContain("const limit = lookupLimit(opts?.limit);");
   });
 });
 

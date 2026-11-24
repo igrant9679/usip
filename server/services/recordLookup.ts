@@ -33,7 +33,7 @@ import { getDb } from "../db";
 import { emptyCriteria, type ProspectSourceSlug, type SearchCriteria } from "@shared/prospectSources";
 import { parseRecordSearch, type RecordSearchQuery } from "@shared/recordSearch";
 import {
-  LOOKUP_TARGET, LOOKUP_WAIT_MS, planLookup,
+  LOOKUP_WAIT_MS, lookupLimit, planLookup,
   type LookupKind, type LookupPlan, type LookupSave, type LookupSaveResult,
   type OutsideCompany, type OutsideLookupResult, type OutsidePerson,
 } from "@shared/recordLookup";
@@ -82,12 +82,12 @@ function emptyResult(query: string, kind: LookupKind, notes: string[]): OutsideL
   return { query, kind, subject: query, people: [], companies: [], searched: [], notes, pending: null };
 }
 
-async function linkedInPeople(caller: LookupCaller, plan: LookupPlan, index: Map<string, KnownIdentity>): Promise<{ people: OutsidePerson[]; searched: boolean; note: string | null }> {
+async function linkedInPeople(caller: LookupCaller, plan: LookupPlan, index: Map<string, KnownIdentity>, limit: number): Promise<{ people: OutsidePerson[]; searched: boolean; note: string | null }> {
   let res: Awaited<ReturnType<typeof searchLinkedInProfiles>>;
   try {
     res = await searchLinkedInProfiles({
       workspaceId: caller.workspaceId, userId: caller.userId, isAdmin: caller.isAdmin,
-      keywords: plan.subject, limit: LOOKUP_TARGET, source: "search_box",
+      keywords: plan.subject, limit, source: "search_box",
       // NOT personInitiated: a search from this box is a search on the account
       // LinkedIn is watching, held like the one on the Social page when the
       // account's LinkedIn activity is paused.
@@ -97,7 +97,7 @@ async function linkedInPeople(caller: LookupCaller, plan: LookupPlan, index: Map
   }
   if (!res.ok) return { people: [], searched: false, note: `LinkedIn was not searched: ${res.message}` };
   const people: OutsidePerson[] = [];
-  for (let i = 0; i < res.hits.length && people.length < LOOKUP_TARGET; i++) {
+  for (let i = 0; i < res.hits.length && people.length < limit; i++) {
     const h = res.hits[i];
     // Owner rule: LinkedIn credential suffixes never enter a name.
     const firstName = clean(stripNameCredentials(h.firstName), 80);
@@ -130,10 +130,10 @@ async function saveCostOf(workspaceId: number, row: { sourceSlug: string; extern
   return creds ? s.estimateAcquireUnits(row.externalId, creds) : 1;
 }
 
-async function peopleFromRun(workspaceId: number, view: RunView, plan: LookupPlan, q: RecordSearchQuery, index: Map<string, KnownIdentity>): Promise<{ people: OutsidePerson[]; records: ProspectRecord[] }> {
+async function peopleFromRun(workspaceId: number, view: RunView, plan: LookupPlan, q: RecordSearchQuery, index: Map<string, KnownIdentity>, limit: number): Promise<{ people: OutsidePerson[]; records: ProspectRecord[] }> {
   const people: OutsidePerson[] = [];
   const records: ProspectRecord[] = [];
-  for (let i = 0; i < view.results.length && people.length < LOOKUP_TARGET; i++) {
+  for (let i = 0; i < view.results.length && people.length < limit; i++) {
     const r = view.results[i];
     const rec = r.normalized as ProspectRecord | null;
     if (!rec) continue;
@@ -221,7 +221,7 @@ export async function lookupOutside(
   raw: string,
   kind: LookupKind,
   resumeRunId?: number | null,
-  opts?: { waitMs?: number },
+  opts?: { waitMs?: number; limit?: number | null },
 ): Promise<OutsideLookupResult> {
   const q = parseRecordSearch(raw);
   if (!q) return emptyResult(String(raw ?? "").trim(), kind, ["Type at least two characters to look up."]);
@@ -229,6 +229,9 @@ export async function lookupOutside(
   const notes: string[] = plan.note ? [plan.note] : [];
   const searched: string[] = [];
   const waitMs = opts?.waitMs ?? LOOKUP_WAIT_MS;
+  // How many rows each source is asked for: six from the Search box, up to
+  // LOOKUP_MAX from the name lookup, never more whatever a caller sends.
+  const limit = lookupLimit(opts?.limit);
   const index = await workspaceIdentityIndex(caller.workspaceId);
 
   /* The databases: start (or pick up) the staged run. */
@@ -243,7 +246,7 @@ export async function lookupOutside(
     try {
       // `only: null` is the free door: a source that bills its previews runs
       // only when a person names it (registry.eligibleFor), never from here.
-      return (await startRun(caller.workspaceId, caller.userId, criteria, LOOKUP_TARGET, null)).runId;
+      return (await startRun(caller.workspaceId, caller.userId, criteria, limit, null)).runId;
     } catch (e) {
       notes.push(`The databases were not searched: ${String((e as Error)?.message ?? e).slice(0, 200)}`);
       return null;
@@ -251,7 +254,7 @@ export async function lookupOutside(
   };
 
   const [li, runId] = await Promise.all([
-    plan.linkedin && !resumeRunId ? linkedInPeople(caller, plan, index) : Promise.resolve({ people: [] as OutsidePerson[], searched: false, note: null as string | null }),
+    plan.linkedin && !resumeRunId ? linkedInPeople(caller, plan, index, limit) : Promise.resolve({ people: [] as OutsidePerson[], searched: false, note: null as string | null }),
     startDatabases(),
   ]);
   if (li.searched) searched.push("LinkedIn");
@@ -281,7 +284,7 @@ export async function lookupOutside(
           ? `${unable.join(", ")} cannot search by ${plan.companyDomains.length ? "company domain" : plan.kind === "company" ? "company name" : "name"}, so no database was asked.`
           : "None of the connected databases could be asked just now.");
       }
-      const found = await peopleFromRun(caller.workspaceId, view, plan, q, index);
+      const found = await peopleFromRun(caller.workspaceId, view, plan, q, index, limit);
       people = people.concat(found.people);
       records = found.records;
     }

@@ -21,8 +21,19 @@ import type { RecordSearchQuery } from "./recordSearch";
 
 export type LookupKind = "person" | "company";
 
-/** Rows asked of the databases, and of LinkedIn, per lookup. */
+/** Rows asked of the databases, and of LinkedIn, per lookup from the Search box. */
 export const LOOKUP_TARGET = 6;
+/**
+ * The most one lookup may ask for. The name lookup on Find prospects and
+ * People asks for this many (owner, 2026-11-24: "search for a company
+ * (retrieving employees)"): six rows is a glance, not a company's people.
+ */
+export const LOOKUP_MAX = 25;
+/** The limit a lookup runs with: what was asked, within 1 and LOOKUP_MAX; LOOKUP_TARGET when nothing was. */
+export function lookupLimit(asked: number | null | undefined): number {
+  if (asked == null || !Number.isFinite(asked)) return LOOKUP_TARGET;
+  return Math.max(1, Math.min(LOOKUP_MAX, Math.floor(asked)));
+}
 /** How long one call waits for the databases before it answers "still searching". */
 export const LOOKUP_WAIT_MS = 25_000;
 
@@ -159,4 +170,14 @@ export function saveLabel(p: Pick<OutsidePerson, "already" | "saveCost" | "via">
   if (p.already) return "In People · open";
   if (p.saveCost > 0) return `Create · ${p.saveCost} ${p.via} ${p.saveCost === 1 ? "credit" : "credits"}`;
   return "Create record";
+}
+
+/** What saving these rows would spend, in all and by source ("2 WarmySender credits, 1 LeadOcean credit"). */
+export function lookupSaveCost(rows: Array<Pick<OutsidePerson, "saveCost" | "via">>): { total: number; text: string } {
+  const by = new Map<string, number>();
+  for (const r of rows) if (r.saveCost > 0) by.set(r.via, (by.get(r.via) ?? 0) + r.saveCost);
+  const parts: string[] = [];
+  let total = 0;
+  by.forEach((n, via) => { total += n; parts.push(`${n} ${via} ${n === 1 ? "credit" : "credits"}`); });
+  return { total, text: parts.join(", ") };
 }
