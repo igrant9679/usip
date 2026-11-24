@@ -83,7 +83,9 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
   const lookupSeq = useRef(0);
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
-  const createFromLookup = trpc.search.createFromLookup.useMutation();
+  const createFromLookup = trpc.search.createFromLookup.useMutation({
+    onError: (e) => toast.error(e.message || "The record could not be saved."),
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -164,8 +166,8 @@ export function CommandPalette({ isAdmin }: { isAdmin: boolean }) {
       toast.success(r.message);
       void utils.search.records.invalidate();
       go(r.href);
-    } catch (e) {
-      toast.error((e as Error)?.message || "The record could not be saved.");
+    } catch {
+      // Said by the mutation's own onError; the box stays open on the row.
     } finally {
       setSaving(null);
       setArmed(null);
