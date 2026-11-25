@@ -11,6 +11,9 @@
  *   Reoon                 whose key; on the shared key, its daily cap and the
  *                         spend ledger's units today (sharedUsedToday)
  *   AI                    the workspace's monthly token budget and use
+ *   Prospect data         the membership plan's monthly allowance and its use
+ *                         this month (services/prospectAllowance), or null
+ *                         when the workspace is on no plan
  */
 import { and, eq } from "drizzle-orm";
 import { usageCounters, workspaceSettings } from "../../drizzle/schema";
@@ -22,6 +25,7 @@ import { getQuickEnrichKey, getQuickenrichDailyPullCap, quickenrichPulledToday }
 import { LINKEDIN_DAILY_CAP, listUsableAccounts } from "./linkedinLookup";
 import { getReoonKey } from "./reoon";
 import { keySourceOf, sharedKeyPolicy, sharedUsedToday } from "./spend";
+import { allowanceFor } from "./prospectAllowance";
 
 export async function sourceBudgets(workspaceId: number, userId: number, isAdmin: boolean): Promise<SourceBudgets> {
   const [apolloKey, qeKey, reoonKey] = await Promise.all([
@@ -59,7 +63,21 @@ export async function sourceBudgets(workspaceId: number, userId: number, isAdmin
     ai = { used: Number(counter?.used ?? 0), cap: settings?.cap ?? null };
   }
 
+  // The membership plan's monthly prospect data (services/prospectAllowance).
+  // An unreadable allowance is said, never shown as unlimited or used up.
+  let prospectData: SourceBudgets["prospectData"] = null;
+  let prospectDataNote: string | undefined;
+  try {
+    const a = await allowanceFor(workspaceId);
+    prospectData = a.plan ? a : null;
+  } catch (e) {
+    console.error(`[sourceBudgets] prospect-data allowance of workspace ${workspaceId} unreadable:`, (e as Error)?.message);
+    prospectDataNote = "Prospect data: this month's allowance could not be read, so the shared prospect databases are not used until it can be";
+  }
+
   return {
+    prospectData,
+    ...(prospectDataNote ? { prospectDataNote } : {}),
     apollo: { configured: !!apolloKey, allowance: { used: apolloUsed, cap: apolloCap } },
     quickenrich: { configured: !!qeKey, allowance: { used: qeUsed, cap: qeCap } },
     linkedin: { accounts: accounts.length, left: linkedinLeft, cap: accounts.length * LINKEDIN_DAILY_CAP },

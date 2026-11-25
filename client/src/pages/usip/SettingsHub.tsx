@@ -55,6 +55,7 @@ import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSou
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
 import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
 import { PrimarySourceCard } from "@/components/usip/settings/PrimarySourceCard";
+import { OwnKeysOptionalHeading, ProspectAllowanceCard } from "@/components/usip/settings/ProspectAllowanceCard";
 import { ProspectSourceRegistryCard } from "@/components/usip/settings/ProspectSourceRegistryCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { TotpSetupDialog } from "@/components/usip/settings/TotpSetupDialog";
@@ -371,9 +372,13 @@ export default function SettingsHub() {
         {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (
           <div className="space-y-4" data-tour-id="settings-data-sources">
+            {/* The membership plan's monthly prospect data, for a workspace on a plan only (owner, 2026-11-25). */}
+            <ProspectAllowanceCard />
             {/* Which source is tried first; the rest are fallbacks (owner, 2026-11-24). */}
             <PrimarySourceCard />
             <ProspectSourceRegistryCard />
+            {/* On a plan the key cards are optional: prospect data is included up to the month's number. */}
+            <OwnKeysOptionalHeading />
             <WarmySenderSourceCard />
             <QuickEnrichSourceCard />
             <ApolloSourceCard />

@@ -10,6 +10,11 @@
  *   spend.setSharedKey  the owner's per-workspace switch and daily cap for
  *                       the deployment's Reoon / QuickEnrich keys (owner
  *                       decision 2026-10-27: opt-in per workspace)
+ *   spend.setMembershipPlan  the owner's per-workspace membership plan, which
+ *                       sets the monthly prospect-data allowance (owner
+ *                       approved 2026-11-25; services/prospectAllowance)
+ *   spend.allowance     this workspace's allowance this month, for Settings →
+ *                       Data sources (anyone in the workspace; counts only)
  *
  * The platform procedures use adminProcedure (users.role = 'admin', the
  * owner's account), never a workspace role: a self-registered workspace's
@@ -26,6 +31,7 @@ import { tryDecryptSecret } from "../_core/crypto";
 import { spendDay, spendSince, sharedUsedToday } from "../services/spend";
 import { dayRange, summarizeSpend } from "@shared/spendReport";
 import { recordAudit } from "../audit";
+import { MEMBERSHIP_PLANS } from "@shared/prospectAllowance";
 
 const periodInput = z.object({ days: z.number().int().min(1).max(92).default(7) }).optional();
 
@@ -41,6 +47,22 @@ export const spendRouter = router({
    * BEFORE a run. Anyone who can start a run can see what it may spend, so
    * it is not billing-gated; it reads counts, never keys.
    */
+  /**
+   * This workspace's prospect-data allowance this month: the plan, the
+   * number, what is used and when it resets; `{ plan: null }` on no plan;
+   * `{ plan: null, unreadable: true }` when it could not be read (said on the
+   * page, never shown as unlimited). Counts only, no keys.
+   */
+  allowance: workspaceProcedure.query(async ({ ctx }) => {
+    const { allowanceFor } = await import("../services/prospectAllowance");
+    try {
+      return await allowanceFor(ctx.workspace.id);
+    } catch (e) {
+      console.error(`[spend] prospect-data allowance of workspace ${ctx.workspace.id} unreadable:`, (e as Error)?.message);
+      return { plan: null, unreadable: true as const };
+    }
+  }),
+
   budgets: workspaceProcedure.query(async ({ ctx }) => {
     const { sourceBudgets } = await import("../services/sourceBudgets");
     return sourceBudgets(ctx.workspace.id, ctx.user.id, isAdminRole(ctx.member.role));
@@ -84,16 +106,28 @@ export const spendRouter = router({
       })
       .from(workspaces)
       .leftJoin(workspaceSettings, eq(workspaceSettings.workspaceId, workspaces.id));
+    // Each workspace's membership plan and this month's prospect data, read
+    // through the one service; an unreadable one is shown as such.
+    const { allowanceFor } = await import("../services/prospectAllowance");
 
     const byWorkspace = new Map<number, typeof rows>();
     for (const r of rows) byWorkspace.set(r.workspaceId, [...(byWorkspace.get(r.workspaceId) ?? []), r]);
 
     const list = [];
     for (const w of wsRows) {
+      let allowance: Awaited<ReturnType<typeof allowanceFor>> | { plan: null; unreadable: true };
+      try {
+        allowance = await allowanceFor(w.id);
+      } catch (e) {
+        console.error(`[spend] prospect-data allowance of workspace ${w.id} unreadable:`, (e as Error)?.message);
+        allowance = { plan: null, unreadable: true };
+      }
       list.push({
         id: w.id,
         name: w.name,
         archived: !!w.archivedAt,
+        /** The membership plan and this month's prospect data; plan null = no plan (nothing counted). */
+        allowance,
         ownReoonKey: !!tryDecryptSecret(w.reoonApiKeyEnc),
         ownQuickenrichKey: !!tryDecryptSecret(w.quickenrichApiKeyEnc),
         sharedReoonKey: !!w.sharedReoonKey,
@@ -157,5 +191,39 @@ export const spendRouter = router({
         after: { [`shared_${input.vendor}_key`]: input.allowed, dailyCap: input.dailyCap },
       });
       return { ok: true };
+    }),
+
+  /**
+   * The platform owner's per-workspace membership plan (owner approved
+   * 2026-11-25). A plan sets the monthly number of records the workspace may
+   * take from the platform's prospect databases (shared or lent keys; never
+   * its own); null takes it off every plan, and then nothing is counted or
+   * held back. The setter is services/prospectAllowance.setMembershipPlan, the
+   * one a membership-site sync can call later.
+   */
+  setMembershipPlan: adminProcedure
+    .input(
+      z.object({
+        workspaceId: z.number().int().positive(),
+        plan: z.enum(MEMBERSHIP_PLANS).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [ws] = await db.select({ id: workspaces.id }).from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1);
+      if (!ws) throw new TRPCError({ code: "NOT_FOUND", message: "No such workspace." });
+      const { setMembershipPlan } = await import("../services/prospectAllowance");
+      const r = await setMembershipPlan(input.workspaceId, input.plan);
+      await recordAudit({
+        workspaceId: input.workspaceId,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_settings",
+        entityId: input.workspaceId,
+        before: { membershipPlan: r.previous },
+        after: { membershipPlan: r.plan },
+      });
+      return { ok: true, plan: r.plan };
     }),
 });

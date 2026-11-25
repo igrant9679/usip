@@ -8,7 +8,9 @@
  *
  * The platform owner (users.role 'admin') also sees every workspace, the
  * shared keys' totals, and the per-workspace switches for the deployment's
- * Reoon and QuickEnrich keys (owner decision 2026-10-27: opt-in).
+ * Reoon and QuickEnrich keys (owner decision 2026-10-27: opt-in), and sets
+ * each workspace's membership plan, which is its monthly prospect-data
+ * allowance (owner approved 2026-11-25; shared/prospectAllowance.ts).
  */
 import { useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +22,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { METER_LABEL, VENDOR_LABEL, type SpendSummary } from "@shared/spendReport";
 import { formatUsd } from "@shared/researchModels";
+import { MEMBERSHIP_PLANS, PLAN_LABEL, isMembershipPlan, planOptionLabel, resetDayShort, type MembershipPlan } from "@shared/prospectAllowance";
 
 const n = (v: number) => v.toLocaleString();
 
@@ -207,6 +210,50 @@ function SharedKeyCell({
   );
 }
 
+/**
+ * One workspace's membership plan: the picker saves at once (spend.
+ * setMembershipPlan), and the line under it is this month's prospect data.
+ * "No plan" = nothing counted or held back, which every workspace is until a
+ * plan is picked here.
+ */
+function MembershipPlanCell({
+  workspaceId, allowance,
+}: {
+  workspaceId: number;
+  allowance: { plan: string | null; used?: number; limit?: number; resetsOn?: string; unreadable?: boolean };
+}) {
+  const utils = trpc.useUtils();
+  const save = trpc.spend.setMembershipPlan.useMutation({
+    onSuccess: (r) => {
+      utils.spend.platform.invalidate();
+      toast.success(r.plan ? `Plan set to ${PLAN_LABEL[r.plan]}` : "Plan removed: nothing is counted for this workspace");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const current: MembershipPlan | "" = isMembershipPlan(allowance.plan) ? allowance.plan : "";
+  return (
+    <div className="space-y-1">
+      <select
+        aria-label="Membership plan"
+        className="h-7 rounded-md border bg-background px-1.5 text-xs"
+        value={current}
+        disabled={save.isPending}
+        onChange={(e) => save.mutate({ workspaceId, plan: e.target.value === "" ? null : (e.target.value as MembershipPlan) })}
+      >
+        <option value="">No plan (not counted)</option>
+        {MEMBERSHIP_PLANS.map((p) => <option key={p} value={p}>{planOptionLabel(p)}</option>)}
+      </select>
+      <div className="text-[11px] text-muted-foreground">
+        {allowance.unreadable
+          ? "Allowance could not be read"
+          : allowance.plan && allowance.limit != null
+            ? `${n(Math.min(allowance.used ?? 0, allowance.limit))} of ${n(allowance.limit)} used · resets ${allowance.resetsOn ? resetDayShort(allowance.resetsOn) : "on the 1st"}`
+            : "Unlimited, uncounted"}
+      </div>
+    </div>
+  );
+}
+
 function PlatformSpendSection() {
   const [days, setDays] = useState(7);
   const q = trpc.spend.platform.useQuery({ days });
@@ -215,7 +262,7 @@ function PlatformSpendSection() {
     <>
       <Section
         title="Shared keys (platform owner)"
-        description="The deployment's own Reoon and QuickEnrich accounts. A workspace without its own key may use them only when switched on here; a daily cap counts that workspace's paid units on the shared key (blank = none)."
+        description="The deployment's own Reoon and QuickEnrich accounts. A workspace without its own key may use them only when switched on here; a daily cap counts that workspace's paid units on the shared key (blank = none). The membership plan sets how many prospect records a month a workspace may take from shared or lent keys (its own keys never count); with no plan nothing is counted."
         right={<PeriodPicker days={days} setDays={setDays} />}
       >
         {q.error && <div className="p-4 text-sm text-red-600 dark:text-red-400">{q.error.message}</div>}
@@ -225,6 +272,7 @@ function PlatformSpendSection() {
               <thead>
                 <tr className="border-b text-muted-foreground">
                   <th className="text-left font-medium px-3 py-2">Workspace</th>
+                  <th className="text-left font-medium px-3 py-2">Membership plan</th>
                   <th className="text-left font-medium px-3 py-2">Shared Reoon key</th>
                   <th className="text-left font-medium px-3 py-2">Shared QuickEnrich key</th>
                   <th className="text-right font-medium px-3 py-2">Est. AI cost ({days} days)</th>
@@ -235,6 +283,9 @@ function PlatformSpendSection() {
                   <tr key={w.id} className="border-b last:border-0 align-top">
                     <td className="px-3 py-2">
                       {w.name} <span className="text-muted-foreground">#{w.id}{w.archived ? " · archived" : ""}</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <MembershipPlanCell workspaceId={w.id} allowance={w.allowance} />
                     </td>
                     <td className="px-3 py-2">
                       <SharedKeyCell key={`r${w.sharedReoonDailyCap}`} workspaceId={w.id} vendor="reoon" allowed={w.sharedReoonKey} cap={w.sharedReoonDailyCap}

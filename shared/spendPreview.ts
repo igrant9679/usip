@@ -13,6 +13,8 @@
  * Pure, so a test can read every sentence.
  */
 
+import { allowanceLauncherLine, type ProspectAllowance } from "./prospectAllowance";
+
 /** A daily allowance: what is used and the cap, or null when nothing caps it. */
 export type Allowance = { used: number; cap: number } | null;
 
@@ -25,6 +27,13 @@ export type SourceBudgets = {
   reoon: { configured: boolean; keySource: "workspace" | "shared" | null; allowance: Allowance };
   /** The workspace's monthly AI token budget (null cap = no budget set). */
   ai: { used: number; cap: number | null };
+  /**
+   * The membership plan's monthly prospect-data allowance
+   * (shared/prospectAllowance): null = no plan, nothing counted. Absent from
+   * older callers. `prospectDataNote` instead when it could not be read.
+   */
+  prospectData?: ProspectAllowance | null;
+  prospectDataNote?: string;
 };
 
 const n = (v: number) => v.toLocaleString("en-US");
@@ -56,6 +65,13 @@ export function aiCallEstimate(sources: readonly string[]): number {
 export function launcherBudgetLine(sources: readonly string[], b: SourceBudgets | null | undefined): string {
   if (!b) return "";
   const parts: string[] = [];
+  // The plan's monthly prospect data comes first: when it is used up, the
+  // shared databases below are skipped whatever their daily caps say.
+  if (b.prospectData && (sources.includes("apollo") || sources.includes("quickenrich") || sources.includes("warmysender") || sources.includes("leadocean"))) {
+    parts.push(allowanceLauncherLine(b.prospectData));
+  } else if (b.prospectDataNote) {
+    parts.push(b.prospectDataNote);
+  }
   if (sources.includes("apollo")) parts.push(allowanceLine("Apollo", b.apollo.configured, b.apollo.allowance));
   if (sources.includes("quickenrich")) parts.push(allowanceLine("QuickEnrich", b.quickenrich.configured, b.quickenrich.allowance));
   if (sources.includes("linkedin")) {

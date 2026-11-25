@@ -218,7 +218,7 @@ export const READ_ONLY_PATHS: Record<string, string> = {
   // Usage and spend
   "usage.currentMonth": "READ ONLY: this month's AI tokens, emails sent and seats in use.",
   "spend.month": "READ ONLY: this month's AI and vendor spend against the budget.",
-  "spend.budgets": "READ ONLY: the monthly budgets set for AI and each vendor.",
+  "spend.budgets": "READ ONLY: the monthly budgets set for AI and each vendor, and prospectData: the membership plan's monthly prospect data (limit, used, remaining, resetsOn; null = no plan, nothing counted).",
   "spend.report": "READ ONLY: spend by vendor and feature over a period.",
   // Keys and connections: which are set up, never the keys
   "keyShares.overview": "READ ONLY (admin): which keys this workspace shares with other workspaces, and which it borrows. An admin changes sharing on Settings.",
