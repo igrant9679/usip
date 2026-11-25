@@ -441,9 +441,13 @@ export async function saveScrapeJobAndQueue(
      */
     identityChecked?: boolean;
   } = {},
-): Promise<void> {
+): Promise<number> {
+  // Returns the campaign queue rows inserted (0 with no campaign): what the
+  // engine's prospect-data allowance hold is settled to, since the filters
+  // below (identity-less rows, suppression) can keep some of the batch out.
   const db = await getDb();
-  if (!db) return;
+  if (!db) return 0;
+  let queued = 0;
 
   // Campaign exclusivity belt (owner directive 2026-08-12): a person already
   // in ANY campaign's queue is never queued again — not for a sibling
@@ -615,6 +619,7 @@ export async function saveScrapeJobAndQueue(
     if (rows.length > 0) {
       try {
         await db.insert(prospectQueue).values(rows);
+        queued = rows.length;
       } catch (batchErr) {
         // A single poisoned row must never discard the whole batch: retry
         // row-by-row so every valid prospect still lands, and surface the
@@ -634,6 +639,7 @@ export async function saveScrapeJobAndQueue(
           (batchErr as Error)?.message, firstRowErr,
         );
         if (saved === 0) throw batchErr;
+        queued = saved;
       }
 
       // People-as-master (migration 0153): every retained campaign prospect
@@ -647,6 +653,7 @@ export async function saveScrapeJobAndQueue(
         .catch((e) => console.error("[personLink] ingest link failed:", (e as Error)?.message ?? e));
     }
   }
+  return queued;
 }
 
 /**

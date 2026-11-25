@@ -71,6 +71,8 @@ import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linke
 import { injectTracking, isDeferredSenderToken, renderSequenceOptOut, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { campaignSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
+import { isAllowanceVendor } from "@shared/prospectAllowance";
+import { holdAllowance } from "./services/prospectAllowance";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { campaignChannelOn, normalizeSequence } from "@shared/areSequenceSteps";
@@ -3023,11 +3025,28 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       perSource[id] = { raw: 0, new: 0, skipped: rest.held ? `held by the vendor ${until}` : `resting after ${rest.empty} empty run${rest.empty === 1 ? "" : "s"}, ${until}` };
       continue;
     }
+    // The monthly prospect-data allowance (services/prospectAllowance): a
+    // vendor source on a key that is not this workspace's own may add only
+    // what is left of the plan's month. The ask shrinks to it; with nothing
+    // left the source is skipped, and says why, as a held source does: it
+    // looked nowhere, so the run is not an empty one. Own keys and
+    // workspaces on no plan are granted the whole ask, uncounted.
+    const hold = isAllowanceVendor(id) ? await holdAllowance(campaign.workspaceId, id, remaining) : null;
+    if (hold && hold.granted === 0) {
+      sourcesNotAsked += 1;
+      const why = hold.reason ?? "prospect data for this month is used up";
+      perSource[id] = { raw: 0, new: 0, skipped: why };
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn", `${id} skipped — ${why}`);
+      continue;
+    }
+    if (hold?.reason) await emitLog(campaign.workspaceId, campaign.id, "discovery", "info", `${id}: ${hold.reason}`);
+    const ask = hold ? hold.granted : remaining;
     let value: SourceResult;
     try {
       // Tokens a source spends are recorded under its own feature (F12).
-      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](remaining));
+      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](ask));
     } catch (err) {
+      await hold?.settle(0);
       const empty = (sourceState[id]?.empty ?? 0) + 1;
       sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
       console.error(`[AreEngine] discovery source ${id} failed for campaign ${campaign.id}:`, err);
@@ -3039,6 +3058,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
     const { sourceType, query: q, raw, refused, restUntil } = value;
     if (refused) {
+      await hold?.settle(0);
       // Held by the vendor it waits as long as the vendor said, and a failure
       // backs off as any failure does. Neither writes a scrape job reading
       // "source returned nothing", because that is what it did not do. No key
@@ -3119,17 +3139,23 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         };
       })
       .sort((a, b) => (b.icpMatchScore as number) - (a.icpMatchScore as number));
+    // Never more than the allowance granted, best fit first; the hold is
+    // settled to the people actually queued, net new after the dedupe above.
+    const toQueue = hold ? scored.slice(0, hold.granted) : scored;
     try {
       // Already filtered against this run's read of the whole queue, and
       // claimed in it (A34): the save does not read the queue again.
-      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored, { identityChecked: true });
-      totalNew += scored.length;
+      const queued = await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, toQueue, { identityChecked: true });
+      // Counted: the people actually queued (suppressed and identity-less rows are kept out there).
+      await hold?.settle(queued);
+      totalNew += toQueue.length;
       // Keyed by the source's id, as every other perSource entry is: the
       // scrape-job name ("linkedin_people") hid LinkedIn's successful attempts
       // from the campaign's source health, which reads by id (F12).
-      perSource[id] = { raw: raw.length, new: scored.length };
+      perSource[id] = { raw: raw.length, new: toQueue.length };
       if (raw.length > 0) lastOk[id] = Date.now();
     } catch (e) {
+      await hold?.settle(0);
       console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
       perSource[id] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
       await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",

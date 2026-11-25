@@ -49,6 +49,7 @@ import {
   setMembershipPlan,
   tryConsume,
 } from "./services/prospectAllowance";
+import { quickenrichFindEmailByLinkedIn } from "./services/quickenrich";
 
 const WS = 5;
 const LENDER = 1;
@@ -306,5 +307,44 @@ describe("the setter", () => {
     rows("workspaces").push({ id: 9, name: "New", slug: "n", ownerUserId: 1, archivedAt: null, plan: "trial" });
     await setMembershipPlan(9, "founder");
     expect(await membershipPlanOf(9)).toBe("founder");
+  });
+});
+
+describe("every QuickEnrich email lookup passes the allowance", () => {
+  const lookup = () => quickenrichFindEmailByLinkedIn("lent-or-shared-key", "https://www.linkedin.com/in/pat", { workspaceId: WS, feature: "test" });
+
+  beforeEach(() => { settings(WS).membershipPlan = "trial"; });
+
+  it("an email found on a borrowed key is one unit", async () => {
+    setUsed(100);
+    const r = await lookup();
+    expect(r.reason).toBe("found");
+    expect(usage()).toBe(101);
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it("a miss costs nothing", async () => {
+    setUsed(100);
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    const r = await lookup();
+    expect(r.reason).toBe("no_match");
+    expect(usage()).toBe(100);
+  });
+
+  it("used up, nothing is asked and the reason is not a verdict about the person", async () => {
+    setUsed(250);
+    const r = await lookup();
+    expect(r).toMatchObject({ email: null, reason: "allowance_exhausted" });
+    expect(r.note).toMatch(/^Prospect data for this month is used up \(250 of 250\)/);
+    expect(fetchCalls).toEqual([]);
+    expect(usage()).toBe(250);
+  });
+
+  it("the workspace's own key looks up whatever the month says", async () => {
+    setUsed(250);
+    settings(WS).quickenrichApiKeyEnc = encryptSecret("own-qe-key");
+    const r = await quickenrichFindEmailByLinkedIn("own-qe-key", "https://www.linkedin.com/in/pat", { workspaceId: WS, feature: "test" });
+    expect(r.reason).toBe("found");
+    expect(usage()).toBe(250);
   });
 });

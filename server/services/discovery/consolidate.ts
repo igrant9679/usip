@@ -374,7 +374,12 @@ export interface PersistResult {
   lowConfidenceCount: number;
   /** Which raw finds became which person: source-search promote stamps its
    *  rows from this rather than matching names back (P71). */
-  saved?: Array<{ prospectId: number; sourceRows: number[] }>;
+  saved?: Array<{
+    prospectId: number;
+    sourceRows: number[];
+    /** True when this find made a NEW People record, false when it updated one already there (the prospect-data allowance counts only new ones). */
+    created: boolean;
+  }>;
 }
 
 /** Every person not saved, for the run record. */
@@ -443,7 +448,7 @@ export async function persistAsProspects(
   let updated = 0;
   let skippedArchived = 0, skippedNoName = 0, skippedSuppressed = 0, skippedNameOnly = 0;
   let high = 0, medium = 0, low = 0;
-  const saved: Array<{ prospectId: number; sourceRows: number[] }> = [];
+  const saved: NonNullable<PersistResult["saved"]> = [];
   const tally = (c: ScoredCandidate) => {
     if (c.tier === "high") high++;
     else if (c.tier === "medium") medium++;
@@ -552,7 +557,7 @@ export async function persistAsProspects(
       }
       updated++;
       tally(c);
-      saved.push({ prospectId: existingId, sourceRows: c.sourceRows });
+      saved.push({ prospectId: existingId, sourceRows: c.sourceRows, created: false });
     } else {
       // Fresh insert keeps its shape and now carries a ledger from birth.
       // People "Name" rule (owner 2026-08-25): first + last only,
@@ -590,7 +595,7 @@ export async function persistAsProspects(
       tally(c);
       // Two finds in one pass for the same person meet the row just made.
       index.add(ins.id, { email, linkedinUrl: c.linkedinUrl, firstName: c.firstName, lastName: c.lastName, company: c.companyName, companyDomain });
-      saved.push({ prospectId: ins.id, sourceRows: c.sourceRows });
+      saved.push({ prospectId: ins.id, sourceRows: c.sourceRows, created: true });
     }
   }
 

@@ -35,6 +35,8 @@ import { recordToQueueRow } from "./bridge";
 import { loadCredentials, recordValidation, workspacesWithCredentials } from "./credentials";
 import { commit, ensurePeriodRows, releaseStaleHolds, remainingUnits, reserve } from "./ledger";
 import { affectedRowsOf } from "../../_core/claim";
+import { isAllowanceVendor } from "@shared/prospectAllowance";
+import { holdAllowance, type AllowanceHold } from "../prospectAllowance";
 
 export const MAX_BATCH_TARGET = 200;
 
@@ -272,6 +274,33 @@ async function promoteClaimedResults(
     : [];
   if (todo.length === 0) return { promoted: 0, acquired: 0, unitsSpent: 0, failed: 0, discoveryRunId: null as number | null, errors };
 
+  /**
+   * The monthly prospect-data allowance (services/prospectAllowance): rows
+   * from a source on a key that is not this workspace's own are saved only up
+   * to what is left of the plan's month, held per source BEFORE anything is
+   * bought, and each hold is settled to the NEW People records its rows
+   * became (an update of someone already there is not counted). Whatever
+   * happens below, the finally gives back what was not delivered.
+   */
+  const holds = new Map<string, AllowanceHold>();
+  const createdBySource = new Map<string, number>();
+  try {
+    return await promoteHeldResults(db, workspaceId, userId, runId, todo, errors, holds, createdBySource);
+  } finally {
+    for (const [slug, hold] of Array.from(holds.entries())) await hold.settle(createdBySource.get(slug) ?? 0);
+  }
+}
+
+async function promoteHeldResults(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  userId: number | null,
+  runId: number,
+  todo: Array<typeof prospectSearchResults.$inferSelect>,
+  errors: string[],
+  holds: Map<string, AllowanceHold>,
+  createdBySource: Map<string, number>,
+) {
   let acquired = 0, unitsSpent = 0, failed = 0;
   const finalRecords = new Map<number, ProspectRecord>();
   const bySource = new Map<string, typeof todo>();
@@ -282,8 +311,20 @@ async function promoteClaimedResults(
   }
   const groups = Array.from(bySource.entries());
   for (let g = 0; g < groups.length; g++) {
-    const [slug, list] = groups[g];
+    const [slug, selected] = groups[g];
     const s = getSource(slug as ProspectSourceSlug);
+    let list = selected;
+    if (isAllowanceVendor(slug)) {
+      const allowance = await holdAllowance(workspaceId, slug, selected.length);
+      holds.set(slug, allowance);
+      if (allowance.granted < selected.length) {
+        // Left unpromoted and unbought; the same rows can be saved later.
+        list = selected.slice(0, allowance.granted);
+        const n = selected.length - list.length;
+        errors.push(`${n} not saved: ${allowance.reason ?? "prospect data for this month is used up"}`);
+      }
+      if (list.length === 0) continue;
+    }
     const needs = list.filter((r) => s.acquisition === "on_demand" && !r.wasCharged);
     for (let i = 0; i < list.length; i++) finalRecords.set(list[i].id, list[i].normalized as ProspectRecord);
     if (needs.length === 0) continue;
@@ -398,6 +439,14 @@ async function promoteClaimedResults(
       .where(and(eq(prospectSearchResults.id, stamped[i][0]), eq(prospectSearchResults.workspaceId, workspaceId)));
   }
   const promoted = stamped.length;
+  // New People records per source, for the allowance holds (the caller's finally settles them).
+  const sourceOfResult = new Map(todo.map((r) => [r.id, r.sourceSlug]));
+  for (let i = 0; i < saved.length; i++) {
+    if (!saved[i].created) continue;
+    const rid = saved[i].sourceRows.map((f) => resultOfFind.get(f)).find((x) => x != null);
+    const slug = rid != null ? sourceOfResult.get(rid) : undefined;
+    if (slug) createdBySource.set(slug, (createdBySource.get(slug) ?? 0) + 1);
+  }
   const notSaved = ids.length - unstorable - promoted;
   // The reasons are read off the result directly, so promote needs nothing
   // from the consolidation but processRun (areE1Sources mocks it alone).

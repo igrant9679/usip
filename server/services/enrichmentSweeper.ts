@@ -142,6 +142,14 @@ export interface SweepResult {
   qeCandidates: number;
   /** Why the run ended: finished the candidates, hit the cap, or ran dry. */
   stoppedBecause: "done" | "cap" | "no_credits" | "no_key" | "no_candidates";
+  /**
+   * Why the QuickEnrich pass stopped early while the rest of the sweep went
+   * on: the workspace's monthly prospect-data allowance is used up (or could
+   * not be read) and its QuickEnrich key is not its own (services/
+   * prospectAllowance). The rows it did not reach are untouched and wait for
+   * the next run. Absent when the pass was not stopped.
+   */
+  quickenrichStopped?: string;
 }
 
 /** A run that did nothing, shaped so callers never special-case null. */
@@ -684,6 +692,14 @@ export async function sweepWorkspace(
           continue;
         }
         const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "", { workspaceId, feature: "enrichmentSweep" });
+        if (found.reason === "allowance_exhausted") {
+          // Nothing was asked: this month's prospect data is used up. Not a
+          // miss and not an attempt — the row is left exactly as it was, for
+          // next month or the workspace's own key, and the reason rides the
+          // result the card and the owner's notice show.
+          result.quickenrichStopped = found.note ?? "Prospect data for this month is used up.";
+          break;
+        }
         result.attempted++;
         result.fromQueue++;
         result.quickenrichAttempted++;
@@ -1045,7 +1061,7 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
     if (ws.lastRunAt && Date.now() - new Date(ws.lastRunAt).getTime() < 20 * 60 * 60 * 1000) continue;
     try {
       const r = await sweepWorkspace(ws.id, { limit: ws.cap ?? 50 });
-      if (r.attempted > 0) {
+      if (r.attempted > 0 || r.quickenrichStopped) {
         swept++;
         emailsFound += r.emailsFound;
         console.log(`[EnrichmentSweep] ws=${ws.id} attempted=${r.attempted} found=${r.emailsFound} stopped=${r.stoppedBecause}`);
@@ -1057,6 +1073,8 @@ export async function runEnrichmentSweepAllWorkspaces(): Promise<{ swept: number
             r.creditsPower > 0 ? `Spent ${r.creditsPower} verification credit${r.creditsPower === 1 ? "" : "s"}.` : "",
             r.stoppedBecause === "no_credits" ? "Stopped early — verification credits ran low." : "",
             r.stoppedBecause === "no_key" ? "Email lookups were skipped — add a Reoon API key in Settings → Data enrichment to verify found addresses." : "",
+            // The monthly prospect-data allowance stopped the QuickEnrich lookups (never silently).
+            r.quickenrichStopped ? `QuickEnrich lookups stopped: ${r.quickenrichStopped}` : "",
           ].filter(Boolean).join(" "),
         );
       }

@@ -528,6 +528,8 @@ Produce:
     // Lookups that came back empty for this person lately are not paid for
     // again (audit A75, services/are/lookupMisses.ts).
     const skippedLookups: string[] = [];
+    // Why QuickEnrich was not asked at all: the monthly prospect-data allowance.
+    let allowanceNote: string | null = null;
     if (!prospect.email && !emailBlocked) {
       try {
         // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
@@ -544,6 +546,7 @@ Produce:
           const qeKey = await getQuickEnrichKey(workspaceId);
           if (qeKey) {
             const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl, { workspaceId, feature: "are.enrichAgent" });
+            if (qe.reason === "allowance_exhausted") allowanceNote = qe.note ?? "Prospect data for this month is used up.";
             // Only "not in their database, and nothing about the employer
             // either" is kept: a no-email record's domain is worth asking for.
             if (qe.reason === "no_match" && !qe.email && !qe.companyDomain && !qe.companyName) await recordMiss(workspaceId, qeMissKey, "quickenrich:no_match");
@@ -615,6 +618,13 @@ Produce:
     } else if (skippedLookups.length) {
       await emitSeqLog(db, workspaceId, prospect.campaignId, "info", "enrich",
         `Did not pay to look up ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}'s email again: ${skippedLookups.join(" and ")} found nothing within the last 30 days.`.replace(/\s+/g, " "));
+    }
+    if (!resolvedEmail && allowanceNote) {
+      // Said where the campaign's run notes are read, never silent. The row is
+      // left without a QuickEnrich attempt, so the enrichment sweep can still
+      // look it up once there is allowance or an own key.
+      await emitSeqLog(db, workspaceId, prospect.campaignId, "warn", "enrich",
+        `QuickEnrich was not asked for ${prospect.firstName ?? ""} ${prospect.lastName ?? ""}'s email: ${allowanceNote}`.replace(/\s+/g, " "));
     }
 
     // People-as-master: the agent's findings also land on the canonical
