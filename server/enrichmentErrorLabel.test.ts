@@ -34,18 +34,19 @@ describe("describeEnrichmentError", () => {
     // the label became a CLASS rather than the raw text: something has to
     // still carry the stored string for the tooltip, and callers must not have
     // to keep hold of it themselves to show it.
-    expect(describeEnrichmentError("quickenrich: no_match")).toEqual({ label: "Not in QuickEnrich", tone: "info", detail: "quickenrich: no_match" });
-    expect(describeEnrichmentError("QuickEnrich: NO_MATCH")).toEqual({ label: "Not in QuickEnrich", tone: "info", detail: "QuickEnrich: NO_MATCH" });
+    // Since 2026-11-25 the source is never named by its vendor (owner decision).
+    expect(describeEnrichmentError("quickenrich: no_match")).toEqual({ label: "Not in the prospect database", tone: "info", detail: "prospect database: no_match" });
+    expect(describeEnrichmentError("QuickEnrich: NO_MATCH")).toEqual({ label: "Not in the prospect database", tone: "info", detail: "prospect database: NO_MATCH" });
     // The brown class must live in client code (Tailwind scans client/, not shared/).
     const page = read("client/src/pages/usip/ARECampaignDetail.tsx");
     expect(page).toMatch(/info: "text-\[#8B5A2B\]/);
   });
   it("a transient QuickEnrich transport failure reads as transient", () => {
     const raw = "quickenrich: timeout — transport failure, will retry";
-    expect(describeEnrichmentError(raw)).toEqual({ label: "QuickEnrich unavailable — will retry", tone: "warn", detail: raw });
+    expect(describeEnrichmentError(raw)).toEqual({ label: "Prospect database unavailable — will retry", tone: "warn", detail: "prospect database: timeout — transport failure, will retry" });
   });
   it("other QuickEnrich reasons are named, other errors stay red verbatim", () => {
-    expect(describeEnrichmentError("quickenrich: rate_limited")).toEqual({ label: "QuickEnrich: rate limited", tone: "warn", detail: "quickenrich: rate_limited" });
+    expect(describeEnrichmentError("quickenrich: rate_limited")).toEqual({ label: "Prospect database: rate limited", tone: "warn", detail: "prospect database: rate_limited" });
     expect(describeEnrichmentError("LinkedIn profile unavailable")).toEqual({ label: "LinkedIn profile unavailable", tone: "error", detail: "LinkedIn profile unavailable" });
     expect(describeEnrichmentError("")).toBeNull();
     expect(describeEnrichmentError(null)).toBeNull();
@@ -173,7 +174,8 @@ describe("a clip lands on a word boundary or does not happen", () => {
       // +1 for the ellipsis a clip adds.
       expect(d!.label.length, raw.slice(0, 30)).toBeLessThanOrEqual(ENRICHMENT_LABEL_CHARS + 1);
       expect(d!.label, raw.slice(0, 30)).not.toMatch(/[\r\n]/);
-      expect(d!.detail, raw.slice(0, 30)).toBe(raw.trim());
+      // Whole and uncut, with a vendor's name worded out.
+      expect(d!.detail, raw.slice(0, 30)).toBe(raw.trim().replace(/^quickenrich/, "prospect database"));
     }
   });
 

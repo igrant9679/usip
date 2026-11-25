@@ -207,7 +207,8 @@ describe("verify People from the screen (F39) and the credits card (F10)", () =>
     expect(card).toContain("trpc.dataHealth.credits.useQuery(");
     expect(card).toContain("Reoon balance");
     expect(card).toContain("LinkedIn lookups");
-    expect(card).toContain("QuickEnrich");
+    // The email-lookup source by its member-facing name ("Source N"), never the vendor's.
+    expect(card).toContain('sourceNames.label("quickenrich")');
     // A failed read is said, never a zero.
     expect(card).toContain('row("Reoon balance", "unavailable", c.reoon.error ?? undefined)');
   });

@@ -13,7 +13,7 @@
  */
 import { trpc } from "@/lib/trpc";
 import { Database } from "lucide-react";
-import { allowanceSummaryLine, allowanceUsedUp, allowanceUsedUpReason, isMembershipPlan, type ProspectAllowance } from "@shared/prospectAllowance";
+import { allowanceSummaryLine, allowanceUsedUp, allowanceUsedUpReason, isMembershipPlan, planDailyCap, type ProspectAllowance } from "@shared/prospectAllowance";
 
 type AllowanceData = ProspectAllowance | { plan: null; unreadable?: true };
 
@@ -42,7 +42,7 @@ export function ProspectAllowanceCard() {
         <Database className="size-4 mt-0.5 shrink-0 text-violet-500" />
         <div className="flex-1 min-w-0">
           <h2 className="text-[15px] font-semibold">Prospect data on the {a.planLabel} plan</h2>
-          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{allowanceSummaryLine(a)}</p>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{allowanceSummaryLine(a)} · up to {planDailyCap(a.plan).toLocaleString("en-US")} a day per source</p>
         </div>
       </div>
       <div

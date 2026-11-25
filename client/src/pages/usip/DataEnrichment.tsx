@@ -48,6 +48,7 @@ import {
 import { QueryError } from "@/components/usip/Shell";
 import { JobChangeAction, JobChangeEmptyState } from "@/components/usip/JobChangeAlerts";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { useSourceNames } from "@/lib/sourceNames";
 
 /** Where the scheduled enrichment Velocity has — the sweep — is set up. */
 const SWEEP_SETTINGS = "/v2/settings/enrichment-sweep";
@@ -58,6 +59,7 @@ const SWEEP_SETTINGS = "/v2/settings/enrichment-sweep";
  * emails this month and today's pulls, and LinkedIn lookups left today.
  */
 function CreditsCard() {
+  const sourceNames = useSourceNames();
   const q = trpc.dataHealth.credits.useQuery(undefined, { staleTime: 60_000, retry: false });
   const c = q.data;
   const nf = (v: number) => v.toLocaleString();
@@ -89,8 +91,8 @@ function CreditsCard() {
                     ? row("Reoon balance", `${nf(c.reoon.balance.daily)} daily`, `${nf(c.reoon.balance.instant)} instant credits`)
                     : row("Reoon balance", "unavailable", c.reoon.error ?? undefined)}
               {!c.quickenrich.configured
-                ? row("QuickEnrich", "no key", "Settings → Data sources")
-                : row("QuickEnrich", `${nf(c.quickenrich.emailsThisMonth)} emails`, `delivered in ${c.month}${c.quickenrich.pulls ? ` · ${nf(Math.max(0, c.quickenrich.pulls.cap - c.quickenrich.pulls.used))} of ${nf(c.quickenrich.pulls.cap)} pulls left today` : ""}`)}
+                ? row(sourceNames.label("quickenrich"), "no key", "Settings → Data sources")
+                : row(sourceNames.label("quickenrich"), `${nf(c.quickenrich.emailsThisMonth)} emails`, `delivered in ${c.month}${c.quickenrich.pulls ? ` · ${nf(Math.max(0, c.quickenrich.pulls.cap - c.quickenrich.pulls.used))} of ${nf(c.quickenrich.pulls.cap)} pulls left today` : ""}`)}
               {c.linkedin.accounts === 0
                 ? row("LinkedIn lookups", "no account", "Connect one under Connected accounts")
                 : row("LinkedIn lookups", `${nf(c.linkedin.left)} left today`, `of ${nf(c.linkedin.cap)} across ${c.linkedin.accounts} account${c.linkedin.accounts === 1 ? "" : "s"}`)}

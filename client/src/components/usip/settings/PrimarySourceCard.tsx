@@ -19,25 +19,28 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { Check, ListOrdered, Loader2 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
-import { ARE_SOURCES, fallbackSourcesOf, primarySourceOf, type PrimarySourceId } from "@shared/areSources";
+import { fallbackSourcesOf, primarySourceOf, type PrimarySourceId } from "@shared/areSources";
+import { useSourceNames } from "@/lib/sourceNames";
 
-const labelOf = (id: string) => ARE_SOURCES.find((s) => s.id === id)?.label ?? id;
 
 /** One line on what choosing this source means, beyond its name. */
 const NOTE: Record<PrimarySourceId, string> = {
   quickenrich: "Free to search. An email costs one credit when it is found during enrichment.",
   warmysender: "Free to search, with addresses hidden. One lead unit per new person saved.",
-  apollo: "Free to search. Costs no Apollo credits.",
+  apollo: "Free to search: people and company details, no emails (those are found during enrichment).",
   leadocean: "Bills every search row, so it still runs only where a campaign or search ticks it. As primary it goes first there.",
   linkedin: "Searches through the LinkedIn accounts connected in this workspace, within their daily limits.",
 };
 
 export function PrimarySourceCard() {
+  const names = useSourceNames();
+  const labelOf = (id: string) => names.label(id);
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
   const isAdmin = isAdminRole(me.data?.role);
   const settings = trpc.settings.getAreSettings.useQuery();
   const describe = trpc.prospectSources.describe.useQuery(undefined);
+  const onPlan = trpc.prospectSources.choices.useQuery(undefined, { retry: false }).data?.onPlan === true;
   const setPrimary = trpc.settings.setPrimarySource.useMutation({
     onSuccess: (r) => {
       void utils.settings.getAreSettings.invalidate();
@@ -63,6 +66,9 @@ export function PrimarySourceCard() {
     return null;
   };
   const primaryBlocker = blocker(primary);
+  // A workspace on a membership plan finds people through ONE chosen source
+  // (ProspectSourceChoiceCard); a primary with fallbacks does not apply there.
+  if (onPlan) return null;
 
   return (
     <section className="rounded-xl border border-border/70 bg-card p-5 shadow-sm space-y-4" data-primary-source-card>

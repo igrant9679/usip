@@ -168,7 +168,7 @@ export function SourceSearchPanel() {
       <div className="rounded-xl border border-dashed border-border p-8 text-center space-y-3">
         <ShieldCheck className="size-6 mx-auto text-muted-foreground" />
         <div className="text-[14px] font-medium">No prospect-data vendor connected yet</div>
-        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your connected vendors in order and stops at your batch target. Add a WarmySender, QuickEnrich, Apollo or LeadOcean key and this page fills in — it gets better with every key you add.</p>
+        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your prospect sources in order and stops at your batch target. On a membership plan it searches the one source chosen on Settings → Data sources; with no source available yet, add a key of your own there.</p>
         <Button asChild size="sm"><Link href="/v2/settings/data-sources">Open Settings → Data sources</Link></Button>
       </div>
     );
@@ -261,7 +261,7 @@ export function SourceSearchPanel() {
         </Button>
         {narrowing.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">{active.length > 0 ? "Set at least one filter besides Has email / Has phone." : "Set at least one filter."}</span>}
         {narrowing.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
-        {billedPreviews.length > 0 && <span className="text-[11.5px] text-amber-700 dark:text-amber-400 pb-2">LeadOcean counts one record per preview row, up to {Math.min(targetNum, 100)} this run, if the sources before it leave slots open.</span>}
+        {billedPreviews.length > 0 && <span className="text-[11.5px] text-amber-700 dark:text-amber-400 pb-2">A source that bills its previews counts one record per preview row, up to {Math.min(targetNum, 100)} this run, if the sources before it leave slots open.</span>}
         {(earlierRuns.data ?? []).length > 0 && (
           <div className="ml-auto space-y-1">
             <Label className="text-[11.5px]">Earlier searches</Label>

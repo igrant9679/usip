@@ -45,11 +45,14 @@ describe("the line under Run discovery", () => {
       reoon: { configured: false, keySource: null, allowance: null },
       ai: { used: 0, cap: null },
       prospectData: buildAllowance("member", 1000, "2026-11"),
+      labels: { quickenrich: "Source 2", apollo: "Source 3" },
     } satisfies SourceBudgets;
-    expect(launcherBudgetLine(["quickenrich"], b)).toMatch(/^Prospect data: used up this month \(1,000 of 1,000\), resets 1 Dec; only your own keys run · QuickEnrich/);
+    expect(launcherBudgetLine(["quickenrich"], b)).toMatch(/^Prospect data: used up this month \(1,000 of 1,000\), resets 1 Dec; only your own keys run · Source 2/);
     expect(launcherBudgetLine(["linkedin"], b)).not.toContain("Prospect data");
-    expect(launcherBudgetLine(["apollo"], { ...b, prospectData: buildAllowance("member", 400, "2026-11") })).toMatch(/^Prospect data: 600 of 1,000 left this month · Apollo/);
-    expect(launcherBudgetLine(["apollo"], { ...b, prospectData: null })).toMatch(/^Apollo/);
+    expect(launcherBudgetLine(["apollo"], { ...b, prospectData: buildAllowance("member", 400, "2026-11") })).toMatch(/^Prospect data: 600 of 1,000 left this month · Source 3/);
+    expect(launcherBudgetLine(["apollo"], { ...b, prospectData: null })).toMatch(/^Source 3/);
+    // Without the server's labels a source is "Prospect source", never a vendor.
+    expect(launcherBudgetLine(["apollo"], { ...b, prospectData: null, labels: undefined })).toMatch(/^Prospect source: /);
   });
 });
 

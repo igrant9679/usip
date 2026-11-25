@@ -104,8 +104,9 @@ describe("each source's allowance left today, before running (U16)", () => {
     expect(b.ai).toEqual({ used: 120_000, cap: 2_000_000 });
 
     // The launcher's line, in the owner's words.
-    expect(launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], b)).toBe(
-      "Apollo: 120 of 500 left today · QuickEnrich: no key, skipped · LinkedIn: 180 of 200 lookups left today · up to 1 AI call",
+    // Prospect sources are "Source N" to members since 2026-11-25 (the owner's decision).
+    expect(launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], b)).toMatch(
+      /^Source \d+: 120 of 500 left today · Source \d+: no key, skipped · LinkedIn: 180 of 200 lookups left today · up to 1 AI call$/,
     );
   });
 
@@ -126,7 +127,7 @@ describe("each source's allowance left today, before running (U16)", () => {
     expect(read("server/services/scraper/emailPatterns.ts").match(/\{ email: `/g)).toHaveLength(ENRICH_FULLY_MAX.reoonInstant);
     expect(ENRICH_FULLY_MAX.reoonDaily).toBe(ENRICH_FULLY_MAX.reoonInstant + 1);
     expect(read("server/services/enrichment/comprehensivePass.ts")).toContain("credits.power += 1;");
-    expect(enrichFullyText(10)).toContain("For 10 people that is at most 10 QuickEnrich, 30 + 40 Reoon and 10 LinkedIn.");
+    expect(enrichFullyText(10)).toContain("For 10 people that is at most 10 prospect-database lookups, 30 + 40 Reoon and 10 LinkedIn.");
   });
 
   it("a paid lookup's confirmation names the count, the unit and what today has left", () => {

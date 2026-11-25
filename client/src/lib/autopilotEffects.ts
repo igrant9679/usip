@@ -11,7 +11,7 @@ export type AutopilotEffect = "sends" | "spends" | "records";
 
 export const EFFECT_GROUPS: ReadonlyArray<{ effect: AutopilotEffect; title: string; blurb: string }> = [
   { effect: "sends", title: "Sends to people", blurb: "In Autonomous these email, invite or message prospects and visitors on their own; in Approve they draft and wait for you. All of them stop while outbound is paused." },
-  { effect: "spends", title: "Spends credits", blurb: "These run lookups that use vendor credits (Reoon, QuickEnrich, LinkedIn lookups), within each source's daily allowance." },
+  { effect: "spends", title: "Spends credits", blurb: "These run lookups that use vendor credits (Reoon, email lookups in our prospect databases, LinkedIn lookups), within each source's daily allowance." },
   { effect: "records", title: "Changes records", blurb: "These create tasks, move deals, tune sequences or place people in campaigns. Nothing leaves the building from these alone." },
 ];
 

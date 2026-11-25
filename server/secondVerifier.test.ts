@@ -265,7 +265,7 @@ describe("the wiring", () => {
     const src = read("./routers/prospects.ts");
     expect(src).toContain('after: { email, emailStatus: verdict, reoon: raw.status, verifier: raw.decidedBy ?? "reoon" },');
     expect(src).toContain('verifier: raw.decidedBy ?? "reoon", replaced,');
-    expect(read("../client/src/pages/usip/ProspectDetail.tsx")).toContain('r.verifier === "warmysender" ? " · decided by WarmySender, Reoon could not" : ""');
+    expect(read("../client/src/pages/usip/ProspectDetail.tsx")).toContain('r.verifier === "warmysender" ? " · decided by the second verifier, Reoon could not" : ""');
   });
 
   it("the spend report names the unit", () => {

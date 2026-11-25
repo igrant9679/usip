@@ -201,7 +201,8 @@ describe("saving what was found", () => {
     expect(ask).toContain("const cost = lookupSaveCost(rows);");
     expect(ask).toContain("if (cost.total === 0) return go();");
     expect(ask).toContain("confirmAction({");
-    expect(ask).toContain("description: `This spends ${cost.text}. Rows from LinkedIn, Apollo and QuickEnrich are free.`,");
+    // Sources are named without their vendors since 2026-11-25 (owner decision).
+    expect(ask).toContain("description: `This spends ${cost.text}. Rows from LinkedIn and from prospect sources that search for free cost nothing.`,");
     // Every person save goes through it: one row or the ticked ones.
     expect(card).toContain("onClick={() => askThenSave([p], true)}>{saveLabel(p)}</Button>");
     expect(card).toContain("onClick={() => askThenSave(chosen, false)} data-name-lookup-save-selected>");

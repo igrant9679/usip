@@ -55,6 +55,7 @@ import { Link } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { invalidateCampaignReads } from "@/lib/entityCache";
+import { useSourceNames } from "@/lib/sourceNames";
 
 /** Descriptions keyed by source id, so this page and the campaign wizard
  *  describe the same source the same way. */
@@ -156,6 +157,7 @@ function Toggle({ checked, onChange, label, color = "bg-primary" }: { checked: b
 
 /* --- Main page ------------------------------------------------------------ */
 export default function ARESettings() {
+  const sourceNames = useSourceNames();
   const utils = trpc.useUtils();
   const { data: settings, isLoading, error: loadError, refetch } = trpc.settings.getAreSettings.useQuery();
 
@@ -617,12 +619,14 @@ export default function ARESettings() {
         <Section
           icon={Search}
           title="Prospect Sources & Checking Order"
-          description="Sources are checked top-to-bottom: when two find the same person, the higher one's record wins. A source toggled off never runs anywhere in this workspace — discovery, Find prospects, or campaigns — whatever a campaign selected. New campaigns start with the enabled sources pre-selected, except LeadOcean, which a person ticks per campaign because it bills its previews."
+          description="Sources are checked top-to-bottom: when two find the same person, the higher one's record wins. A source toggled off never runs anywhere in this workspace — discovery, Find prospects, or campaigns — whatever a campaign selected. New campaigns start with the enabled sources pre-selected, except a source that bills its previews, which a person ticks per campaign. On a membership plan, people are found through the one source chosen on Settings → Data sources."
         >
           <div className="space-y-2">
             {sourceOrder.map((key, idx) => {
-              const meta = ARE_SOURCES.find((s) => s.id === key);
-              if (!meta) return null;
+              const found = ARE_SOURCES.find((s) => s.id === key);
+              if (!found) return null;
+              // A prospect database is "Source N" to members (owner 2026-11-25).
+              const meta = { ...found, label: sourceNames.label(key), description: sourceNames.description(key) || found.description };
               const iconFor: Record<string, { icon: typeof Database; color: string }> = {
                 internal: { icon: Database, color: "text-slate-500" },
                 google_business: { icon: Globe, color: "text-blue-500" },
@@ -676,10 +680,11 @@ export default function ARESettings() {
           </div>
         </Section>
 
+        {/* own-key cards: a vendor's name is allowed on the card for a workspace's OWN key (owner 2026-11-25); pool sources are "Source N" everywhere else */}
         {/* -- 8b. Apollo.io connection (feeds the "Apollo" source above) -- */}
         <Section
           icon={Database}
-          title="Apollo.io"
+          title="Your own Apollo key (optional)"
           description="Connect your Apollo account so campaigns can source prospects from it. Search-only — costs no Apollo credits."
         >
           <ApolloSourceCard variant="bare" />
@@ -697,7 +702,7 @@ export default function ARESettings() {
         {/* -- 8d. QuickEnrich connection (feeds the "QuickEnrich" source above) -- */}
         <Section
           icon={Radar}
-          title="QuickEnrich"
+          title="Your own QuickEnrich key (optional)"
           description="Campaigns discover people from the QuickEnrich database for free; the enrichment sweep then buys their emails one credit per hit, Reoon-verified."
         >
           <QuickEnrichSourceCard variant="bare" />
@@ -706,7 +711,7 @@ export default function ARESettings() {
         {/* -- 8e. WarmySender connection (feeds the "WarmySender leads" source above) -- */}
         <Section
           icon={Flame}
-          title="WarmySender"
+          title="Your own WarmySender key (optional)"
           description="Campaigns preview WarmySender's lead database for free (masked) and spend one lead unit per net-new person acquired, metered by the budget ledger against the plan's daily pace and monthly allowance."
         >
           <WarmySenderSourceCard variant="bare" />
@@ -715,11 +720,12 @@ export default function ARESettings() {
         {/* -- 8f. LeadOcean connection (feeds the "LeadOcean" source above) -- */}
         <Section
           icon={Waves}
-          title="LeadOcean"
+          title="Your own LeadOcean key (optional)"
           description="This workspace's own LeadOcean key. Every search row and lookup counts as a record, so it runs only on a campaign or a Source search that ticks it."
         >
           <LeadOceanSourceCard variant="bare" />
         </Section>
+        {/* end own-key cards */}
 
         {/* -- 9. ICP Regen Schedule -- */}
         <Section
