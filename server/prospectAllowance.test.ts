@@ -280,9 +280,14 @@ describe("a failed read is not an answer", () => {
 
   it("an unreadable plan stops shared data, loudly, and leaves the workspace's own key alone", async () => {
     const realSelect = h.db.select;
+    // The plan's own read fails (the key's origin is read first since phase 2).
     const failFirst = () => {
       let n = 0;
-      h.db.select = (...a: unknown[]) => { if (n++ === 0) throw new Error("connection lost"); return realSelect(...a); };
+      h.db.select = (...a: unknown[]) => {
+        const projection = a[0] as Record<string, unknown> | undefined;
+        if (projection && "plan" in projection) { n++; throw new Error("connection lost"); }
+        return realSelect(...a);
+      };
     };
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     failFirst();

@@ -74,7 +74,11 @@ export async function getApolloDailyCap(workspaceId: number): Promise<number> {
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return row?.cap ?? DEFAULT_DAILY_PULL_CAP;
+  const own = row?.cap ?? DEFAULT_DAILY_PULL_CAP;
+  // A workspace on a plan using a key that is not its own runs under the
+  // plan's daily cap instead (owner 2026-11-25, services/prospectAllowance).
+  const { effectiveDailyCap } = await import("./prospectAllowance");
+  return effectiveDailyCap(workspaceId, "apollo", own);
 }
 
 /**

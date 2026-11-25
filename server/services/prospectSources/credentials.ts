@@ -24,7 +24,8 @@ import type { CredentialStatus, ProspectSourceSlug } from "@shared/prospectSourc
 import type { CredentialValidationResult, ProspectSource, SourceCredentials } from "./types";
 import { getApolloKey } from "../apollo";
 import { getQuickEnrichKey } from "../quickenrich";
-import { isSourceShareKind, lenderOfKey, linkedSourceRow, sharedFromName, workspacesBorrowingSource, SOURCE_SHARE_KINDS } from "../keyShares";
+import { planDailyCapFor } from "../prospectAllowance";
+import { isShareKind, lenderOfKey, linkedKeyVia, linkedSourceRow, sharedFromName, workspacesBorrowingSource, SOURCE_SHARE_KINDS } from "../keyShares";
 
 export interface CredentialRowView {
   slug: ProspectSourceSlug;
@@ -39,9 +40,11 @@ export interface CredentialRowView {
   /**
    * "workspace" = this workspace's own key; "env" = deploy-wide fallback
    * (legacy vendors only); "linked" = a key another workspace lends this one
-   * (services/keyShares), named in `sharedFrom` and never shown, masked or not.
+   * (services/keyShares), named in `sharedFrom` and never shown, masked or not;
+   * "pool" = the shared prospect pool (services/prospectPool): in use, never
+   * shown, and never named, since members read pool sources as "Source N".
    */
-  source: "workspace" | "env" | "linked" | "none";
+  source: "workspace" | "env" | "linked" | "pool" | "none";
   sharedFrom?: string | null;
 }
 
@@ -58,14 +61,28 @@ export function parseSecrets(enc: string | null | undefined): Record<string, str
   }
 }
 
-/** Decrypted credentials for an adapter, or null when the workspace has none usable. */
+/**
+ * Decrypted credentials for an adapter, or null when the workspace has none
+ * usable. A key that is not the workspace's own, used by a workspace on a
+ * plan, carries the plan's daily cap (ceil(monthly / 10)), which replaces the
+ * vendor's own lower cap for that shared use (owner 2026-11-25).
+ */
 export async function loadCredentials(workspaceId: number, source: ProspectSource): Promise<SourceCredentials | null> {
+  const c = await loadCredentialsRaw(workspaceId, source);
+  if (c && c.origin && c.origin !== "own") c.dailyCapOverride = await planDailyCapFor(workspaceId);
+  return c;
+}
+
+async function loadCredentialsRaw(workspaceId: number, source: ProspectSource): Promise<SourceCredentials | null> {
   if (source.credentialMode === "legacy") {
     const apiKey = source.slug === "apollo" ? await getApolloKey(workspaceId)
       : source.slug === "quickenrich" ? await getQuickEnrichKey(workspaceId)
       : "";
     if (!apiKey) return null;
-    return { slug: source.slug, workspaceId, secrets: { apiKey }, config: {} };
+    const via = source.slug === "apollo" || source.slug === "quickenrich" ? await linkedKeyVia(workspaceId, source.slug, apiKey) : null;
+    const envKey = source.slug === "quickenrich" ? (process.env.QUICKENRICH_API_KEY ?? "") : "";
+    const origin = via === "pool" ? "pool" : via === "loan" ? "loan" : envKey && apiKey === envKey ? "env" : "own";
+    return { slug: source.slug, workspaceId, secrets: { apiKey }, config: {}, origin };
   }
   const db = await getDb();
   if (!db) return null;
@@ -81,12 +98,12 @@ export async function loadCredentials(workspaceId: number, source: ProspectSourc
       workspaceId,
       secrets: own,
       config: (row!.config && typeof row!.config === "object" ? row!.config : {}) as Record<string, unknown>,
+      origin: "own",
     };
   }
-  // No key of its own: one another workspace lends it (services/keyShares).
-  // The lender's secrets and the lender's account settings, billed and
-  // counted as this workspace's searches.
-  if (!isSourceShareKind(source.slug)) return null;
+  // No key of its own: one another workspace lends it, or the shared pool
+  // (services/keyShares). The lender's secrets and the lender's account
+  // settings, billed and counted as this workspace's searches.
   const lent = await linkedSourceRow(workspaceId, source.slug);
   const secrets = parseSecrets(lent?.row.credentialsEnc);
   if (!lent || !secrets.apiKey) return null;
@@ -95,6 +112,7 @@ export async function loadCredentials(workspaceId: number, source: ProspectSourc
     workspaceId,
     secrets,
     config: (lent.row.config && typeof lent.row.config === "object" ? lent.row.config : {}) as Record<string, unknown>,
+    origin: lent.via,
   };
 }
 
@@ -108,14 +126,17 @@ export async function credentialView(workspaceId: number, source: ProspectSource
     const key = source.slug === "apollo" ? await getApolloKey(workspaceId)
       : source.slug === "quickenrich" ? await getQuickEnrichKey(workspaceId) : "";
     const envKey = source.slug === "quickenrich" ? (process.env.QUICKENRICH_API_KEY ?? "") : "";
-    // A lent key is in use and named, never shown — not even its tail.
-    const lentFrom = key && (source.slug === "apollo" || source.slug === "quickenrich") ? await lenderOfKey(workspaceId, source.slug, key) : null;
+    // A lent key is in use and named, never shown — not even its tail. A pool
+    // key is in use and neither shown nor named.
+    const legacy = source.slug === "apollo" || source.slug === "quickenrich";
+    const via = key && legacy ? await linkedKeyVia(workspaceId, source.slug as "apollo" | "quickenrich", key) : null;
+    const lentFrom = via === "loan" && legacy ? await lenderOfKey(workspaceId, source.slug as "apollo" | "quickenrich", key) : null;
     return {
       ...base,
       configured: key.length > 0,
-      masked: lentFrom ? "" : maskSecret(key),
+      masked: via ? "" : maskSecret(key),
       status: key ? "valid" : "unvalidated",
-      source: key ? (lentFrom ? "linked" : envKey && key === envKey ? "env" : "workspace") : "none",
+      source: key ? (via === "pool" ? "pool" : via === "loan" ? "linked" : envKey && key === envKey ? "env" : "workspace") : "none",
       sharedFrom: lentFrom,
     };
   }
@@ -127,8 +148,10 @@ export async function credentialView(workspaceId: number, source: ProspectSource
     .where(and(eq(prospectSourceCredentials.workspaceId, workspaceId), eq(prospectSourceCredentials.sourceSlug, source.slug)))
     .limit(1);
   const secrets = row && row.status !== "revoked" ? parseSecrets(row.credentialsEnc) : {};
-  if (!secrets.apiKey && isSourceShareKind(source.slug)) {
-    // Borrowed: in use, named, and never shown — not even its tail.
+  if (!secrets.apiKey) {
+    // Borrowed: in use, named, and never shown — not even its tail. From the
+    // pool: in use, never shown and never named, and the lender's account
+    // settings are not handed to the borrower's screens.
     const lent = await linkedSourceRow(workspaceId, source.slug);
     if (lent && parseSecrets(lent.row.credentialsEnc).apiKey) {
       return {
@@ -136,9 +159,9 @@ export async function credentialView(workspaceId: number, source: ProspectSource
         configured: true,
         status: lent.row.status,
         lastValidatedAt: lent.row.lastValidatedAt ?? null,
-        config: (lent.row.config && typeof lent.row.config === "object" ? lent.row.config : {}) as Record<string, unknown>,
-        source: "linked",
-        sharedFrom: await sharedFromName(workspaceId, source.slug),
+        config: lent.via === "pool" ? {} : (lent.row.config && typeof lent.row.config === "object" ? lent.row.config : {}) as Record<string, unknown>,
+        source: lent.via === "pool" ? "pool" : "linked",
+        sharedFrom: lent.via === "pool" || !isShareKind(source.slug) ? null : await sharedFromName(workspaceId, source.slug),
       };
     }
   }

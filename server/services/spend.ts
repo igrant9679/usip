@@ -177,9 +177,12 @@ export async function sharedKeyPolicy(workspaceId: number, vendor: SharedKeyVend
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
   if (!row) return { allowed: false, dailyCap: null };
-  return vendor === "reoon"
-    ? { allowed: !!row.reoon, dailyCap: row.reoonCap ?? null }
-    : { allowed: !!row.quickenrich, dailyCap: row.quickenrichCap ?? null };
+  if (vendor === "reoon") return { allowed: !!row.reoon, dailyCap: row.reoonCap ?? null };
+  // A workspace on a plan runs the shared QuickEnrich key under the plan's
+  // daily cap, which replaces the owner's per-workspace cap (owner 2026-11-25).
+  const { planDailyCapFor } = await import("./prospectAllowance");
+  const planCap = await planDailyCapFor(workspaceId);
+  return { allowed: !!row.quickenrich, dailyCap: planCap ?? row.quickenrichCap ?? null };
 }
 
 /** Paid units this workspace has spent on the shared key today (UTC). */

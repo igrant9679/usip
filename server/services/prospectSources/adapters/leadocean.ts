@@ -110,6 +110,9 @@ function cfg(c: SourceCredentials): LeadOceanConfig {
 }
 
 function dailyCapOf(c: SourceCredentials): number | null {
+  // A plan's shared use runs under the plan's daily cap, not the lender's own
+  // (owner 2026-11-25; set by loadCredentials).
+  if (c.dailyCapOverride != null) return c.dailyCapOverride;
   const n = Number(cfg(c).dailyPeopleCap);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }

@@ -67,6 +67,21 @@ export const PROSPECT_SOURCE_SLUGS = [
 ] as const;
 export type ProspectSourceSlug = (typeof PROSPECT_SOURCE_SLUGS)[number];
 
+/** Registered but not implemented ("available, not configured"): never searched, never pooled. */
+export const STUB_SOURCE_SLUGS: readonly ProspectSourceSlug[] = ["hunter", "lemlist"];
+
+/**
+ * The prospect databases a workspace can search: every registry vendor with a
+ * real adapter. The shared pool and the one-source choice range over these, so
+ * a new vendor joins both by its registry entry and adapter alone.
+ */
+export const PROSPECT_DATABASE_SLUGS: readonly ProspectSourceSlug[] =
+  PROSPECT_SOURCE_SLUGS.filter((s) => !STUB_SOURCE_SLUGS.includes(s));
+
+export function isProspectDatabase(v: unknown): v is ProspectSourceSlug {
+  return typeof v === "string" && (PROSPECT_DATABASE_SLUGS as readonly string[]).includes(v);
+}
+
 /**
  * What a source can do. Declared per adapter; the registry never guesses.
  *

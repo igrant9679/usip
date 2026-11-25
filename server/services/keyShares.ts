@@ -10,9 +10,11 @@
  *   - T never holds the key and is never shown it, masked or not.
  *
  * The order every key read follows: the workspace's OWN key first, then a key
- * lent to it, then whatever fallback that vendor already had (the deployment's
- * key, where the platform owner allowed it). A lent key is the lender's own
- * key and nothing else: a workspace cannot pass on a key it borrows.
+ * lent to it, then the shared prospect pool for a prospect source the
+ * platform owner shares (services/prospectPool, 2026-11-25), then whatever
+ * fallback that vendor already had (the deployment's key, where the platform
+ * owner allowed it). A lent key is the lender's own key and nothing else: a
+ * workspace cannot pass on a key it borrows.
  *
  * **Every** read of a shareable key must go through here. A share that only
  * some of the app honours would show "connected" in Settings and fail in the
@@ -26,6 +28,8 @@ import { prospectSourceCredentials, workspaceKeyShares, workspaceSettings, works
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { deepseekSettings } from "./deepseekSettings";
+import { poolLenderFor } from "./prospectPool";
+import { isProspectDatabase } from "@shared/prospectSources";
 
 /** Keys kept as a column on the lender's workspace_settings row. */
 export const SETTINGS_SHARE_KINDS = ["anthropic", "openai", "gemini", "deepseek", "xai", "apollo", "reoon", "quickenrich"] as const;
@@ -102,7 +106,22 @@ export async function lendersFor(workspaceId: number, kinds: readonly ShareKind[
   }
 }
 
-export type LinkedKey = { ownerWorkspaceId: number; key: string };
+/** `via`: an explicit loan, or the shared prospect pool. */
+export type LinkedKey = { ownerWorkspaceId: number; key: string; via: "loan" | "pool" };
+
+/**
+ * The pool's lender for each prospect-source kind no loan covers. Only
+ * prospect databases are pooled: AI, voice and verification keys never are.
+ */
+async function poolLenders(workspaceId: number, kinds: readonly string[], loaned: Partial<Record<string, number>>): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const kind of kinds) {
+    if (loaned[kind] || !isProspectDatabase(kind)) continue;
+    const owner = await poolLenderFor(workspaceId, kind);
+    if (owner) out[kind] = owner;
+  }
+  return out;
+}
 
 /**
  * The keys other workspaces lend this one, decrypted, for the kinds asked.
@@ -110,7 +129,9 @@ export type LinkedKey = { ownerWorkspaceId: number; key: string };
  * Ask only for the kinds the workspace has no key of its own for.
  */
 export async function linkedKeys(workspaceId: number, kinds: readonly SettingsShareKind[]): Promise<Partial<Record<SettingsShareKind, LinkedKey>>> {
-  const lenders = await lendersFor(workspaceId, kinds);
+  const loans = await lendersFor(workspaceId, kinds);
+  const pooled = await poolLenders(workspaceId, kinds, loans);
+  const lenders: Partial<Record<SettingsShareKind, number>> = { ...pooled, ...loans };
   const owners = Array.from(new Set(Object.values(lenders))) as number[];
   if (owners.length === 0) return {};
   try {
@@ -136,7 +157,7 @@ export async function linkedKeys(workspaceId: number, kinds: readonly SettingsSh
       if (!owner) continue;
       const enc = kind === "deepseek" ? (await deepseekSettings(owner)).keyEnc : byOwner.get(owner)?.[SETTINGS_COLUMN[kind]];
       const key = tryDecryptSecret(enc);
-      if (key) out[kind] = { ownerWorkspaceId: owner, key };
+      if (key) out[kind] = { ownerWorkspaceId: owner, key, via: loans[kind] ? "loan" : "pool" };
     }
     return out;
   } catch (e) {
@@ -151,15 +172,19 @@ export async function linkedKey(workspaceId: number, kind: SettingsShareKind): P
 }
 
 /**
- * The lender's credential row for a table-mode prospect source, or null.
- * The borrower gets the lender's secrets and the lender's non-secret config
- * (the account's own settings); a revoked row lends nothing.
+ * The lender's credential row for a table-mode prospect source, or null: an
+ * explicit loan (WarmySender, LeadOcean), else the shared pool for any
+ * prospect database the platform owner shares (a source added later is
+ * pooled with no change here). The borrower gets the lender's secrets and
+ * the lender's non-secret config (the account's own settings); a revoked row
+ * lends nothing.
  */
 export async function linkedSourceRow(
   workspaceId: number,
-  slug: SourceShareKind,
-): Promise<{ ownerWorkspaceId: number; row: typeof prospectSourceCredentials.$inferSelect } | null> {
-  const owner = (await lendersFor(workspaceId, [slug]))[slug];
+  slug: string,
+): Promise<{ ownerWorkspaceId: number; row: typeof prospectSourceCredentials.$inferSelect; via: "loan" | "pool" } | null> {
+  const loan = isSourceShareKind(slug) ? (await lendersFor(workspaceId, [slug]))[slug] : undefined;
+  const owner = loan ?? (isProspectDatabase(slug) ? await poolLenderFor(workspaceId, slug) : null);
   if (!owner) return null;
   try {
     const db = await getDb();
@@ -170,7 +195,7 @@ export async function linkedSourceRow(
       .where(and(eq(prospectSourceCredentials.workspaceId, owner), eq(prospectSourceCredentials.sourceSlug, slug)))
       .limit(1);
     if (!row || row.status === "revoked" || !row.credentialsEnc) return null;
-    return { ownerWorkspaceId: owner, row };
+    return { ownerWorkspaceId: owner, row, via: loan ? "loan" : "pool" };
   } catch (e) {
     console.error("[keyShares] linked source read failed:", (e as Error).message);
     return null;
@@ -217,7 +242,10 @@ export async function borrowedKeys(workspaceId: number): Promise<BorrowedKey[]> 
   for (const kind of SHARE_KINDS) {
     const owner = lenders[kind];
     if (!owner) continue;
-    const usable = isSourceShareKind(kind) ? !!(await linkedSourceRow(workspaceId, kind)) : !!keys[kind as SettingsShareKind];
+    // Loans only: the pool is not something this workspace borrowed or can stop using.
+    const usable = isSourceShareKind(kind)
+      ? (await linkedSourceRow(workspaceId, kind))?.via === "loan"
+      : keys[kind as SettingsShareKind]?.via === "loan";
     out.push({ kind, ownerWorkspaceId: owner, ownerName: names.get(owner) ?? "another workspace", usable });
   }
   return out;
@@ -237,8 +265,15 @@ export async function sharedFromName(workspaceId: number, kind: ShareKind): Prom
 export async function lenderOfKey(workspaceId: number, kind: SettingsShareKind, key: string): Promise<string | null> {
   if (!key) return null;
   const lent = (await linkedKeys(workspaceId, [kind]))[kind];
-  if (!lent || lent.key !== key) return null;
+  if (!lent || lent.key !== key || lent.via !== "loan") return null;
   return (await sharedFromName(workspaceId, kind)) ?? "another workspace";
+}
+
+/** How a resolved key reached this workspace: an explicit loan, the shared pool, or neither. */
+export async function linkedKeyVia(workspaceId: number, kind: SettingsShareKind, key: string): Promise<"loan" | "pool" | null> {
+  if (!key) return null;
+  const lent = (await linkedKeys(workspaceId, [kind]))[kind];
+  return lent && lent.key === key ? lent.via : null;
 }
 
 /**

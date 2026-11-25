@@ -23,6 +23,7 @@
  * Pure, so a test can read every sentence. The service that meters it is
  * server/services/prospectAllowance.ts.
  */
+import { PROSPECT_DATABASE_SLUGS, isProspectDatabase, type ProspectSourceSlug } from "./prospectSources";
 
 export const MEMBERSHIP_PLANS = ["trial", "member", "contributor", "steward", "founder"] as const;
 export type MembershipPlan = (typeof MEMBERSHIP_PLANS)[number];
@@ -52,11 +53,11 @@ export function isMembershipPlan(v: unknown): v is MembershipPlan {
  * The prospect-data vendors whose keys can be lent or shared. Each one's data
  * counts only when the key in use is not the workspace's own.
  */
-export const ALLOWANCE_VENDORS = ["quickenrich", "apollo", "warmysender", "leadocean"] as const;
-export type AllowanceVendor = (typeof ALLOWANCE_VENDORS)[number];
+export const ALLOWANCE_VENDORS: readonly ProspectSourceSlug[] = PROSPECT_DATABASE_SLUGS;
+export type AllowanceVendor = ProspectSourceSlug;
 
 export function isAllowanceVendor(v: unknown): v is AllowanceVendor {
-  return typeof v === "string" && (ALLOWANCE_VENDORS as readonly string[]).includes(v);
+  return isProspectDatabase(v);
 }
 
 /** The allowance's month, "YYYY-MM" in UTC. A new month is a new usage row, so nothing has to reset it. */
@@ -156,4 +157,24 @@ export function allowanceLauncherLine(a: ProspectAllowance): string {
 /** The platform owner's plan picker: every plan with its monthly number. */
 export function planOptionLabel(plan: MembershipPlan): string {
   return `${PLAN_LABEL[plan]} (${n(PLAN_MONTHLY_LIMIT[plan])} a month)`;
+}
+
+/**
+ * The daily cap for data a workspace on a plan takes from shared keys (owner
+ * 2026-11-25): a tenth of the month, rounded up, per source. Trial 25,
+ * Member 100, Contributor 300, Steward 500, Founder 600. It replaces each
+ * vendor's own lower daily cap for shared use only; own keys keep theirs.
+ */
+export function planDailyCap(plan: MembershipPlan): number {
+  return Math.ceil(PLAN_MONTHLY_LIMIT[plan] / 10);
+}
+
+/** The allowance's day, "YYYY-MM-DD" in UTC. */
+export function allowanceDay(at: Date = new Date()): string {
+  return at.toISOString().slice(0, 10);
+}
+
+/** Why a shared source was skipped for the day. */
+export function dailyCapReachedReason(label: string, cap: number): string {
+  return `${label} has reached today's limit for your plan (${cap.toLocaleString("en-US")} a day). It starts again tomorrow (UTC).`;
 }

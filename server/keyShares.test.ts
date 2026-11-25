@@ -145,7 +145,7 @@ describe("a lent key is the lender's key, read at call time", () => {
 
   it("the three LLM providers come in one read, and only the ones lent", async () => {
     await caller(OWNER, A).keyShares.share({ kind: "anthropic", targetWorkspaceId: B });
-    expect(await linkedKeys(B, ["anthropic", "openai", "gemini"])).toEqual({ anthropic: { ownerWorkspaceId: A, key: KEYS.anthropic } });
+    expect(await linkedKeys(B, ["anthropic", "openai", "gemini"])).toEqual({ anthropic: { ownerWorkspaceId: A, key: KEYS.anthropic, via: "loan" } });
   });
 
   it("a workspace's own key always comes first", async () => {

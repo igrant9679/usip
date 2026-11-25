@@ -18,6 +18,7 @@ import { workspaceSettings } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import {
   PROSPECT_SOURCE_SLUGS,
+  STUB_SOURCE_SLUGS,
   matchCapabilities,
   rankSourcesForQuery,
   type CapabilityMatch,
@@ -89,8 +90,21 @@ export interface SourceStatus {
   match: CapabilityMatch | null;
 }
 
+/**
+ * The ledger periods a pull is held against. Pool use is governed by the
+ * source's platform ceiling, not the lender's per-workspace ledger (each
+ * borrower would otherwise get a whole copy of the lender's vendor
+ * allowance); a plan's shared use by the plan's daily cap (owner 2026-11-25,
+ * services/prospectAllowance). Own keys and plain loans keep their ledger.
+ */
+export function periodsFor(s: ProspectSource, creds: SourceCredentials, now: Date = new Date()) {
+  if (creds.origin === "pool") return [];
+  if (creds.origin && creds.origin !== "own" && creds.dailyCapOverride != null) return [];
+  return s.budgetPeriods({ now, credentials: creds });
+}
+
 function isImplemented(s: ProspectSource): boolean {
-  return s.slug !== "hunter" && s.slug !== "lemlist";
+  return !STUB_SOURCE_SLUGS.includes(s.slug);
 }
 
 async function workspaceOrder(workspaceId: number): Promise<{ order: AreSourceId[]; mask: Record<string, unknown> }> {
@@ -155,7 +169,7 @@ export async function describeSources(workspaceId: number, criteria?: SearchCrit
     let leadsRemaining: number | null = null;
     if (creds) {
       try { budget = await displayBudget(workspaceId, s, creds); } catch { budget = []; }
-      const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
+      const periods = periodsFor(s, creds);
       if (periods.length > 0) {
         leadsRemaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
       } else {
@@ -238,7 +252,7 @@ export async function eligibleFor(
     const circuit = await circuitState(workspaceId, s.slug, s.credentialMode);
     if (circuit.open) { skipped.push({ slug: s.slug, reason: "circuit_open", detail: `paused after ${circuit.failures} consecutive failures until ${circuit.openUntil?.toISOString() ?? "later"}` }); continue; }
     let leadsRemaining: number | null = null;
-    const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
+    const periods = periodsFor(s, creds);
     if (periods.length > 0) {
       leadsRemaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
     } else {
