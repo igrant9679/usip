@@ -36,6 +36,8 @@ import { createQuickEnrichSource } from "./adapters/quickenrich";
 import { createApolloSource } from "./adapters/apollo";
 import { createLeadOceanSource } from "./adapters/leadocean";
 import { createHunterSource, createLemlistSource } from "./adapters/stubs";
+import { createAleadsSource } from "./adapters/aleads";
+import { createClugtmSource } from "./adapters/clugtm";
 
 const SOURCE_FACTORIES: Record<ProspectSourceSlug, () => ProspectSource> = {
   warmysender: createWarmySenderSource,
@@ -44,6 +46,8 @@ const SOURCE_FACTORIES: Record<ProspectSourceSlug, () => ProspectSource> = {
   leadocean: createLeadOceanSource,
   hunter: createHunterSource,
   lemlist: createLemlistSource,
+  aleads: createAleadsSource,
+  clugtm: createClugtmSource,
 };
 
 const instances = new Map<ProspectSourceSlug, ProspectSource>();

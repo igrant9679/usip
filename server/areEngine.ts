@@ -2889,7 +2889,9 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     | "apollo"
     | "quickenrich"
     | "warmysender"
-    | "leadocean";
+    | "leadocean"
+    | "aleads"
+    | "clugtm";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
@@ -3174,6 +3176,11 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       // Counted: the people actually queued (suppressed and identity-less rows
       // are kept out there), each person once per workspace, ever.
       await hold?.settle(queued);
+      // CluGTM hands over people without addresses; its own asynchronous
+      // enrichment finds them, in the job runner (adapters/clugtm).
+      if (sourceType === "clugtm" && queued.length > 0) {
+        await (await import("./services/prospectSources/adapters/clugtm")).enqueueClugtmEnrichment(campaign.workspaceId);
+      }
       totalNew += toQueue.length;
       // Keyed by the source's id, as every other perSource entry is: the
       // scrape-job name ("linkedin_people") hid LinkedIn's successful attempts

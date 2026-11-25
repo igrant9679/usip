@@ -5554,6 +5554,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `prospect_pool_usage` (`id` int AUTO_INCREMENT PRIMARY KEY, `slug` varchar(32) NOT NULL, `period` char(7) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_pool_usage` (`slug`, `period`))",
     ],
   },
+  // 0446 — the A-Leads and CluGTM prospect sources (owner go-ahead
+  // 2026-11-25). The scrape job and queue row record their source in two
+  // existing ENUM columns, so each new vendor needs its value there (the
+  // 0219 LeadOcean precedent): without it the engine's insert fails in strict
+  // MySQL. Additive: the existing values are kept, in order.
+  {
+    name: "0446_aleads_clugtm_sources.sql",
+    statements: [
+      "ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum('google_business','linkedin_company','linkedin_people','web_scrape','news','industry_events','apollo','internal','quickenrich','warmysender','leadocean','aleads','clugtm') NOT NULL",
+      "ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum('internal_contact','internal_lead','google_business','linkedin_company','linkedin_people','web_scrape','news_event','industry_event','apollo','zoominfo','clay','ai_research','quickenrich','warmysender','leadocean','aleads','clugtm') NOT NULL",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

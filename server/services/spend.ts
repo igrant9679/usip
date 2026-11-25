@@ -39,6 +39,8 @@ export type SpendVendor =
   | "apollo"
   | "warmysender"
   | "leadocean"
+  | "aleads"
+  | "clugtm"
   | "linkedin";
 
 export type KeySource = "workspace" | "shared";
