@@ -37,7 +37,9 @@ function Digest({ d }: { d: { emailsSent: number; prospectsDiscovered: number; r
 function QueueCard({
   icon, tint, title, count, cta, href, children,
 }: {
-  icon: React.ReactNode; tint: string; title: string; count: number;
+  icon: React.ReactNode; tint: string; title: string;
+  /** Left out for a card that is a state rather than a queue of items. */
+  count?: number;
   cta: string; href: string; children?: React.ReactNode;
 }) {
   return (
@@ -47,7 +49,7 @@ function QueueCard({
           {icon}
         </span>
         <span className="text-sm font-semibold text-foreground">{title}</span>
-        <span className="ml-auto text-lg font-bold tabular-nums" style={{ color: `color-mix(in srgb, ${tint} 55%, var(--foreground))` }}>{count}</span>
+        {count !== undefined && <span className="ml-auto text-lg font-bold tabular-nums" style={{ color: `color-mix(in srgb, ${tint} 55%, var(--foreground))` }}>{count}</span>}
       </div>
       {children}
       <Link href={href} className="inline-flex items-center gap-1 text-xs font-medium hover:underline" style={{ color: `color-mix(in srgb, ${tint} 55%, var(--foreground))` }}>
@@ -213,6 +215,16 @@ export function AttentionPanel() {
                 </li>
               ))}
             </ul>
+          </QueueCard>
+        )}
+
+        {/* The plan's monthly prospect data is used up (owner 2026-11-25): shared databases are skipped until it resets. */}
+        {s.prospectDataUsedUp && (
+          <QueueCard icon={<PauseCircle className="size-4" />} tint="#D97706" title="Prospect data used up this month"
+            cta="Use your own keys" href="/v2/settings/data-sources">
+            <p className="text-xs text-muted-foreground">
+              {s.prospectDataUsedUp.message} Campaigns keep working with the people already found.
+            </p>
           </QueueCard>
         )}
 

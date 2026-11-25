@@ -549,8 +549,16 @@ export type QuickEnrichTestResult = {
 export type QuickEnrichLookup = {
   /** The address their database returned, or null on any kind of miss. */
   email: string | null;
-  /** Why null, when it is: distinguishes "not in their DB" from "call failed". */
-  reason: "found" | "no_match" | "http_error" | "network_error" | "unrecognised_shape";
+  /**
+   * Why null, when it is: distinguishes "not in their DB" from "call failed".
+   * `allowance_exhausted`: nothing was asked, because the workspace's monthly
+   * prospect-data allowance is used up (or could not be read) and the key is
+   * not its own. Not a verdict about the person: `note` says why, and the
+   * row must be left for a later run, never marked as a miss.
+   */
+  reason: "found" | "no_match" | "http_error" | "network_error" | "unrecognised_shape" | "allowance_exhausted";
+  /** The member-facing reason when `reason` is allowance_exhausted. */
+  note?: string;
   /**
    * Company identity harvested from the same employee record, when their DB
    * carries it — INCLUDING on a no-email miss. Owner decision 2026-08-24 (CF
@@ -583,7 +591,22 @@ export async function quickenrichFindEmailByLinkedIn(
   linkedinUrl: string,
   meter: QuickEnrichMeter,
 ): Promise<QuickEnrichLookup> {
-  const r = await findEmailByLinkedIn(apiKey, linkedinUrl);
+  // The monthly prospect-data allowance (services/prospectAllowance): an
+  // email found with a key that is not the workspace's own is one unit. Held
+  // HERE, where every lookup passes, so no call site can find an email on a
+  // shared or lent key uncounted. Own keys and workspaces on no plan pass
+  // straight through.
+  const { holdAllowance } = await import("./prospectAllowance");
+  const hold = await holdAllowance(meter.workspaceId, "quickenrich", 1, { apiKey });
+  if (hold.granted === 0) {
+    return { email: null, reason: "allowance_exhausted", note: hold.reason ?? undefined, companyName: null, companyDomain: null };
+  }
+  let r: QuickEnrichLookup | null = null;
+  try {
+    r = await findEmailByLinkedIn(apiKey, linkedinUrl);
+  } finally {
+    await hold.settle(r?.reason === "found" ? 1 : 0);
+  }
   // 1 credit, charged only when an address comes back (audit P84: these
   // were billed and counted nowhere).
   if (r.reason === "found") await meterQuickEnrich(meter, apiKey, "email_hits");

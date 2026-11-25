@@ -252,6 +252,9 @@ export async function runComprehensiveEnrichment(opts: {
         } else {
           phases.quickenrich = "hit failed verification";
         }
+      } else if (hit.reason === "allowance_exhausted") {
+        // Not asked: the monthly prospect-data allowance (services/prospectAllowance).
+        phases.quickenrich = `skipped — ${hit.note ?? "prospect data for this month is used up"}`;
       } else {
         phases.quickenrich = `miss (${hit.reason})`;
       }

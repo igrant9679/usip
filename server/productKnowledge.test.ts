@@ -100,7 +100,15 @@ describe("assistant product knowledge digest", () => {
     // It is still a digest: it goes into every Elsie and Help
     // answer, so each 1,000 characters is about 250 tokens on every call,
     // and depth still belongs in the Operator's Manual articles.
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(15000);
+    //
+    // 2026-11-25: 15000 → 15500. Membership plans now include a monthly
+    // number of prospect records from the platform's keys (owner approved
+    // 2026-11-25), and own data keys became optional on a plan. Asked "do I
+    // need an Apollo key?", a digest that says only "Keys: Settings → Data
+    // sources" makes Elsie answer yes. One sentence of about 360 characters
+    // says the numbers, what counts and what happens when it runs out; the
+    // full article is "Prospect data included with your plan".
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(15500);
   });
 
   it("says where Settings is, and names every section the hub has", () => {

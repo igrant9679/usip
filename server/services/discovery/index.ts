@@ -48,6 +48,7 @@ import {
   quickenrichPulledToday,
 } from "../quickenrich";
 import { processRun, skippedCount, type PersistResult } from "./consolidate";
+import { holdAllowance, type AllowanceHold } from "../prospectAllowance";
 import { alreadyInWorkspace, workspaceIdentityIndex } from "../prospectSources/dedupe";
 import { enqueueJob, findActiveJob, kickJobs, registerJobKind, withHeartbeat } from "../jobs/runner";
 import { affectedRowsOf } from "../../_core/claim";
@@ -65,7 +66,16 @@ export { CAMPAIGN_RUN_MAX_QUERIES, personLists, personQueries };
  * not run (no key, daily cap spent, LinkedIn on hold) — why (audit P63: the
  * run log said "0 finds", which reads like "nobody matched").
  */
-type SourceOut = { raw: Array<Record<string, unknown>>; note?: string };
+type SourceOut = {
+  raw: Array<Record<string, unknown>>;
+  note?: string;
+  /**
+   * The monthly prospect-data allowance this source held (services/
+   * prospectAllowance). fanOutAndSave settles it to the finds that came in
+   * new, once they have been checked against People and stored.
+   */
+  hold?: AllowanceHold;
+};
 
 async function discoverLinkedInPeople(
   workspaceId: number,
@@ -164,6 +174,10 @@ async function discoverViaApollo(
   const used = await apolloPulledToday(workspaceId);
   const headroom = cap - used;
   if (headroom <= 0) return { raw: [], note: `today's Apollo record cap is used up (${used}/${cap})` };
+  // On a key that is not this workspace's own, at most what is left of the
+  // plan's month (services/prospectAllowance); none left, no search.
+  const hold = await holdAllowance(workspaceId, "apollo", Math.min(headroom, 25));
+  if (hold.granted === 0) return { raw: [], note: hold.reason ?? "prospect data for this month is used up" };
 
   const p = input as PersonSearchInput;
   const a = input as AccountSearchInput;
@@ -179,9 +193,16 @@ async function discoverViaApollo(
     industries: lists.industries,
     locations: lists.locations,
     keywords,
-    perPage: Math.min(headroom, 25),
-  }, "findProspects");
-  if (!res.ok) return { raw: [], note: res.error ?? "the Apollo search failed" };
+    // No more than the allowance granted (the same number when it is not counted).
+    perPage: Math.min(headroom, 25, hold.granted),
+  }, "findProspects").catch(async (e) => {
+    await hold.settle(0);
+    throw e;
+  });
+  if (!res.ok) {
+    await hold.settle(0);
+    return { raw: [], note: res.error ?? "the Apollo search failed" };
+  }
   // The campaigns' rule (areEngine discoverViaApollo): keep only people an
   // email lookup can work from. api_search masks every row (last name
   // hidden, no LinkedIn URL or company domain), and a masked find pushed to
@@ -196,6 +217,7 @@ async function discoverViaApollo(
       note: `${left} of ${res.prospects.length} left out: no LinkedIn URL, and no full name with a company domain, so no email lookup can find them`
         + (masked > 0 ? ` (${masked} with the last name hidden: Apollo's free search masks it and sends no domain)` : ""),
     } : {}),
+    hold,
   };
 }
 
@@ -233,15 +255,25 @@ async function discoverViaQuickEnrich(
     geos: lists.locations,
   }, allowedIndustries);
   if (!body) return { raw: [], note: "needs a job title, or an industry QuickEnrich knows, to search on" };
+  // On a key that is not this workspace's own, at most what is left of the
+  // plan's month (services/prospectAllowance); none left, no search.
+  const hold = await holdAllowance(workspaceId, "quickenrich", headroom);
+  if (hold.granted === 0) return { raw: [], note: hold.reason ?? "prospect data for this month is used up" };
   const res = await quickenrichContactFinder(apiKey, body, { workspaceId, feature: "findProspects" });
   // A real API failure surfaces as this source's error in perSource + the
   // run log, exactly like every other source in the fan-out.
-  if (!res.ok) throw new Error(`QuickEnrich contact-finder failed: ${res.error}`);
+  if (!res.ok) {
+    await hold.settle(0);
+    throw new Error(`QuickEnrich contact-finder failed: ${res.error}`);
+  }
   const kept = [...res.people]
     .sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail))
-    .slice(0, headroom);
+    .slice(0, headroom)
+    // and no more than the allowance granted (the same number when it is not counted)
+    .slice(0, hold.granted);
   await recordPullLedger(workspaceId, "quickenrich", [...lists.titles, ...lists.industries, ...lists.locations].join(" · ").slice(0, 400) || "person search", kept.length);
   return {
+    hold,
     raw: kept.map((p) => ({
       firstName: p.firstName,
       lastName: p.lastName,
@@ -656,6 +688,42 @@ export async function saveFindsAsPeople(
   }
 }
 
+/**
+ * Settle each source's prospect-data hold (services/prospectAllowance) to
+ * the finds it brought in that the workspace did not already have: new to
+ * People and to every campaign queue, one person once across sources, and
+ * stored. Counted when found, whether the run is held for review or saved
+ * at once; the rest of each hold goes back. A failed identity check counts
+ * every stored find of that source: an unknown is never read as "nothing
+ * new". A source whose request was made smaller says so in the run log.
+ */
+async function settleFindHolds(
+  workspaceId: number,
+  runId: number,
+  holds: Map<string, AllowanceHold>,
+  rows: Array<typeof rawFinds.$inferInsert>,
+  seen: { identityChecked: boolean; identityKeyOf: Map<typeof rawFinds.$inferInsert, string | null>; unstored: Set<typeof rawFinds.$inferInsert> },
+): Promise<void> {
+  const countedKeys = new Set<string>();
+  for (const [source, hold] of Array.from(holds.entries())) {
+    let delivered = 0;
+    if (hold.metered) {
+      for (const row of rows) {
+        if (row.source !== source || seen.unstored.has(row)) continue;
+        if (seen.identityChecked && row.knownAs !== "new") continue;
+        const key = seen.identityKeyOf.get(row) ?? null;
+        if (key) {
+          if (countedKeys.has(key)) continue;
+          countedKeys.add(key);
+        }
+        delivered++;
+      }
+    }
+    await hold.settle(delivered);
+    if (hold.reason) await emitLog(workspaceId, runId, "source.allowance", "info", `Source ${source}: ${hold.reason}`, { source, granted: hold.granted, asked: hold.asked, counted: delivered });
+  }
+}
+
 async function fanOutAndSave(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
@@ -739,6 +807,9 @@ async function fanOutAndSave(
   const perSource: Record<string, { found: number; error?: string; note?: string }> = {};
   let totalFinds = 0;
   const rowsToInsert: typeof rawFinds.$inferInsert[] = [];
+  // Each vendor source's prospect-data hold, settled below to the finds it
+  // brought in new (services/prospectAllowance).
+  const holds = new Map<string, AllowanceHold>();
 
   for (const s of settled) {
     if (s.status === "rejected") {
@@ -748,7 +819,8 @@ async function fanOutAndSave(
         `Source failed: ${reason}`, { reason });
       continue;
     }
-    const { source, raw, note } = s.value;
+    const { source, raw, note, hold } = s.value;
+    if (hold) holds.set(source, hold);
     perSource[source] = { found: raw.length, ...(note ? { note } : {}) };
     totalFinds += raw.length;
     // A source that could not run says why (P63), and says it as a warning.
@@ -764,6 +836,10 @@ async function fanOutAndSave(
   // check Source search uses, before anything is saved, so the run can show
   // which finds were new and which were someone already there.
   let alreadyInPeople = 0;
+  // Each find's identity key, from the same check, so the allowance counts a
+  // person two sources both found once.
+  const identityKeyOf = new Map<typeof rawFinds.$inferInsert, string | null>();
+  let identityChecked = false;
   if (rowsToInsert.length > 0) {
     try {
       const index = await workspaceIdentityIndex(workspaceId);
@@ -771,13 +847,16 @@ async function fanOutAndSave(
         const known = alreadyInWorkspace(index, { email: row.email, linkedinUrl: row.linkedinUrl, firstName: row.firstName, lastName: row.lastName, companyName: row.companyName, companyDomain: row.companyDomain });
         row.knownAs = known.status;
         row.knownProspectId = known.prospectId;
+        identityKeyOf.set(row, known.key);
         if (known.status === "in_people") alreadyInPeople++;
       }
+      identityChecked = true;
     } catch (e) {
       // The check is a preview: a failed one leaves the finds unlabelled, never unsaved.
       console.error("[discovery] already-in-People check failed:", (e as Error)?.message);
     }
   }
+  const unstored = new Set<typeof rawFinds.$inferInsert>();
 
   if (rowsToInsert.length > 0) {
     // Insert in chunks of 50 to keep a single statement reasonable. A failed
@@ -796,12 +875,16 @@ async function fanOutAndSave(
             await db.insert(rawFinds).values(row);
           } catch (e) {
             totalFinds--;
+            unstored.add(row);
             console.error("[discovery] raw_find row unstorable, skipped:", (e as Error)?.cause ?? (e as Error)?.message);
           }
         }
       }
     }
   }
+
+  // The monthly prospect-data allowance: each counted source pays for the new finds it stored.
+  await settleFindHolds(workspaceId, runId, holds, rowsToInsert, { identityChecked, identityKeyOf, unstored });
 
   // Update counters BEFORE Phase 2 so the run is queryable even if
   // consolidation fails (the user still wants to see what came back).

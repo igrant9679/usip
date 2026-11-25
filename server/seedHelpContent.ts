@@ -456,7 +456,7 @@ She never deletes records. She never changes team members, passwords, keys, key 
 
 **Creating one** is a super-admin action: **New workspace** in the same menu. You become its super admin, and it starts empty. Sample data is opt-in and off by default. A client workspace filled with invented accounts is worse than an empty one, and some engines read those rows as real.
 
-**What a new workspace does not inherit:** no Apollo key, no verification key, no connected mailbox, no brand voice. Set each one up in the new workspace, or share a key from a workspace that already has one. Enrichment and sending will not work in a new workspace until a key and a mailbox are in place.
+**What a new workspace does not inherit:** no Apollo key, no verification key, no connected mailbox, no brand voice. Set each one up in the new workspace, or share a key from a workspace that already has one. Enrichment and sending will not work in a new workspace until a key and a mailbox are in place. On a membership plan, prospect data from our prospect databases is included up to the plan's monthly number (see *Prospect data included with your plan*), so a data key of its own is optional there; a mailbox is still needed to send.
 
 ## Sharing keys between workspaces
 
@@ -591,6 +591,8 @@ Every engine has the same three-way switch, and they all live on one screen: the
     pageKey: "data-enrichment",
     bodyMarkdown: `Velocity treats every prospect-data vendor as a plugin in one **prospect source registry**. Each source declares what it can actually filter on (its *capability manifest*), whether searching is free, whether previews hide the email, and how its allowance resets. Today's sources: **WarmySender leads** (free masked search; one lead unit per net-new person acquired; US/Canada deepest; business phones only), **QuickEnrich** (free discovery of people with a has-email flag; credits are spent later by the enrichment sweep, verified before anything is written), **Apollo.io** (search-only, never an email, zero credits), and **LeadOcean** (people search on your own LeadOcean account, where every search row and every lookup counts as a record, so a person costs two). Hunter and Lemlist are registered as "available, not configured".
 
+**On a membership plan** prospect data is included up to the plan's monthly number (Trial 250, Member 1,000, Contributor 3,000, Steward 5,000, Founder 6,000), so connecting a vendor of your own is optional; the top of Settings → Data sources shows what is used this month. See *Prospect data included with your plan*.
+
 **Connecting a vendor.** Settings → Data sources → the vendor's card. Paste the key, Save, then **Test connection**. The test records the key's scopes and plan tier and, for WarmySender, captures the search tool's parameter schema — that is how Velocity learns whether the vendor filters on job title natively or only keyword-matches it. For WarmySender also set the **billing anniversary day** (the plan's allowance resets then), and record any **purchased lead credits** (they never expire and skip the daily pace). The card's **Enabled** switch turns the source off workspace-wide without removing the key — campaigns and searches skip it while it is off. The same per-source switches live on ARE Settings; both edit one setting.
 
 **LeadOcean.** Settings → Data sources → LeadOcean. Paste this workspace's own key (it is stored encrypted and never shown again; Velocity supplies no LeadOcean key of its own) and Save, which tests it for free and shows the plan, usage and limits LeadOcean reports. Choose which email statuses to accept (Deliverable only by default; undeliverable, disposable, spam-trap and abuse addresses are never accepted), whether to fetch phone numbers (off by default, which asks for the work email alone), and optionally a daily cap on people pulled. Saving a key adds LeadOcean to no campaign and starts no search: because its previews are billed, it is never pre-ticked, so tick it on a campaign's Sources tab or on Source search. Before buying a page, Velocity asks LeadOcean for free whether it will apply every filter, and buys nothing if it will not. LeadOcean has no state filter for a person, so a state search uses the employer's headquarters and Velocity then records each person as inside, outside or unknown from their own address; on a campaign, someone outside is not looked up unless its territory check is off. A person seen once stays out of later LeadOcean searches in this workspace, including one dropped by another campaign's filters. When LeadOcean paces an account, the source is held until the window resets and the logs say so. A workspace with no LeadOcean key can use one that an admin shares from another workspace (see "Running multiple workspaces"); its usage then counts against the sharing workspace's LeadOcean account.
@@ -602,6 +604,42 @@ Every engine has the same three-way switch, and they all live on one screen: the
 **Budget ledger.** Each vendor card shows today's and this billing month's spend against the limit, plus purchased credits. Holds are reserved before a vendor call and committed to what was actually charged, so two concurrent runs cannot both spend the last unit. WarmySender publishes no endpoint for its remaining *lead* allowance, so leads are tracked from what Velocity spends and a vendor refusal closes the day's row; verification allowance comes from their endpoint. QuickEnrich is uncapped by credits; its daily pull cap remains the brake. LeadOcean's limits come from LeadOcean, and the optional daily cap on people pulled is yours. Both LeadOcean meters appear in the cost report on Settings → Billing.
 
 **Adding a vendor** (for developers): one adapter file implementing the provider interface plus one line in the registry — see docs/prospect-sources.md. The search page, waterfall and ledger need no change.`,
+  },
+  {
+    // Owner approved 2026-11-25: the monthly prospect-data allowance by
+    // membership plan (shared/prospectAllowance.ts holds the numbers and every
+    // sentence the app shows; server/prospectAllowance.test.ts pins this
+    // article to them). Member-facing, so it names no data vendor.
+    slug: "prospect-data-allowance",
+    categorySlug: "prospecting",
+    title: "Prospect data included with your plan",
+    summary: "How much prospect data your membership plan includes each month, what counts, and what happens when it is used up.",
+    readingTimeMinutes: 2,
+    tags: ["prospecting", "plan", "membership", "allowance", "data sources", "keys"],
+    pageKey: "data-sources",
+    bodyMarkdown: `On a membership plan, prospect data from our prospect databases is included every month, up to your plan's number:
+
+| Plan | Prospect data a month |
+|---|---|
+| Trial | 250 |
+| Member | 1,000 |
+| Contributor | 3,000 |
+| Steward | 5,000 |
+| Founder | 6,000 |
+
+**Where to see it.** The top of **Settings → Data sources** reads, for example, "Prospect data is included with your plan: 412 of 3,000 used this month · resets 1 Dec". The line under **Run discovery** (Find prospects, and a campaign's Scraper tab) shows what is left before you run.
+
+**What counts as one.**
+- A new person added to this workspace from our prospect databases: by a Revenue Engine campaign's discovery, by Find prospects, by Source search when you save rows, or by the Search box when you save a person. Someone already in People or in a campaign is not counted again.
+- An email address our prospect databases find for someone already here, including people you imported.
+
+**What never counts.** Imports: a CSV with emails and full contact details counts only when our databases enrich it. Searches and previews with hidden emails. LinkedIn lookups through your own connected account. Email verification. Anything found with a key of your own.
+
+**When it is used up.** Our prospect databases are skipped for the rest of the month, and each place that would have used them says so: a campaign's Logs, the Find prospects run log, Source search when you save, the enrichment sweep's result, the line under Run discovery, Settings → Data sources and Home. Campaigns keep working with the people already found. The allowance starts again on the 1st of the month (UTC).
+
+**Your own keys are optional.** You do not need one on a plan. A key of your own (Settings → Data sources, under *Use your own keys*) is used first, is never counted, and keeps finding people after the month's number is used.
+
+**Who sets the plan.** It is set for the workspace from your membership. A workspace with no plan has no monthly number, and nothing is counted.`,
   },
   {
     slug: "needs-review-queue",
@@ -1168,7 +1206,7 @@ Profile changes save with the **Save** button. Your colour theme syncs to your a
 - **A mailbox or SendGrid** — *Settings → Mailboxes*. Nothing sends without one. If you use SendGrid, press **Test key** and believe it: it verifies both the key and the Mail Send permission.
 - **LinkedIn** — *Settings → Social accounts*. Powers profile enrichment, photos, job-change detection and Social outreach, all through the authorized vendor connection with a daily lookup budget (about 100/day).
 - **Microsoft 365** (if your admin has configured it) — the Connected Accounts card. One connect gets calendar sync, OneDrive files on records, and OneNote.
-- **Verification credits** — *Settings → Data sources*: a Reoon key for email verification, and optionally your own QuickEnrich key. With a WarmySender key connected, WarmySender gives a second opinion when Reoon cannot decide an address or its check fails: one verification from the WarmySender plan each time, never over a verdict Reoon did give. The switch is on the WarmySender card. At the top of the same page, **Primary prospect source** is where an admin picks which source the workspace tries first for new people (QuickEnrich, WarmySender, Apollo, LeadOcean or LinkedIn); the others are fallbacks, tried in order when the primary cannot fill a search. It changes the order only: it switches nothing on and spends nothing.
+- **Verification credits** — *Settings → Data sources*: a Reoon key for email verification, and optionally your own QuickEnrich key. On a membership plan, prospect data is included up to the plan's monthly number, shown at the top of that page, so your own data keys are optional (see *Prospect data included with your plan*). With a WarmySender key connected, WarmySender gives a second opinion when Reoon cannot decide an address or its check fails: one verification from the WarmySender plan each time, never over a verdict Reoon did give. The switch is on the WarmySender card. At the top of the same page, **Primary prospect source** is where an admin picks which source the workspace tries first for new people (QuickEnrich, WarmySender, Apollo, LeadOcean or LinkedIn); the others are fallbacks, tried in order when the primary cannot fill a search. It changes the order only: it switches nothing on and spends nothing.
 
 ## 2. Clear the demo, keep your bearings
 
@@ -1689,6 +1727,7 @@ export const TOURS: TourSeed[] = [
     steps: [
       { title: "Set up once, for everyone", bodyMarkdown: "These are workspace-level and your reps inherit them. Getting them right now saves answering the same question repeatedly later.", routeTo: "/v2/settings/data-sources", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Data sources", bodyMarkdown: "Apollo sources prospects and resolves company domains at no credit cost. Reoon verifies the addresses Velocity derives. Neither finds an email alone.", targetDataTourId: "settings-data-sources", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Prospect data on a plan", bodyMarkdown: "On a membership plan, prospect data from our prospect databases is included up to the plan's monthly number (Trial 250, Member 1,000, Contributor 3,000, Steward 5,000, Founder 6,000). The top of this page shows what is used this month. Your own keys are optional: one is used first and never counted.", targetDataTourId: "settings-data-sources", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Verification is the bottleneck", bodyMarkdown: "Without a verification key the finder still collects phones and social links, but resolves no addresses at all — and it fails quietly rather than loudly.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Brand voice before outreach", bodyMarkdown: "Every AI-written email, chat reply and proposal reads from Brand Voice. Set it before anyone starts sending, not after you dislike the drafts.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Decide the autonomy posture", bodyMarkdown: "Approve everywhere is the safe default for a new workspace. Promote engines to Autonomous one at a time, once you have seen what each proposes.", routeTo: "/v2/workflows", targetDataTourId: "autonomy-autopilots", visualTreatment: "spotlight", advanceCondition: "next_button" },
@@ -2284,6 +2323,7 @@ export const TOURS: TourSeed[] = [
       { title: "Only the last step costs credits", bodyMarkdown: "The LinkedIn step spends from your connected account's daily lookup allowance. The domain step is free — Apollo's organisation search costs no credits. Only verification spends Reoon credits, which is why the three are controlled separately rather than behind one switch.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "The verifier key", bodyMarkdown: "Paste your Reoon key here and hit **Test & check credits** — it reports your remaining balance, so you know whether a run will resolve anything before you start one. Without a key the finder still collects phones and social links, but every email lookup stops and no address is resolved.", targetDataTourId: "reoon-key-card", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Keys are per workspace", bodyMarkdown: "These credentials belong to this workspace, and a new workspace starts with none. If you are an admin of another workspace too, the Share keys with other workspaces panel at the bottom of this page lets that workspace use these keys.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
+      { title: "Included on a plan", bodyMarkdown: "On a membership plan, finding emails with our prospect databases is included up to the plan's monthly number: each email found counts as one, and the top of this page shows what is left. Data keys of your own are optional; one is used first and never counted.", targetDataTourId: "settings-data-sources", visualTreatment: "pulse", advanceCondition: "next_button" },
     ],
   },
   {
@@ -2349,6 +2389,7 @@ export const TOURS: TourSeed[] = [
          launcher, in a second home. This page runs both modes, so both lists
          are named. Pinned by server/discoveryLauncherCopy.test.ts. */
       { title: "Run discovery", bodyMarkdown: "Results fan out across the sources your workspace has enabled — LinkedIn, Apollo, QuickEnrich and news for people; Google Business, Apollo and news for companies — then get scored + deduped.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Prospect data on your plan", bodyMarkdown: "On a membership plan, each new person our prospect databases add counts toward the plan's monthly number; the line under Run discovery shows what is left. People already here, and anything your own keys find, are not counted.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Verified vs Needs Review", bodyMarkdown: "Clean matches land in Verified; partials in Needs Review for you to fix.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },

@@ -151,7 +151,13 @@ describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the
     // The old Promise.allSettled fan-out paid every vendor for the same person.
     // 2026-11-07 (audit F12): each source runs under its own spend feature,
     // still awaited one at a time, in order, with the slots still open.
-    expect(engine).toContain("value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](remaining));");
+    // 2026-11-25 (prospect-data allowance): a vendor source on a key that is
+    // not the workspace's own gets the open slots shrunk to what is left of
+    // the plan's month; every other source, and every workspace on no plan,
+    // still gets `remaining` itself (holdAllowance grants the whole ask).
+    expect(engine).toContain("value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](ask));");
+    expect(engine).toContain("const ask = hold ? hold.granted : remaining;");
+    expect(engine).toContain("const hold = isAllowanceVendor(id) ? await holdAllowance(campaign.workspaceId, id, remaining) : null;");
     expect(engine).toContain("const remaining = slots - totalNew;");
     expect(engine).toContain('skipped: "target met by earlier sources"');
     expect(engine).not.toContain("const settled = await Promise.allSettled(tasks)");

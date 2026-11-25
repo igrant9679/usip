@@ -82,4 +82,5 @@ Any new human queue in the product must join this aggregator or it will be misse
 - **Reoon** verification credits and **QuickEnrich** lookups: monthly cycles, no rollover; sweep daily cap tunes spend.
 - **LinkedIn** ~100 lookups/day per connected account; invite caps on LinkedIn Limits.
 - **Apollo**: search-only, zero credit; company domain is free.
+- **Prospect data on a membership plan** (`workspace_settings.membershipPlan`, migration 0444): Trial 250, Member 1,000, Contributor 3,000, Steward 5,000, Founder 6,000 records a month from shared or lent keys; own keys never count, and no plan (NULL) means nothing is counted. One unit = a person added net new, or an email found. Used up: shared sources are skipped with the reason (campaign Logs, run logs, sweep result, launchers, Data sources, a Home attention item `prospectDataUsedUp`); resets on the 1st (UTC). The platform owner sets the plan on Settings → Billing and credits (`spend.setMembershipPlan`).
 - **Daily send cap** per campaign and per sending account; sender pools spread load.

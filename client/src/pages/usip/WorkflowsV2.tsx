@@ -70,7 +70,9 @@ function describeSweepResult(r: any): string {
   return `found ${emails} email${emails === 1 ? "" : "s"}`
     + (qe > 0 ? ` (${qe} via QuickEnrich)` : "")
     + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
-    + ` (${why})`;
+    + ` (${why})`
+    // The monthly prospect-data allowance stopped the QuickEnrich pass early.
+    + (r?.quickenrichStopped ? ` QuickEnrich lookups stopped: ${r.quickenrichStopped}` : "");
 }
 
 export default function WorkflowsV2() {

@@ -4,7 +4,8 @@
  * Every human-in-the-loop queue in the product, counted in SQL and returned
  * in a single call: AI drafts awaiting review, ARE prospects awaiting
  * approval (cross-campaign — nothing else in the app could answer that),
- * proposed meetings, unhandled replies, AI-drafted tasks, paused campaigns.
+ * proposed meetings, unhandled replies, AI-drafted tasks, paused campaigns,
+ * and the membership plan's prospect data once it is used up for the month.
  * Plus a 24-hour digest of what the autopilots did, so an owner who opens
  * the app sees "here is what ran, here is the one queue to clear" instead
  * of 44 nav items.
@@ -33,6 +34,8 @@ import { router } from "../_core/trpc";
 import { remindableMeetingStatuses } from "@shared/meetingStatus";
 import { genuineReplyScope, genuineSocialReplyScope } from "../services/replyScope";
 import { countReplies, emailsSent } from "../services/activityMetrics";
+import { allowanceFor } from "../services/prospectAllowance";
+import { allowanceUsedUp, allowanceUsedUpReason } from "@shared/prospectAllowance";
 
 const EMPTY = {
   totalNeedingYou: 0,
@@ -54,6 +57,12 @@ const EMPTY = {
   routingSuggestions: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
   /** Proposed NEW campaigns awaiting create/dismiss (2026-09-04). */
   campaignProposals: { count: 0 },
+  /**
+   * The membership plan's monthly prospect data, when it is used up (owner
+   * 2026-11-25): shared prospect databases are skipped until it resets, so a
+   * person has to know (add an own key, or wait). Null otherwise.
+   */
+  prospectDataUsedUp: null as null | { used: number; limit: number; planLabel: string; resetsOn: string; message: string },
   /** Every draft awaiting review, whatever made it: the three draft cards together, and the newest five. */
   awaitingDrafts: { count: 0, items: [] as { id: number; subject: string | null; toEmail: string | null }[] },
   digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
@@ -243,13 +252,25 @@ export const attentionRouter = router({
     // Proposed NEW campaigns (2026-09-04) — a queue a person has to act on.
     const { countPendingProposals } = await import("../services/campaignProposals");
     const campaignProposals = { count: await countPendingProposals(ws) };
+    // The plan's monthly prospect data, at 100% (services/prospectAllowance).
+    // An unreadable allowance is logged and leaves this card off rather than
+    // failing the whole panel; the runs themselves say why they skipped.
+    let prospectDataUsedUp: (typeof EMPTY)["prospectDataUsedUp"] = null;
+    try {
+      const a = await allowanceFor(ws);
+      if (a.plan && allowanceUsedUp(a)) {
+        prospectDataUsedUp = { used: a.used, limit: a.limit, planLabel: a.planLabel, resetsOn: a.resetsOn, message: allowanceUsedUpReason(a) };
+      }
+    } catch (e) {
+      console.error(`[attention] prospect-data allowance of workspace ${ws} unreadable:`, (e as Error)?.message);
+    }
 
     return {
       totalNeedingYou:
         aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
         areApprovals.count + draftTasks.count + paused.length +
         crmDrafts.count + sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count +
-        routingSuggestions.count + campaignProposals.count,
+        routingSuggestions.count + campaignProposals.count + (prospectDataUsedUp ? 1 : 0),
       aiDrafts,
       proposedMeetings,
       unhandledReplies,
@@ -263,6 +284,7 @@ export const attentionRouter = router({
       chatFollowUps,
       routingSuggestions,
       campaignProposals,
+      prospectDataUsedUp,
       awaitingDrafts: { count: aiDrafts.count + crmDrafts.count + sequenceDrafts.count, items: awaitingItems },
       digest24h: {
         emailsSent: Number(digestSent?.n ?? 0),
