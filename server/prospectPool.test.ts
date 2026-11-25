@@ -185,8 +185,10 @@ describe("C. one shared pool", () => {
   it("resolves own key → loan → pool → environment key, for every workspace with no step of its own", async () => {
     process.env.QUICKENRICH_API_KEY = "env-qe-key";
     settings(WS).sharedQuickenrichKey = true;
-    expect(await getQuickEnrichKey(WS)).toBe("env-qe-key"); // nothing shared yet
-    pool("quickenrich");
+    pool("quickenrich", { shared: false });
+    expect(await getQuickEnrichKey(WS)).toBe("env-qe-key"); // switched off
+    rows("prospect_pool_sources").find((r) => r.slug === "quickenrich").shared = true;
+    invalidatePoolCache();
     expect(await getQuickEnrichKey(WS)).toBe("pool-qe-key");
     expect(await keyOriginDetail(WS, "quickenrich")).toBe("pool");
     rows("workspace_settings").push({ workspaceId: 9, quickenrichApiKeyEnc: encryptSecret("lender-qe") });
@@ -199,7 +201,8 @@ describe("C. one shared pool", () => {
     expect(await keyOriginDetail(WS, "quickenrich")).toBe("own");
     // The pool workspace uses its keys as its own.
     expect(await keyOriginDetail(POOL, "quickenrich")).toBe("own");
-    // A source not switched on is not shared.
+    // A source switched off is not shared.
+    pool("apollo", { shared: false });
     expect(await keyOriginDetail(OTHER, "apollo")).toBe("none");
   });
 
@@ -252,16 +255,13 @@ describe("C. one shared pool", () => {
     expect(used()).toBe(0); // the workspace's units were given back
   });
 
-  it("numbers sources by descending ceiling the first time ceilings are set, then keeps them", async () => {
+  it("numbers sources by descending ceiling, a listed source last, the owner's numbers first", async () => {
     expect(numberSources(["a", "b", "c"], { a: { ceiling: 100 }, b: { ceiling: 900 }, c: {} })).toEqual({ b: 1, a: 2, c: 3 });
-    await setPoolSource("apollo", { monthlyCeiling: 1000 });
-    await setPoolSource("warmysender", { monthlyCeiling: 5000 });
-    let cfg = await poolConfig();
-    // Seeded once, on the first ceiling: apollo was the only one then.
-    expect(cfg.sources.apollo.number).toBe(1);
+    expect(numberSources(["a", "b", "c"], { a: { ceiling: 100 }, b: { ceiling: 900 }, c: {} }, ["b"])).toEqual({ a: 1, c: 2, b: 3 });
+    expect(numberSources(["a", "b", "c"], { a: { ceiling: 100, number: 2 }, b: { ceiling: 900 }, c: {} })).toEqual({ a: 2, b: 1, c: 3 });
     await setPoolSource("warmysender", { number: 1 });
     await setPoolSource("apollo", { number: 2 });
-    cfg = await poolConfig();
+    const cfg = await poolConfig();
     expect([cfg.sources.warmysender.number, cfg.sources.apollo.number]).toEqual([1, 2]);
   });
 
@@ -282,6 +282,87 @@ describe("C. one shared pool", () => {
   });
 });
 
+describe("E. the owner's seed (2026-11-25)", () => {
+  const SEEDED = {
+    leadocean: "Over a billion profiles at 73 million companies, with a deliverability status on every email.",
+    quickenrich: "Contact details matched to LinkedIn profiles, with emails and phone numbers.",
+    warmysender: "A database of over 200 million B2B contacts in the US and Canada.",
+    apollo: "People and company search by title, seniority and company size; emails are found separately.",
+  };
+  const poolLeadOceanKey = () => rows("prospect_source_credentials").push({ id: 2, workspaceId: POOL, sourceSlug: "leadocean", status: "valid", credentialsEnc: encryptSecret(JSON.stringify({ apiKey: "lo_live_pool" })), config: {} });
+
+  it("every source is shared once the pool workspace is named and holds its key; the switch still turns one off", async () => {
+    expect(await keyOriginDetail(OTHER, "quickenrich")).toBe("pool");
+    expect(await keyOriginDetail(OTHER, "apollo")).toBe("pool");
+    expect(await keyOriginDetail(OTHER, "warmysender")).toBe("pool");
+    expect(await keyOriginDetail(OTHER, "leadocean")).toBe("none"); // the pool holds no key for it
+    poolLeadOceanKey();
+    expect(await keyOriginDetail(OTHER, "leadocean")).toBe("pool");
+    await setPoolSource("quickenrich", { shared: false });
+    expect(await keyOriginDetail(OTHER, "quickenrich")).toBe("none");
+    await setPoolWorkspace(null);
+    expect(await keyOriginDetail(OTHER, "apollo")).toBe("none"); // no pool workspace, nothing shared
+  });
+
+  it("starts from the known ceilings and the approved descriptions, word for word", async () => {
+    const cfg = await poolConfig();
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.monthlyCeiling]))).toEqual({ leadocean: 214_000, quickenrich: 6_000, warmysender: null, apollo: null });
+    for (const [slug, text] of Object.entries(SEEDED)) expect(cfg.sources[slug].description).toBe(text);
+    const { POOL_SOURCE_SEED } = await import("./services/prospectPoolSeed");
+    expect(POOL_SOURCE_SEED.aleads).toEqual({ monthlyCeiling: 100_000, description: "Verified B2B contacts, checked for catch-all domains." });
+    expect(POOL_SOURCE_SEED.clugtm).toEqual({ monthlyCeiling: 25_000, description: "Over a billion profiles drawn from more than 25 providers and refreshed every 30 days." });
+    // No description names a vendor.
+    expect(JSON.stringify(Object.values(POOL_SOURCE_SEED).map((x) => x.description))).not.toMatch(/apollo|quick\s?enrich|warmy\s?sender|lead\s?ocean|a-?leads|clu\s?gtm|cleanlist/i);
+  });
+
+  it("numbers by ceiling: LeadOcean, A-Leads, CluGTM, QuickEnrich, then WarmySender; Apollo always last", async () => {
+    const cfg = await poolConfig();
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, quickenrich: 2, warmysender: 3, apollo: 4 });
+    // With the two adapters still to come in the registry:
+    const { POOL_SOURCE_SEED, ALWAYS_LAST_SOURCES } = await import("./services/prospectPoolSeed");
+    const all = ["warmysender", "quickenrich", "apollo", "leadocean", "aleads", "clugtm"];
+    expect(numberSources(all, Object.fromEntries(all.map((s) => [s, { ceiling: POOL_SOURCE_SEED[s].monthlyCeiling }])), ALWAYS_LAST_SOURCES))
+      .toEqual({ leadocean: 1, aleads: 2, clugtm: 3, quickenrich: 4, warmysender: 5, apollo: 6 });
+  });
+
+  it("WarmySender takes its place once its ceiling is set; Apollo stays last whatever its ceiling; the owner's number wins until cleared", async () => {
+    await setPoolSource("warmysender", { monthlyCeiling: 30_000 });
+    await setPoolSource("apollo", { monthlyCeiling: 10_000_000 });
+    let cfg = await poolConfig();
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, warmysender: 2, quickenrich: 3, apollo: 4 });
+    await setPoolSource("quickenrich", { number: 1 });
+    cfg = await poolConfig();
+    expect([cfg.sources.quickenrich.number, cfg.sources.leadocean.number]).toEqual([1, 2]);
+    await setPoolSource("quickenrich", { number: null });
+    cfg = await poolConfig();
+    expect([cfg.sources.leadocean.number, cfg.sources.quickenrich.number]).toEqual([1, 3]);
+  });
+
+  it("changing one field keeps the seeded others", async () => {
+    await setPoolSource("quickenrich", { shared: false });
+    const row = rows("prospect_pool_sources").find((r) => r.slug === "quickenrich");
+    expect(row).toMatchObject({ shared: false, monthlyCeiling: 6_000, sourceNumber: null, description: SEEDED.quickenrich });
+    await setPoolSource("leadocean", { description: "Edited by the owner" });
+    const cfg = await poolConfig();
+    expect(cfg.sources.leadocean).toMatchObject({ shared: true, monthlyCeiling: 214_000, description: "Edited by the owner" });
+    // Clearing a ceiling the owner wrote means "not set" from then on.
+    await setPoolSource("leadocean", { monthlyCeiling: null });
+    expect((await poolConfig()).sources.leadocean.monthlyCeiling).toBeNull();
+  });
+
+  it("the default is LeadOcean once the pool holds its key; Apollo is never the default while another source has room", async () => {
+    settings(WS).membershipPlan = "member";
+    expect(await defaultSourceFor(WS)).toBe("quickenrich"); // LeadOcean skipped: no key to run it
+    poolLeadOceanKey();
+    expect(await defaultSourceFor(WS)).toBe("leadocean");
+    expect(await singleSourceFor(WS)).toEqual({ slug: "leadocean", chosen: false });
+    await setPoolSource("apollo", { monthlyCeiling: 10_000_000 });
+    expect(await defaultSourceFor(WS)).toBe("leadocean");
+    rows("prospect_pool_usage").push({ id: 9, slug: "leadocean", period: month(), used: 214_000 }, { id: 10, slug: "quickenrich", period: month(), used: 6_000 });
+    expect(await defaultSourceFor(WS)).toBe("apollo"); // nothing else has room
+  });
+});
+
 describe("D. one prospect source per workspace on a plan", () => {
   it("no plan: no rule, the waterfall is left as it is", async () => {
     expect(await singleSourceFor(OTHER)).toBeNull();
@@ -291,7 +372,11 @@ describe("D. one prospect source per workspace on a plan", () => {
   it("the default is the shared source with the most room, ties by number; without ceilings, the workspace's own first source", async () => {
     settings(WS).membershipPlan = "member";
     settings(WS).areSourceOrder = ["apollo", "quickenrich", "warmysender"];
+    // No ceilings anywhere (the owner cleared the seeded ones): the workspace's own first prospect database.
+    pool("leadocean", { monthlyCeiling: null }); pool("quickenrich", { monthlyCeiling: null });
     expect(await defaultSourceFor(WS)).toBe("apollo");
+    rows("prospect_pool_sources").splice(0);
+    pool("leadocean", { monthlyCeiling: null });
     pool("quickenrich", { monthlyCeiling: 2000, sourceNumber: 2 });
     pool("warmysender", { monthlyCeiling: 2000, sourceNumber: 1 });
     pool("apollo", { monthlyCeiling: 500, sourceNumber: 3 });

@@ -284,7 +284,7 @@ function ProspectPoolSection() {
   return (
     <Section
       title="Shared prospect pool (platform owner)"
-      description="Every workspace may use the pool workspace's key for each source switched on here, after its own key and any key lent to it. Members see each source as its number and description, never its name. The monthly ceiling is the vendor account's real allowance: once pool use reaches it, the source is unavailable from the pool until the month turns. Numbers follow the ceilings (highest first) the first time ceilings are set; after that only you change them."
+      description="Every workspace may use the pool workspace's key for each source switched on here, after its own key and any key lent to it. Members see each source as its number and description, never its name. The monthly ceiling is the vendor account's real allowance: once pool use reaches it, the source is unavailable from the pool until the month turns. Every source starts shared, with the known ceilings and the approved descriptions. Numbers follow the ceilings (highest first, Apollo last) until you set one; leave the number empty to go back to following them."
     >
       {q.error && <div className="p-4 text-sm text-red-600 dark:text-red-400">{q.error.message}</div>}
       {d && (
@@ -330,7 +330,7 @@ function PoolSourceRow({ s }: {
 }) {
   const utils = trpc.useUtils();
   const [ceiling, setCeiling] = useState(s.monthlyCeiling == null ? "" : String(s.monthlyCeiling));
-  const [num, setNum] = useState(String(s.number));
+  const [num, setNum] = useState(s.storedNumber == null ? "" : String(s.storedNumber));
   const [desc, setDesc] = useState(s.description);
   const save = trpc.spend.setPoolSource.useMutation({
     onSuccess: () => { utils.spend.pool.invalidate(); toast.success("Saved"); },
@@ -365,11 +365,12 @@ function PoolSourceRow({ s }: {
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-muted-foreground">Source</span>
           <Input aria-label={`${s.trueName} public number`} className="h-7 w-14 text-xs" type="number" min={1} max={99}
+            placeholder={String(s.number)} title={s.storedNumber == null ? "Follows the ceilings" : "Set by you"}
             value={num} onChange={(e) => setNum(e.target.value)} />
           <Input aria-label={`${s.trueName} public description`} className="h-7 w-56 text-xs" maxLength={255}
             value={desc} onChange={(e) => setDesc(e.target.value)} />
           <Button size="sm" variant="outline" className="h-7" disabled={save.isPending}
-            onClick={() => save.mutate({ slug, number: Math.max(1, Math.min(99, Math.floor(Number(num) || 1))), description: desc.trim() || null })}>
+            onClick={() => save.mutate({ slug, number: num.trim() === "" ? null : Math.max(1, Math.min(99, Math.floor(Number(num) || 1))), description: desc.trim() || null })}>
             Save
           </Button>
         </div>

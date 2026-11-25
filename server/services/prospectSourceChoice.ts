@@ -16,9 +16,10 @@
  * internal CRM, news) and Google Business are unchanged.
  *
  * THE DEFAULT, when `workspace_settings.prospectSource` is NULL: the shared
- * pool source with the highest platform monthly ceiling that is not used up,
- * ties broken by its number; with no ceilings set yet, the first prospect
- * database in the workspace's own checking order (its current primary).
+ * pool source with the highest platform monthly ceiling that is not used up
+ * and that this workspace can run, ties broken by its number, Apollo last
+ * (with the owner's seed: LeadOcean); with no ceilings set, the first
+ * prospect database in the workspace's own checking order (its primary).
  */
 import { eq } from "drizzle-orm";
 import { workspaceSettings } from "../../drizzle/schema";
@@ -29,6 +30,7 @@ import { planDailyCap } from "@shared/prospectAllowance";
 import { anonSourceLabel } from "@shared/sourceNames";
 import { membershipPlanOf, allowanceFor, dailyUsedToday, keyOriginDetail, type KeyOriginDetail } from "./prospectAllowance";
 import { poolConfig, poolUsedThisMonth } from "./prospectPool";
+import { ALWAYS_LAST_SOURCES } from "./prospectPoolSeed";
 
 async function storedChoice(workspaceId: number): Promise<{ choice: string | null; order: unknown }> {
   const db = await getDb();
@@ -41,15 +43,25 @@ async function storedChoice(workspaceId: number): Promise<{ choice: string | nul
   return { choice: row?.choice ?? null, order: row?.order ?? null };
 }
 
-/** The default source for a workspace that has not chosen one. */
+/**
+ * The default source for a workspace that has not chosen one. Only a source
+ * this workspace can run counts (a pool source the pool workspace holds no key
+ * for is skipped), and Apollo, which reveals no contacts, only when no other
+ * ceilinged source has room.
+ */
 export async function defaultSourceFor(workspaceId: number, order?: unknown): Promise<ProspectSourceSlug> {
   const cfg = await poolConfig();
-  const shared = Object.values(cfg.sources).filter((s) => s.shared && isProspectDatabase(s.slug));
-  const ceilinged = shared.filter((s) => s.monthlyCeiling != null);
+  const ceilinged = Object.values(cfg.sources).filter((s) => s.shared && isProspectDatabase(s.slug) && s.monthlyCeiling != null);
   if (ceilinged.length > 0) {
     const withRoom: typeof ceilinged = [];
-    for (const s of ceilinged) if ((await poolUsedThisMonth(s.slug)) < (s.monthlyCeiling ?? 0)) withRoom.push(s);
-    withRoom.sort((a, b) => ((b.monthlyCeiling ?? 0) - (a.monthlyCeiling ?? 0)) || (a.number - b.number));
+    for (const s of ceilinged) {
+      const from = await keyOriginDetail(workspaceId, s.slug as ProspectSourceSlug).catch(() => "none" as const);
+      if (from === "none") continue;
+      if (from === "pool" && (await poolUsedThisMonth(s.slug)) >= (s.monthlyCeiling ?? 0)) continue;
+      withRoom.push(s);
+    }
+    const lastly = (slug: string) => (ALWAYS_LAST_SOURCES.includes(slug) ? 1 : 0);
+    withRoom.sort((a, b) => (lastly(a.slug) - lastly(b.slug)) || ((b.monthlyCeiling ?? 0) - (a.monthlyCeiling ?? 0)) || (a.number - b.number));
     if (withRoom[0]) return withRoom[0].slug as ProspectSourceSlug;
   }
   const own = order === undefined ? (await storedChoice(workspaceId)).order : order;

@@ -5,9 +5,9 @@
  *
  * The ONE place a vendor slug becomes what a person reads. Only the platform
  * owner (users.role 'admin') sees a vendor's true name; everyone else sees
- * "Source N" and its description. Numbers are set by the platform owner
- * (prospect_pool_sources.sourceNumber), seeded once in descending platform
- * ceiling order so Source 1 is the default (services/prospectPool).
+ * "Source N" and its description. Numbers follow the platform ceilings,
+ * highest first (Apollo last), until the platform owner sets one
+ * (prospect_pool_sources.sourceNumber; services/prospectPool).
  *
  * Server text that reaches members (engine and run logs, notes, reasons,
  * notification bodies) passes through anonymizeVendorText at its sink, so a
@@ -65,13 +65,15 @@ export function vendorPattern(slug: string, displayName?: string | null): RegExp
 }
 
 /**
- * Stable numbers for every slug: the stored ones first; a slug without one
- * gets the next free number, in descending platform ceiling order (a
- * ceiling-less source after), then the order `slugs` lists them in.
+ * Numbers for every slug: the stored ones first; a slug without one gets the
+ * next free number, in descending platform ceiling order (a ceiling-less
+ * source after), then the order `slugs` lists them in. A slug in `last` comes
+ * after every other whatever its ceiling (Apollo, which reveals no contacts).
  */
 export function numberSources(
   slugs: readonly string[],
   stored: Record<string, { number?: number | null; ceiling?: number | null } | undefined>,
+  last: readonly string[] = [],
 ): Record<string, number> {
   const out: Record<string, number> = {};
   const taken = new Set<number>();
@@ -84,8 +86,8 @@ export function numberSources(
   }
   const rest = slugs
     .filter((s) => out[s] === undefined)
-    .map((s, i) => ({ s, i, c: stored[s]?.ceiling ?? -1 }))
-    .sort((a, b) => (b.c - a.c) || (a.i - b.i));
+    .map((s, i) => ({ s, i, c: stored[s]?.ceiling ?? -1, z: last.includes(s) ? 1 : 0 }))
+    .sort((a, b) => (a.z - b.z) || (b.c - a.c) || (a.i - b.i));
   let next = 1;
   for (const r of rest) {
     while (taken.has(next)) next++;

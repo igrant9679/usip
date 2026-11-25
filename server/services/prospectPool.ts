@@ -13,6 +13,10 @@
  *   - a public NUMBER and DESCRIPTION: members see "Source N" and the
  *     description, never the vendor's name (shared/sourceNames.ts).
  *
+ * Every source starts from the owner's seed (services/prospectPoolSeed):
+ * shared ON (vendor-terms risk accepted 2026-11-25), the known ceilings and
+ * the approved descriptions; numbers follow the ceilings, Apollo last.
+ *
  * Key resolution everywhere (services/keyShares): the workspace's own key →
  * an explicit loan → the pool, when that source is shared → QuickEnrich's
  * environment key. Existing and new workspaces get the pool with no step of
@@ -28,6 +32,7 @@ import { getDb } from "../db";
 import { affectedRowsOf } from "../_core/claim";
 import { PROSPECT_DATABASE_SLUGS, type ProspectSourceSlug } from "@shared/prospectSources";
 import { allowancePeriod } from "@shared/prospectAllowance";
+import { ALWAYS_LAST_SOURCES, SHARED_BY_DEFAULT, seedFor } from "./prospectPoolSeed";
 import {
   DEFAULT_SOURCE_DESCRIPTION,
   anonSourceLabel,
@@ -44,9 +49,9 @@ export type PoolSource = {
   shared: boolean;
   /** The vendor account's real monthly allowance; null = not entered (uncapped). */
   monthlyCeiling: number | null;
-  /** The public number, "Source N": stored, or the seeded one. */
+  /** The public number, "Source N": the owner's, or its place by ceiling. */
   number: number;
-  /** The number as stored (null until the owner or the seeding sets one). */
+  /** The number the owner set (null = it follows the ceilings). */
   storedNumber: number | null;
   description: string;
 };
@@ -69,20 +74,29 @@ export function invalidatePoolCache(): void {
 
 function buildSources(rows: Array<typeof prospectPoolSources.$inferSelect>): Record<string, PoolSource> {
   const byslug = new Map(rows.map((r) => [r.slug, r]));
-  const slugs = Array.from(new Set([...PROSPECT_DATABASE_SLUGS, ...rows.map((r) => r.slug)]));
-  const numbers = numberSources(slugs, Object.fromEntries(rows.map((r) => [r.slug, { number: r.sourceNumber, ceiling: r.monthlyCeiling }])));
-  const out: Record<string, PoolSource> = {};
-  for (const slug of slugs) {
+  // Only sources the registry can run: a row or a seed for a vendor with no
+  // adapter (A-Leads and CluGTM until theirs land) is never listed.
+  const slugs = Array.from(new Set([...PROSPECT_DATABASE_SLUGS, ...rows.map((r) => r.slug)]))
+    .filter((s) => (PROSPECT_DATABASE_SLUGS as readonly string[]).includes(s));
+  // A source with no row reads its seed (services/prospectPoolSeed); once the
+  // owner changes it, its row is what counts.
+  const values = new Map(slugs.map((slug) => {
     const r = byslug.get(slug);
-    out[slug] = {
-      slug,
-      shared: !!r?.shared,
-      monthlyCeiling: r?.monthlyCeiling ?? null,
-      number: numbers[slug],
+    const seed = seedFor(slug);
+    return [slug, {
+      shared: r ? !!r.shared : SHARED_BY_DEFAULT,
+      monthlyCeiling: r ? (r.monthlyCeiling ?? null) : (seed?.monthlyCeiling ?? null),
       storedNumber: r?.sourceNumber ?? null,
-      description: (r?.description ?? "").trim() || DEFAULT_SOURCE_DESCRIPTION,
-    };
-  }
+      description: (r?.description ?? "").trim() || seed?.description || DEFAULT_SOURCE_DESCRIPTION,
+    }];
+  }));
+  const numbers = numberSources(
+    slugs,
+    Object.fromEntries(slugs.map((s) => [s, { number: values.get(s)!.storedNumber, ceiling: values.get(s)!.monthlyCeiling }])),
+    ALWAYS_LAST_SOURCES,
+  );
+  const out: Record<string, PoolSource> = {};
+  for (const slug of slugs) out[slug] = { slug, ...values.get(slug)!, number: numbers[slug] };
   return out;
 }
 
@@ -256,10 +270,10 @@ export async function setPoolWorkspace(workspaceId: number | null): Promise<void
 export type PoolSourcePatch = { shared?: boolean; monthlyCeiling?: number | null; number?: number | null; description?: string | null };
 
 /**
- * Change one pool source. Once any ceiling is set and no number has been
- * stored yet, every source is numbered in descending ceiling order (the
- * seeding), so Source 1 is the default; after that numbers change only when
- * the owner changes them.
+ * Change one pool source. Its first change writes its row, filled from the
+ * seed (shared on, the seeded ceiling and description), so changing one
+ * field never resets the others. A null number puts the source back to
+ * following the ceilings (highest first, Apollo last).
  */
 export async function setPoolSource(slug: ProspectSourceSlug | string, patch: PoolSourcePatch): Promise<void> {
   const db = await getDb();
@@ -274,18 +288,15 @@ export async function setPoolSource(slug: ProspectSourceSlug | string, patch: Po
   if (existing) {
     if (Object.keys(set).length) await db.update(prospectPoolSources).set(set).where(eq(prospectPoolSources.slug, slug));
   } else {
-    await db.insert(prospectPoolSources).values({ slug, shared: false, ...set } as never);
-  }
-  // The seeding: numbers follow the ceilings, once.
-  const rows = await db.select().from(prospectPoolSources);
-  if (rows.some((r) => r.monthlyCeiling != null) && rows.every((r) => r.sourceNumber == null)) {
-    const slugs = Array.from(new Set([...PROSPECT_DATABASE_SLUGS, ...rows.map((r) => r.slug)]));
-    const seeded = numberSources(slugs, Object.fromEntries(rows.map((r) => [r.slug, { ceiling: r.monthlyCeiling }])));
-    const have = new Set(rows.map((r) => r.slug));
-    for (const s of slugs) {
-      if (have.has(s)) await db.update(prospectPoolSources).set({ sourceNumber: seeded[s] }).where(eq(prospectPoolSources.slug, s));
-      else await db.insert(prospectPoolSources).values({ slug: s, shared: false, sourceNumber: seeded[s] } as never);
-    }
+    const seed = seedFor(slug);
+    await db.insert(prospectPoolSources).values({
+      slug,
+      shared: SHARED_BY_DEFAULT,
+      monthlyCeiling: seed?.monthlyCeiling ?? null,
+      sourceNumber: null,
+      description: seed?.description ?? null,
+      ...set,
+    } as never);
   }
   invalidatePoolCache();
 }
