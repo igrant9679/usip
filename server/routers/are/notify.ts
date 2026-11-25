@@ -141,8 +141,9 @@ export async function areNotify(opts: AreNotifyOptions): Promise<void> {
       workspaceId: opts.workspaceId,
       userId: recipient,
       kind: "are_event",
-      title: opts.title,
-      body: opts.body,
+      // Read by members: "Source N", never a vendor's name (services/prospectPool).
+      title: await (await import("../../services/prospectPool")).forMembers(opts.title),
+      body: opts.body == null ? opts.body : await (await import("../../services/prospectPool")).forMembers(opts.body),
       relatedType: opts.relatedType ?? "are_campaign",
       relatedId: opts.relatedId ?? null,
     });

@@ -441,13 +441,13 @@ export async function saveScrapeJobAndQueue(
      */
     identityChecked?: boolean;
   } = {},
-): Promise<number> {
-  // Returns the campaign queue rows inserted (0 with no campaign): what the
+): Promise<Array<{ email?: string | null; linkedinUrl?: string | null; firstName?: string | null; lastName?: string | null; companyName?: string | null; companyDomain?: string | null }>> {
+  // Returns the campaign queue rows inserted (none with no campaign): who the
   // engine's prospect-data allowance hold is settled to, since the filters
   // below (identity-less rows, suppression) can keep some of the batch out.
   const db = await getDb();
-  if (!db) return 0;
-  let queued = 0;
+  if (!db) return [];
+  let queued: Array<{ email?: string | null; linkedinUrl?: string | null; firstName?: string | null; lastName?: string | null; companyName?: string | null; companyDomain?: string | null }> = [];
 
   // Campaign exclusivity belt (owner directive 2026-08-12): a person already
   // in ANY campaign's queue is never queued again — not for a sibling
@@ -619,17 +619,19 @@ export async function saveScrapeJobAndQueue(
     if (rows.length > 0) {
       try {
         await db.insert(prospectQueue).values(rows);
-        queued = rows.length;
+        queued = rows;
       } catch (batchErr) {
         // A single poisoned row must never discard the whole batch: retry
         // row-by-row so every valid prospect still lands, and surface the
         // first row-level cause for the Logs tab.
         let saved = 0;
         let firstRowErr: unknown = null;
+        const savedRows: typeof rows = [];
         for (const r of rows) {
           try {
             await db.insert(prospectQueue).values(r);
             saved++;
+            savedRows.push(r);
           } catch (e) {
             if (!firstRowErr) firstRowErr = e;
           }
@@ -639,7 +641,7 @@ export async function saveScrapeJobAndQueue(
           (batchErr as Error)?.message, firstRowErr,
         );
         if (saved === 0) throw batchErr;
-        queued = saved;
+        queued = savedRows;
       }
 
       // People-as-master (migration 0153): every retained campaign prospect

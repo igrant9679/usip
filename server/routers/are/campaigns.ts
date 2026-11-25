@@ -4,6 +4,8 @@
  * Manages autonomous prospecting campaign lifecycle:
  *   list, get, create, update, setStatus
  */
+import { forViewer, isPlatformOwner, sourceNamesFor } from "../../services/prospectPool";
+import { isProspectDatabase } from "@shared/prospectSources";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -1558,6 +1560,8 @@ export const campaignsRouter = router({
       const described = await describeSources(wsId, null);
       const bySlug = new Map(described.map((d) => [d.slug as string, d]));
 
+      const platformOwner = isPlatformOwner(ctx.user);
+      const names = new Map((await sourceNamesFor({ platformOwner })).map((n) => [n.slug, n.label]));
       const sources = ARE_SOURCES.map((meta) => {
         const d = bySlug.get(meta.id);
         const rest = state.src?.[meta.id] ?? null;
@@ -1571,7 +1575,8 @@ export const campaignsRouter = router({
         const tokenRows = spendRows.filter((r) => r.feature === feature && TOKEN_METERS.includes(r.meter));
         return {
           slug: meta.id,
-          label: meta.label,
+          // A prospect database is "Source N" to members (owner 2026-11-25).
+          label: isProspectDatabase(meta.id) ? (names.get(meta.id) ?? meta.label) : meta.label,
           /** Will this source run on the next tick, and where in the waterfall? */
           runsAt: orderIdx === -1 ? null : orderIdx,
           selectedOnCampaign: selected.includes(meta.id as AreSourceId),
@@ -1657,7 +1662,8 @@ export const campaignsRouter = router({
           noUsableSources: runOrder.length === 0,
           explicitlyNone,
         },
-        sources,
+        // Key errors and budget notes name vendors in the adapters' own words.
+        sources: await forViewer(sources, { platformOwner }),
       };
     }),
 

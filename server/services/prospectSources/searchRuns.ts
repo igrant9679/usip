@@ -28,7 +28,7 @@ import { claimRow } from "../../_core/claim";
 import type { ProspectSourceSlug, SearchCriteria } from "@shared/prospectSources";
 import { narrowingFilters } from "@shared/prospectSources";
 import type { ProspectRecord } from "./types";
-import { eligibleFor, getSource } from "./registry";
+import { eligibleFor, getSource, periodsFor } from "./registry";
 import { runWaterfall } from "./executor";
 import { workspaceDeduper } from "./dedupe";
 import { recordToQueueRow } from "./bridge";
@@ -36,7 +36,7 @@ import { loadCredentials, recordValidation, workspacesWithCredentials } from "./
 import { commit, ensurePeriodRows, releaseStaleHolds, remainingUnits, reserve } from "./ledger";
 import { affectedRowsOf } from "../../_core/claim";
 import { isAllowanceVendor } from "@shared/prospectAllowance";
-import { holdAllowance, type AllowanceHold } from "../prospectAllowance";
+import { holdAllowance, type AllowanceHold, type PersonIdentity } from "../prospectAllowance";
 
 export const MAX_BATCH_TARGET = 200;
 
@@ -76,6 +76,15 @@ export async function startRun(
   // "Has email" / "Has phone" alone do not make a search filtered (P68).
   if (narrowingFilters(criteria).length === 0) throw new Error("Set at least one filter besides Has email / Has phone — searching every vendor's whole database is not an audience.");
   const target = Math.max(1, Math.min(MAX_BATCH_TARGET, Math.floor(batchTarget)));
+  // ONE prospect source for a workspace on a plan (owner 2026-11-25,
+  // services/prospectSourceChoice): Source search and the Search box run the
+  // chosen source and no other. The Search box's free door (only = null)
+  // still never runs a source that bills its previews.
+  const { singleSourceFor } = await import("../prospectSourceChoice");
+  const single = await singleSourceFor(workspaceId);
+  if (single) {
+    only = only == null && getSource(single.slug).capabilities().supportsFreePreview === false ? [] : [single.slug];
+  }
   const key = searchFingerprint(workspaceId, criteria, target, only);
   const going = activeSearches.get(key);
   if (going != null) return { runId: going, alreadyRunning: true };
@@ -208,7 +217,7 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
     let cost = e.toAcquire;
     const creds = await loadCredentials(workspaceId, s);
     if (creds) {
-      const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
+      const periods = periodsFor(s, creds);
       if (periods.length > 0) remaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
       if (s.estimateAcquireUnits) cost = e.ids.reduce((n, id) => n + s.estimateAcquireUnits!(id, creds), 0);
     }
@@ -283,11 +292,12 @@ async function promoteClaimedResults(
    * happens below, the finally gives back what was not delivered.
    */
   const holds = new Map<string, AllowanceHold>();
-  const createdBySource = new Map<string, number>();
+  const createdBySource = new Map<string, PersonIdentity[]>();
   try {
     return await promoteHeldResults(db, workspaceId, userId, runId, todo, errors, holds, createdBySource);
   } finally {
-    for (const [slug, hold] of Array.from(holds.entries())) await hold.settle(createdBySource.get(slug) ?? 0);
+    // Each person once per workspace, ever: someone counted before is free.
+    for (const [slug, hold] of Array.from(holds.entries())) await hold.settle(createdBySource.get(slug) ?? []);
   }
 }
 
@@ -299,7 +309,7 @@ async function promoteHeldResults(
   todo: Array<typeof prospectSearchResults.$inferSelect>,
   errors: string[],
   holds: Map<string, AllowanceHold>,
-  createdBySource: Map<string, number>,
+  createdBySource: Map<string, PersonIdentity[]>,
 ) {
   let acquired = 0, unitsSpent = 0, failed = 0;
   const finalRecords = new Map<number, ProspectRecord>();
@@ -330,7 +340,7 @@ async function promoteHeldResults(
     if (needs.length === 0) continue;
     const creds = await loadCredentials(workspaceId, s);
     if (!creds) { errors.push(`${s.displayName}: no credentials`); failed += needs.length; needs.forEach((r) => finalRecords.delete(r.id)); continue; }
-    const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
+    const periods = periodsFor(s, creds);
     const hold = periods.length ? await reserve(workspaceId, s.slug, "leads", needs.length, periods) : null;
     if (periods.length && !hold) { errors.push(`${s.displayName}: allowance exhausted for this period`); failed += needs.length; needs.forEach((r) => finalRecords.delete(r.id)); continue; }
     const acq = await s.acquire(needs.map((r) => r.externalId), creds, { runId });
@@ -445,7 +455,11 @@ async function promoteHeldResults(
     if (!saved[i].created) continue;
     const rid = saved[i].sourceRows.map((f) => resultOfFind.get(f)).find((x) => x != null);
     const slug = rid != null ? sourceOfResult.get(rid) : undefined;
-    if (slug) createdBySource.set(slug, (createdBySource.get(slug) ?? 0) + 1);
+    const rec = rid != null ? finalRecords.get(rid) : undefined;
+    if (slug) {
+      const who: PersonIdentity = { linkedinUrl: rec?.linkedinUrl ?? null, email: rec && !rec.emailIsMasked ? rec.email : null, firstName: rec?.firstName ?? null, lastName: rec?.lastName ?? null, companyName: rec?.companyName ?? null, companyDomain: rec?.companyDomain ?? null };
+      createdBySource.set(slug, [...(createdBySource.get(slug) ?? []), who]);
+    }
   }
   const notSaved = ids.length - unstorable - promoted;
   // The reasons are read off the result directly, so promote needs nothing

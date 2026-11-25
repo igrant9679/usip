@@ -99,7 +99,8 @@ describe("Revenue Engine discovery", () => {
     expect(added).toBe(0);
     expect(h.qe).toEqual([]);
     expect(rows("prospect_queue")).toEqual([]);
-    expect(engineLogs().some((m) => /^quickenrich skipped — Prospect data for this month is used up \(250 of 250\)\. It resets on 1 [A-Z][a-z]+\. Add your own key under Data sources to keep going\.$/.test(m))).toBe(true);
+    // Campaign logs name a prospect source "Source N", never its vendor (phase 2).
+    expect(engineLogs().some((m) => /^Source \d+ skipped — Prospect data for this month is used up \(250 of 250\)\. It resets on 1 [A-Z][a-z]+\. Add your own key under Data sources to keep going\.$/.test(m))).toBe(true);
     // The per-source breakdown (the campaign's source health reads it) carries the reason too.
     const summary = rows("are_engine_logs").find((r) => String(r.message).startsWith("Discovery slice"));
     expect(summary.details.perSource.quickenrich.skipped).toMatch(/^Prospect data for this month is used up/);
@@ -115,7 +116,7 @@ describe("Revenue Engine discovery", () => {
     expect(added).toBe(3);
     expect(rows("prospect_queue")).toHaveLength(3);
     expect(usage()).toBe(250);
-    expect(engineLogs().some((m) => m.startsWith("quickenrich: Only 3 of the 10 asked for fit"))).toBe(true);
+    expect(engineLogs().some((m) => /^Source \d+: Only 3 of the 10 asked for fit/.test(m))).toBe(true);
   });
 
   it("people already in the workspace are not counted: the hold gives back what dedupe dropped", async () => {
@@ -153,7 +154,7 @@ describe("Find prospects", () => {
     expect(h.qe).toEqual([]);
     expect(r.perSource.quickenrich).toMatchObject({ found: 0 });
     expect(String((r.perSource.quickenrich as { note?: string }).note)).toMatch(/^Prospect data for this month is used up \(250 of 250\)/);
-    expect(rows("discovery_logs").some((l) => /Source quickenrich returned 0 finds — Prospect data for this month is used up/.test(String(l.message)))).toBe(true);
+    expect(rows("discovery_logs").some((l) => /^Source \d+ returned 0 finds — Prospect data for this month is used up/.test(String(l.message)))).toBe(true);
     expect(usage()).toBe(250);
   });
 

@@ -764,7 +764,8 @@ describe("a pace is held or paced, never an empty result", () => {
     const summary = rows("are_engine_logs").find((l) => /^Discovery slice/.test(l.message));
     expect(summary.details.perSource.leadocean.skipped).toContain("1 request a minute");
     expect(summary.details.perSource.leadocean.raw).toBe(0);
-    expect(rows("are_engine_logs").some((l) => l.level === "warn" && /leadocean: LeadOcean has slowed/.test(l.message))).toBe(true);
+    // Campaign logs name a prospect source "Source N", never its vendor (owner 2026-11-25).
+    expect(rows("are_engine_logs").some((l) => l.level === "warn" && /^Source \d+: Source \d+ has slowed/.test(l.message))).toBe(true);
   });
 });
 
@@ -1393,7 +1394,7 @@ describe("a campaign that ticks it", () => {
 
     const state = rows("are_campaigns")[0].discoveryQueryState;
     expect(JSON.stringify(state)).not.toContain("cursor");
-    const log = rows("are_engine_logs").find((l) => /^leadocean returned/.test(l.message));
+    const log = rows("are_engine_logs").find((l) => /^Source \d+ returned/.test(l.message));
     expect(log.message).toContain("place check: 1 inside, 1 outside, 1 unknown");
     expect(log.message).toContain("(5 units");
   });
@@ -1877,8 +1878,10 @@ describe("wiring", () => {
   });
 
   it("the help article, the assistant's digest and the source vocabulary all say so", () => {
-    expect(read("server/seedHelpContent.ts")).toContain("**LeadOcean.** Settings → Data sources");
-    expect(read("server/productKnowledge.ts")).toContain("Apollo, LeadOcean)");
+    // Since 2026-11-25 members read every prospect source as "Source N": the
+    // help says what a source that bills its previews does, without its name.
+    expect(read("server/seedHelpContent.ts")).toContain("**A source that bills its previews.**");
+    expect(read("server/productKnowledge.ts")).toContain("never name their vendors");
     expect(read("docs/prospect-sources.md")).toContain("## LeadOcean specifics");
   });
 });

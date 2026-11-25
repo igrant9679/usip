@@ -155,7 +155,9 @@ describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the
     // not the workspace's own gets the open slots shrunk to what is left of
     // the plan's month; every other source, and every workspace on no plan,
     // still gets `remaining` itself (holdAllowance grants the whole ask).
-    expect(engine).toContain("value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](ask));");
+    expect(engine).toContain("value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => factory(ask));");
+    // A registry source with no factory of its own runs through the registry (a source added later).
+    expect(engine).toContain("const factory = taskFactories[id] ?? ((n: number) =>");
     expect(engine).toContain("const ask = hold ? hold.granted : remaining;");
     expect(engine).toContain("const hold = isAllowanceVendor(id) ? await holdAllowance(campaign.workspaceId, id, remaining) : null;");
     expect(engine).toContain("const remaining = slots - totalNew;");
