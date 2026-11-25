@@ -35,6 +35,7 @@ import { prospectAllowanceUsage, prospectSourceCredentials, workspaceSettings } 
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { affectedRowsOf } from "../_core/claim";
+import { linkedSourceRow } from "./keyShares";
 import {
   ALLOWANCE_UNKNOWN_REASON,
   PLAN_MONTHLY_LIMIT,
@@ -231,7 +232,7 @@ export async function keyOrigin(workspaceId: number, vendor: AllowanceVendor, ap
     .where(and(eq(prospectSourceCredentials.workspaceId, workspaceId), eq(prospectSourceCredentials.sourceSlug, vendor)))
     .limit(1);
   if (row && row.status !== "revoked" && parseSecrets(row.enc).apiKey) return "own";
-  const { linkedSourceRow } = await import("./keyShares");
+  // A lent key resolves through services/keyShares, as every shareable key read must.
   const lent = await linkedSourceRow(workspaceId, vendor);
   return lent && parseSecrets(lent.row.credentialsEnc).apiKey ? "borrowed" : "none";
 }

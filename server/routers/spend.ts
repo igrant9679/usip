@@ -42,12 +42,6 @@ function periodDays(days: number): string[] {
 
 export const spendRouter = router({
   /**
-   * Each paid source's allowance left today and the AI budget (audit
-   * 2026-10-20, F8, U16): what the launchers and the cost confirmations show
-   * BEFORE a run. Anyone who can start a run can see what it may spend, so
-   * it is not billing-gated; it reads counts, never keys.
-   */
-  /**
    * This workspace's prospect-data allowance this month: the plan, the
    * number, what is used and when it resets; `{ plan: null }` on no plan;
    * `{ plan: null, unreadable: true }` when it could not be read (said on the
@@ -63,6 +57,12 @@ export const spendRouter = router({
     }
   }),
 
+  /**
+   * Each paid source's allowance left today and the AI budget (audit
+   * 2026-10-20, F8, U16): what the launchers and the cost confirmations show
+   * BEFORE a run. Anyone who can start a run can see what it may spend, so
+   * it is not billing-gated; it reads counts, never keys.
+   */
   budgets: workspaceProcedure.query(async ({ ctx }) => {
     const { sourceBudgets } = await import("../services/sourceBudgets");
     return sourceBudgets(ctx.workspace.id, ctx.user.id, isAdminRole(ctx.member.role));

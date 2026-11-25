@@ -253,8 +253,8 @@ export const attentionRouter = router({
     const { countPendingProposals } = await import("../services/campaignProposals");
     const campaignProposals = { count: await countPendingProposals(ws) };
     // The plan's monthly prospect data, at 100% (services/prospectAllowance).
-    // An unreadable allowance is logged there and leaves this card off rather
-    // than failing the whole panel; the runs themselves say why they skipped.
+    // An unreadable allowance is logged and leaves this card off rather than
+    // failing the whole panel; the runs themselves say why they skipped.
     let prospectDataUsedUp: (typeof EMPTY)["prospectDataUsedUp"] = null;
     try {
       const a = await allowanceFor(ws);
