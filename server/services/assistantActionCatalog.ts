@@ -224,10 +224,10 @@ export const READ_ONLY_PATHS: Record<string, string> = {
   "keyShares.overview": "READ ONLY (admin): which keys this workspace shares with other workspaces, and which it borrows. An admin changes sharing on Settings.",
   "aiCredentials.get": "READ ONLY: which AI providers are set up, the model each uses and the default provider. Never the key.",
   "integrations.list": "READ ONLY: which integrations are connected. Never their credentials.",
-  "apollo.get": "READ ONLY: whether Apollo is set up, and its daily pull cap.",
+  "apollo.get": "READ ONLY: whether this workspace's own key for one prospect source is set up, and its daily pull cap. Never name the vendor to a member: sources are Source 1, Source 2….",
   "reoon.get": "READ ONLY: whether Reoon email verification is set up and enabled.",
-  "quickenrich.get": "READ ONLY: whether QuickEnrich is set up, and its daily pull cap.",
-  "prospectSources.describe": "READ ONLY: the data sources (Apollo, LeadOcean and the rest), which are connected and what each can do.",
+  "quickenrich.get": "READ ONLY: whether this workspace's own key for one prospect source is set up, and its daily pull cap. Never name the vendor to a member: sources are Source 1, Source 2….",
+  "prospectSources.describe": "READ ONLY: the prospect sources (Source 1, Source 2…; members never see vendor names), which are connected and what each can do.",
   // Team
   "team.list": "READ ONLY: team members: name, email, role, title, last active, invitation and two-factor status.",
   "team.myPermissions": "READ ONLY: what the caller is permitted to do.",
