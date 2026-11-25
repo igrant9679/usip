@@ -5517,6 +5517,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `workspace_settings` ADD COLUMN `deepseekModel` varchar(128) NULL",
     ],
   },
+
+  // ── 0444: Monthly prospect-data allowance by membership plan (owner, 2026-11-25) ──
+  // A workspace's membership plan (trial, member, contributor, steward,
+  // founder) sets how many records a month it may take from the platform's
+  // prospect databases; its own keys never count (shared/prospectAllowance.ts).
+  // NULL = no plan = nothing counted or held back, which is every workspace
+  // until the platform owner sets one. Usage is one row per workspace per UTC
+  // month, so a new month needs no reset job. Both additive.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0444_prospect_allowance.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `membershipPlan` varchar(20) NULL",
+      "CREATE TABLE IF NOT EXISTS `prospect_allowance_usage` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `period` char(7) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_allowance_period` (`workspaceId`, `period`))",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

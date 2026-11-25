@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  char,
   date,
   decimal,
   index,
@@ -2160,6 +2161,17 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   sharedQuickenrichKey: boolean("sharedQuickenrichKey").default(false).notNull(),
   sharedReoonDailyCap: int("sharedReoonDailyCap"),
   sharedQuickenrichDailyCap: int("sharedQuickenrichDailyCap"),
+  // ── Membership plan (migration 0444; owner approved 2026-11-25) ──
+  // trial | member | contributor | steward | founder, or NULL = not on a
+  // membership plan: no prospect-data allowance is enforced and nothing is
+  // counted, exactly as before. A plan sets the monthly number of records the
+  // workspace may take from the platform's prospect databases (shared or lent
+  // keys; never its own): shared/prospectAllowance.ts. varchar, not an enum
+  // (enum inserts fail at runtime); a value that is not a plan is read as
+  // "unknown", so no shared data is spent, never as "no plan". Set by the
+  // platform owner (spend.setMembershipPlan); read only through
+  // services/prospectAllowance.
+  membershipPlan: varchar("membershipPlan", { length: 20 }),
   // Per-workspace ARE source checking ORDER (Migration 0172): AreSourceId[].
   // Read ONLY through @shared/areSources.resolveSourceOrder together with
   // areScraperSources (the EXISTING enable mask — one vocabulary, runtime-
@@ -2594,6 +2606,28 @@ export const spendLedger = mysqlTable(
   }),
 );
 export type SpendLedgerRow = typeof spendLedger.$inferSelect;
+
+/**
+ * Prospect data a workspace on a membership plan has used, per UTC month
+ * (migration 0444; shared/prospectAllowance.ts says what counts). One row per
+ * (workspace, "YYYY-MM"): a new month is a new row, so nothing resets it.
+ * Written only by services/prospectAllowance, whose consume is a conditional
+ * UPDATE that can never take `used` past the plan's number.
+ */
+export const prospectAllowanceUsage = mysqlTable(
+  "prospect_allowance_usage",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    period: char("period", { length: 7 }).notNull(),
+    used: int("used").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_prospect_allowance_period").on(t.workspaceId, t.period),
+  }),
+);
+export type ProspectAllowanceUsageRow = typeof prospectAllowanceUsage.$inferSelect;
 
 /**
  * Background work that survives a restart (migration 0216, audit A37/P11):

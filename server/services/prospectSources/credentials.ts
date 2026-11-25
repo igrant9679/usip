@@ -45,7 +45,8 @@ export interface CredentialRowView {
   sharedFrom?: string | null;
 }
 
-function parseSecrets(enc: string | null | undefined): Record<string, string> {
+/** A credential row's decrypted secrets ({} when none). Exported for services/prospectAllowance's own-key check. */
+export function parseSecrets(enc: string | null | undefined): Record<string, string> {
   const raw = tryDecryptSecret(enc);
   if (!raw) return {};
   try {
