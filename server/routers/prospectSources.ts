@@ -187,7 +187,10 @@ export const prospectSourcesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const views = await Promise.all(listSources().map((s) => credentialView(ctx.workspace.id, s)));
       if (!views.some((v) => v.configured)) {
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No prospect-data vendor is connected yet. Add a key under Settings → Data sources." });
+        // Vendor-free (member-facing): on a membership plan the included
+        // prospect data is reached through keys the platform shares or lends,
+        // so a workspace with none of those and no key of its own lands here.
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No prospect database is connected to this workspace yet. On a membership plan, prospect data is included up to your plan's monthly number once it is switched on for your workspace; you can also add a key of your own under Settings → Data sources." });
       }
       try {
         const r = await startRun(ctx.workspace.id, ctx.user.id, input.criteria, input.batchTarget, input.sources ?? null);
