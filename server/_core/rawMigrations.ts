@@ -5533,6 +5533,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `prospect_allowance_usage` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `period` char(7) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_allowance_period` (`workspaceId`, `period`))",
     ],
   },
+  // Sign-up from the website and from the app (owner, 2026-11-26). One row per
+  // membership: which workspace it made, and whether it is still paid up. The
+  // unique key is what makes a sign-up sent twice find its workspace. Additive.
+  // 0445 and 0446 are taken by two branches still open (the prospect pool and
+  // the CluGTM and A-Leads sources), so this is 0447.
+  {
+    name: "0447_membership_links.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `membership_links` (`id` int AUTO_INCREMENT PRIMARY KEY, `source` varchar(40) NOT NULL, `externalId` varchar(120) NOT NULL, `workspaceId` int NOT NULL, `userId` int NOT NULL, `email` varchar(320) NOT NULL, `status` varchar(16) NOT NULL DEFAULT 'active', `endedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_membership_link_external` (`source`, `externalId`), KEY `ix_membership_link_ws` (`workspaceId`))",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
