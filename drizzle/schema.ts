@@ -2630,6 +2630,38 @@ export const prospectAllowanceUsage = mysqlTable(
 export type ProspectAllowanceUsageRow = typeof prospectAllowanceUsage.$inferSelect;
 
 /**
+ * A workspace that exists because of a membership (migration 0447; owner,
+ * 2026-11-26: sign-up from the website and from the app). One row per
+ * membership: `source` is where it was sold ("meyousocial" for the membership
+ * site, "app" for the app's own Trial sign-up) and `externalId` is that
+ * source's own id for it, so the same sign-up sent twice finds its workspace
+ * instead of making a second one. The signed API (server/membershipApi.ts)
+ * can only ever touch a workspace that has a row here.
+ * `status` "ended" is a membership that is over: its workspace is archived
+ * and stays so until the membership is active again.
+ */
+export const membershipLinks = mysqlTable(
+  "membership_links",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    source: varchar("source", { length: 40 }).notNull(),
+    externalId: varchar("externalId", { length: 120 }).notNull(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    status: varchar("status", { length: 16 }).default("active").notNull(),
+    endedAt: timestamp("endedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_membership_link_external").on(t.source, t.externalId),
+    byWs: index("ix_membership_link_ws").on(t.workspaceId),
+  }),
+);
+export type MembershipLinkRow = typeof membershipLinks.$inferSelect;
+
+/**
  * Background work that survives a restart (migration 0216, audit A37/P11):
  * the bulk AI actions and "Recompute all", drained in slices by
  * services/jobs/runner.ts. `resumeFrom` is where the next slice starts (a

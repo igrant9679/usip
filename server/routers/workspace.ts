@@ -12,7 +12,6 @@ import {
 import { eq } from "drizzle-orm";
 import { stageIndexFor } from "../_core/stageSemantics";
 import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle/schema";
-import { slugify } from "@shared/slugify";
 
 export const workspaceRouter = router({
   /**
@@ -41,6 +40,48 @@ export const workspaceRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     return { state: await workspaceAbsenceReason(db, ctx.user.id) };
   }),
+
+  /**
+   * Whether the app will make this person a workspace of their own (owner,
+   * 2026-11-26: sign up "from within the app itself"), why not when it will
+   * not, and where plans are bought. Read by the screen someone with no
+   * workspace lands on.
+   */
+  signUp: protectedProcedure.query(async ({ ctx }) => {
+    const { selfServeStateFor } = await import("../services/membership");
+    const { membershipSiteUrl, trialOfferLine, SELF_SERVE_BLOCK_MESSAGE } = await import("@shared/membership");
+    const state = await selfServeStateFor(ctx.user);
+    return {
+      open: state.open,
+      block: state.block,
+      message: state.block ? SELF_SERVE_BLOCK_MESSAGE[state.block] : null,
+      offer: trialOfferLine(),
+      membershipSiteUrl: membershipSiteUrl(process.env),
+    };
+  }),
+
+  /**
+   * Make the signed-in person their own workspace, on the Trial plan. Only
+   * for someone with no workspace, a confirmed address, and only while the
+   * platform owner has opened sign-up (SELF_SERVE_SIGNUP). One per account:
+   * services/membership.createOwnWorkspace claims before it makes.
+   */
+  createOwn: protectedProcedure
+    .input(z.object({ name: z.string().trim().min(2).max(120) }))
+    .mutation(async ({ ctx, input }) => {
+      const { createOwnWorkspace, MembershipError } = await import("../services/membership");
+      try {
+        return await createOwnWorkspace(ctx.user, input.name);
+      } catch (e) {
+        if (e instanceof MembershipError) {
+          throw new TRPCError({
+            code: e.status === 403 ? "FORBIDDEN" : e.status === 409 ? "CONFLICT" : e.status === 503 ? "SERVICE_UNAVAILABLE" : "INTERNAL_SERVER_ERROR",
+            message: e.message,
+          });
+        }
+        throw e;
+      }
+    }),
 
   current: workspaceProcedure.query(({ ctx }) => ({
     workspace: ctx.workspace,
@@ -76,63 +117,20 @@ export const workspaceRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // slug is UNIQUE — derive from the name, then add entropy. Retry rather
-      // than trusting one draw, so two workspaces named the same never collide.
-      const base = slugify(input.name, 40) || "workspace"; // workspace slugs cap at 40
-      let workspaceId = 0;
-      let slug = "";
-      for (let attempt = 0; attempt < 5 && !workspaceId; attempt++) {
-        slug = `${base}-${Math.random().toString(36).slice(2, 7)}`.slice(0, 64);
-        try {
-          const r = await db.insert(workspaces).values({
-            name: input.name,
-            slug,
-            ownerUserId: ctx.user.id,
-            plan: "trial",
-          });
-          workspaceId = Number((r as any)[0]?.insertId ?? 0) || 0;
-        } catch (e) {
-          if (attempt === 4) {
-            console.error("[workspace.create] insert failed:", (e as Error).message);
-            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the workspace." });
-          }
-        }
-      }
-      if (!workspaceId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the workspace." });
-
-      // The creator must be a member, or they cannot open what they just made.
-      const { workspaceMembers } = await import("../../drizzle/schema");
-      await db.insert(workspaceMembers).values({
-        workspaceId,
-        userId: ctx.user.id,
-        role: "super_admin",
-        title: "Owner",
-      });
-
-      // Give per-workspace settings a home up front. Several dedicated setters
-      // ensure this row lazily, but not all do, and a missing row makes those
-      // saves look like they worked while writing nothing.
+      // The making of it is shared with the two sign-up doors
+      // (services/workspaceCreation.ts): slug, owner, settings row, content.
+      const { createWorkspace, WorkspaceCreationError } = await import("../services/workspaceCreation");
       try {
-        await db.insert(workspaceSettings).values({ workspaceId });
+        return await createWorkspace(db, {
+          name: input.name,
+          owner: { userId: ctx.user.id, title: "Owner" },
+          seedDemoData: input.seedDemoData,
+          logTag: "workspace.create",
+        });
       } catch (e) {
-        console.error("[workspace.create] settings row failed:", (e as Error).message);
+        if (e instanceof WorkspaceCreationError) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: e.message });
+        throw e;
       }
-
-      try {
-        if (input.seedDemoData) {
-          const { seedWorkspace } = await import("../seed");
-          await seedWorkspace(workspaceId, ctx.user.id);
-        } else {
-          const { seedHelpContent } = await import("../seedHelpContent");
-          await seedHelpContent(db as never, workspaceId);
-        }
-      } catch (e) {
-        // The workspace exists and is usable; content seeding is not worth
-        // failing the whole creation over.
-        console.error("[workspace.create] seeding failed:", (e as Error).message);
-      }
-
-      return { id: workspaceId, slug, name: input.name };
     }),
 
   /**

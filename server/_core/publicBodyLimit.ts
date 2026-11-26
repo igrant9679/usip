@@ -25,6 +25,8 @@ const form = express.urlencoded({ limit: PUBLIC_BODY_LIMIT, extended: true });
 export function isPublicBodyPath(path: string): boolean {
   if (path === "/api/track" || path.startsWith("/api/track/")) return true;
   if (path.startsWith("/api/auth/")) return true;
+  // The membership site's signed calls are a few fields (2026-11-26).
+  if (path.startsWith("/api/membership/")) return true;
   if (path.startsWith("/api/trpc/")) return isPublicWritePath(path) || isMeteredPublicPath(path);
   return false;
 }
