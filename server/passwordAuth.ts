@@ -323,9 +323,15 @@ export async function reissueSessionCookie(db: LiveDb, req: Request, res: Respon
  *     token proves only "this admin invited this address". When a second
  *     workspace has also invited the same address, one admin's token must not
  *     choose the password the other workspace's invitee will sign in with.
+ *     ONE EXCEPTION (2026-11-26): a membership bought on the membership site.
+ *     That workspace is the person's own, no workspace admin can read its
+ *     token, and the site delivers the link to the address itself. So that
+ *     token may claim the placeholder even when other invitations are
+ *     waiting on it (a second membership, or an admin's invite); an admin's
+ *     token still may not (services/membership.isSiteMembership).
  *   · live: not expired, not deactivated.
  */
-async function claimableInvite(
+export async function claimableInvite(
   db: LiveDb,
   existing: { id: number; openId: string; passwordHash: string | null; loginMethod: string | null },
   token: unknown,
@@ -337,15 +343,19 @@ async function claimableInvite(
   const memberships = await db
     .select({
       id: workspaceMembers.id,
+      workspaceId: workspaceMembers.workspaceId,
       inviteToken: workspaceMembers.inviteToken,
       inviteExpiresAt: workspaceMembers.inviteExpiresAt,
       deactivatedAt: workspaceMembers.deactivatedAt,
     })
     .from(workspaceMembers)
     .where(eq(workspaceMembers.userId, existing.id));
-  if (memberships.length !== 1) return null;
-  const [m] = memberships;
-  if (m.inviteToken !== token || m.deactivatedAt) return null;
+  const m = memberships.find((x) => x.inviteToken === token);
+  if (!m || m.deactivatedAt) return null;
+  if (memberships.length !== 1) {
+    const { isSiteMembership } = await import("./services/membership");
+    if (!(await isSiteMembership(m.workspaceId, existing.id))) return null;
+  }
   if (m.inviteExpiresAt && new Date(m.inviteExpiresAt).getTime() <= Date.now()) return null;
   return { memberId: m.id };
 }

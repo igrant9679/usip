@@ -55,6 +55,7 @@ import { appRouter } from "./routers";
 import { appUrl } from "./appUrl";
 import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
 import { isPublicBodyPath } from "./_core/publicBodyLimit";
+import { claimableInvite } from "./passwordAuth";
 import { checkMembershipSignature, membershipSecretOf, registerMembershipRoutes, signMembershipRequest } from "./membershipApi";
 import {
   MembershipError, createOwnWorkspace, membershipEnded, membershipState, provisionMembership, reissueActivation, updateMembership,
@@ -67,6 +68,7 @@ import {
 import { MEMBERSHIP_PLANS, PLAN_MONTHLY_LIMIT } from "@shared/prospectAllowance";
 import { membershipLinks } from "../drizzle/schema";
 import { WorkspaceAccessScreen } from "../client/src/components/usip/WorkspaceAccessGate";
+import { initialAuthMode, returnPathFor } from "../client/src/lib/authRedirect";
 
 const ROOT = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8").replace(/\r\n/g, "\n");
@@ -400,6 +402,71 @@ describe("the website's door", () => {
     expect(rows("users").filter((u) => u.email === "new.member@example.com")).toHaveLength(1);
   });
 
+  describe("the first-sign-in link claims the owner's account", () => {
+    const owner = () => rows("users").find((u) => u.email === "new.member@example.com");
+    const tokenOf = (workspaceId: number) => rows("workspace_members").find((m) => m.workspaceId === workspaceId && m.userId === owner().id).inviteToken as string;
+    /** An ordinary invitation from a workspace admin, waiting on the same address. */
+    const adminInvite = (id: number, token: string) => rows("workspace_members").push({
+      id, workspaceId: LSI, userId: owner().id, role: "rep", deactivatedAt: null, inviteToken: token, inviteExpiresAt: null, title: null, createdAt: new Date(),
+    });
+
+    it("with one membership, as any invitation does", async () => {
+      const made = await provisionMembership(sale());
+      expect(await claimableInvite(h.db, owner(), tokenOf(made.workspaceId))).toMatchObject({ memberId: expect.any(Number) });
+      expect(await claimableInvite(h.db, owner(), "f".repeat(64))).toBeNull();
+    });
+
+    it("when the same person bought a second membership before signing in: either link works", async () => {
+      const a = await provisionMembership(sale({ externalId: "sub-1" }));
+      const b = await provisionMembership(sale({ externalId: "sub-2" }));
+      expect(await claimableInvite(h.db, owner(), tokenOf(a.workspaceId))).not.toBeNull();
+      expect(await claimableInvite(h.db, owner(), tokenOf(b.workspaceId))).not.toBeNull();
+    });
+
+    it("when a workspace admin has also invited the address: the member's own link works, the admin's token does not", async () => {
+      const made = await provisionMembership(sale());
+      const adminToken = "a".repeat(64);
+      adminInvite(80, adminToken);
+      expect(await claimableInvite(h.db, owner(), tokenOf(made.workspaceId))).not.toBeNull();
+      // The admin can read their own invite's token. It must not set the password of someone who owns a paid workspace.
+      expect(await claimableInvite(h.db, owner(), adminToken)).toBeNull();
+    });
+
+    it("two admins' invitations and no membership: neither token claims, as before", async () => {
+      rows("users").push({ id: 60, openId: "invite:two@x.example", name: "Two", email: "two@x.example", loginMethod: "invite", role: "user", passwordHash: null });
+      const two = rows("users").find((u) => u.id === 60);
+      rows("workspaces").push({ id: 9, name: "Other", slug: "other", ownerUserId: 1, archivedAt: null, plan: "trial", logoUrl: null });
+      rows("workspace_members").push(
+        { id: 81, workspaceId: LSI, userId: 60, role: "rep", deactivatedAt: null, inviteToken: "b".repeat(64), inviteExpiresAt: null, title: null, createdAt: new Date() },
+        { id: 82, workspaceId: 9, userId: 60, role: "rep", deactivatedAt: null, inviteToken: "c".repeat(64), inviteExpiresAt: null, title: null, createdAt: new Date() },
+      );
+      expect(await claimableInvite(h.db, two, "b".repeat(64))).toBeNull();
+      expect(await claimableInvite(h.db, two, "c".repeat(64))).toBeNull();
+    });
+
+    it("an invitation INTO a member's workspace is an ordinary one: the exception is for the owner the site named", async () => {
+      const made = await provisionMembership(sale());
+      // The member, as admin of their workspace, invites a colleague whom another workspace has also invited.
+      rows("users").push({ id: 61, openId: "invite:colleague@x.example", name: "Colleague", email: "colleague@x.example", loginMethod: "invite", role: "user", passwordHash: null });
+      const colleague = rows("users").find((u) => u.id === 61);
+      rows("workspace_members").push(
+        { id: 83, workspaceId: made.workspaceId, userId: 61, role: "rep", deactivatedAt: null, inviteToken: "d".repeat(64), inviteExpiresAt: null, title: null, createdAt: new Date() },
+        { id: 84, workspaceId: LSI, userId: 61, role: "rep", deactivatedAt: null, inviteToken: "e".repeat(64), inviteExpiresAt: null, title: null, createdAt: new Date() },
+      );
+      expect(await claimableInvite(h.db, colleague, "d".repeat(64))).toBeNull();
+      expect(await claimableInvite(h.db, colleague, "e".repeat(64))).toBeNull();
+    });
+
+    it("not for an account that already has a password, nor with a lapsed link", async () => {
+      const made = await provisionMembership(sale());
+      const token = tokenOf(made.workspaceId);
+      rows("workspace_members").find((m) => m.workspaceId === made.workspaceId).inviteExpiresAt = new Date(Date.now() - 1000);
+      expect(await claimableInvite(h.db, owner(), token)).toBeNull();
+      rows("workspace_members").find((m) => m.workspaceId === made.workspaceId).inviteExpiresAt = null;
+      expect(await claimableInvite(h.db, { ...owner(), passwordHash: "set" }, token)).toBeNull();
+    });
+  });
+
   it("never leaves a half-made workspace open: no member, archived, and the sale can be sent again", async () => {
     h.failOn = { op: "update", table: "membership_links" };
     const r = await refusal(provisionMembership(sale()));
@@ -600,6 +667,16 @@ describe("the screen and the schema", () => {
     const form = read("client/src/components/usip/CreateOwnWorkspace.tsx");
     expect(between(form, "trpc.workspace.createOwn.useMutation({", "});")).toContain("onError:");
     expect(form).toContain("utils.workspace.list.invalidate()");
+  });
+
+  it("?signup=1 opens the sign-in page on Create account, and nothing else does", () => {
+    expect(initialAuthMode("?signup=1")).toBe("signup");
+    expect(initialAuthMode("")).toBe("signin");
+    expect(initialAuthMode("?signup=0")).toBe("signin");
+    expect(initialAuthMode("?returnPath=%2Fare&signup=1")).toBe("signup");
+    // The link lands on Home after registering, not back on itself.
+    expect(returnPathFor({ pathname: "/", search: "?signup=1", hash: "" })).toBe("/");
+    expect(read("client/src/App.tsx")).toContain("useState<\"signin\" | \"signup\" | \"forgot\">(() => initialAuthMode(window.location.search))");
   });
 
   it("the migration makes the table the schema describes, with the key the claim depends on", () => {

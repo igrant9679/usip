@@ -39,6 +39,15 @@ export function returnPathFor(loc: { pathname: string; search: string; hash: str
 }
 
 /**
+ * Which form the sign-in page opens on. `?signup=1` opens "Create account",
+ * so the membership site can link straight to registering (owner, 2026-11-26:
+ * sign up "from within the app itself"). Anything else is the sign-in form.
+ */
+export function initialAuthMode(search: string): "signin" | "signup" {
+  return new URLSearchParams(search).get("signup") === "1" ? "signup" : "signin";
+}
+
+/**
  * The pathname part of a login URL, which may carry a `?returnPath=` query.
  *
  * Deliberately string-only — `new URL()` needs a base and would throw on the

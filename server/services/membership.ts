@@ -388,6 +388,29 @@ export async function membershipEnded(workspaceId: number): Promise<boolean> {
   return rows.length > 0 && rows.every((r) => r.status === "ended");
 }
 
+/**
+ * True when this workspace was made for this person by a membership bought on
+ * the site: it is their own workspace, and the link to it went to their
+ * address. passwordAuth.claimableInvite asks, so that link still works when
+ * other invitations are waiting on the same address. A failed read is "no":
+ * the stricter rule applies.
+ */
+export async function isSiteMembership(workspaceId: number, userId: number): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return false;
+    const [row] = await db
+      .select({ id: membershipLinks.id })
+      .from(membershipLinks)
+      .where(and(eq(membershipLinks.source, SITE_SOURCE), eq(membershipLinks.workspaceId, workspaceId), eq(membershipLinks.userId, userId)))
+      .limit(1);
+    return !!row;
+  } catch (e) {
+    console.error("[membership] isSiteMembership failed:", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
 /** Whether the app would make this person a workspace right now, and why not when it would not. */
 export async function selfServeStateFor(user: { id: number; emailVerifiedAt?: unknown; emailVerifyTokenHash?: unknown }): Promise<{ open: boolean; block: SelfServeBlock | null }> {
   const db = await requireDb();

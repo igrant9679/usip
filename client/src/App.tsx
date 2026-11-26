@@ -19,7 +19,7 @@ import { WorkspaceCurrencySync } from "@/components/usip/WorkspaceCurrencySync";
 import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
-import { returnPathFor } from "@/lib/authRedirect";
+import { initialAuthMode, returnPathFor } from "@/lib/authRedirect";
 import { usePageTitle } from "@/lib/usePageTitle";
 import { lazyChunk } from "@/lib/lazyChunk";
 
@@ -168,7 +168,7 @@ function Landing() {
   // ?returnPath= the current page is where to go back to (G33).
   const returnPath = returnPathFor(window.location);
 
-  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">(() => initialAuthMode(window.location.search));
   usePageTitle(mode === "signup" ? "Create account" : mode === "forgot" ? "Reset password" : "Sign in");
   /** Forgot-password confirmation. Deliberately shown for ANY address — see below. */
   const [resetSent, setResetSent] = useState(false);
