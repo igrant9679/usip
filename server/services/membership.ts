@@ -37,7 +37,7 @@ import crypto from "node:crypto";
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { membershipLinks, users, workspaceMembers, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { affectedRowsOf } from "../_core/claim";
+import { affectedRowsOf, claimRow } from "../_core/claim";
 import { insertIdOf } from "../_core/insertId";
 import { invalidateArchivedWorkspaceCache } from "../_core/workspaceArchive";
 import { recordAudit } from "../audit";
@@ -315,12 +315,20 @@ export async function updateMembership(input: UpdateInput): Promise<MembershipVi
 
   if (input.status && input.status !== before.status) {
     if (input.status === "ended") {
-      // Archive only a live workspace, so one its owner archived keeps its own date.
+      // Archive first, so "ended" is never recorded for a workspace still
+      // running. Only a live workspace: one its owner archived keeps its date.
+      // The write changes nothing a second time, so it needs no claim.
       await db.update(workspaces).set({ archivedAt: new Date() }).where(and(eq(workspaces.id, link.workspaceId), isNull(workspaces.archivedAt)));
-      await db.update(membershipLinks).set({ status: "ended", endedAt: new Date() }).where(eq(membershipLinks.id, link.id));
+      await claimRow(db.update(membershipLinks).set({ status: "ended", endedAt: new Date() })
+        .where(and(eq(membershipLinks.id, link.id), eq(membershipLinks.status, "active"))));
     } else {
-      await db.update(workspaces).set({ archivedAt: null }).where(eq(workspaces.id, link.workspaceId));
-      await db.update(membershipLinks).set({ status: "active", endedAt: null }).where(eq(membershipLinks.id, link.id));
+      // Restore only for the request that took the link out of "ended": a
+      // workspace is un-archived because ITS membership came back, never
+      // because an "active" arrived for one that was active all along and
+      // that its owner had archived themselves.
+      const won = await claimRow(db.update(membershipLinks).set({ status: "active", endedAt: null })
+        .where(and(eq(membershipLinks.id, link.id), eq(membershipLinks.status, "ended"))));
+      if (won) await db.update(workspaces).set({ archivedAt: null }).where(eq(workspaces.id, link.workspaceId));
     }
     invalidateArchivedWorkspaceCache();
   }

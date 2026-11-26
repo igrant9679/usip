@@ -525,6 +525,26 @@ describe("afterwards", () => {
     expect(await membershipEnded(made.workspaceId)).toBe(false);
   });
 
+  it("a workspace its owner archived themselves stays archived when the site says active or changes the plan", async () => {
+    const made = await provisionMembership(sale());
+    rows("workspaces").find((w) => w.id === made.workspaceId).archivedAt = new Date("2026-11-20T00:00:00Z");
+    await updateMembership({ externalId: "sub-1001", plan: "steward", status: "active" });
+    expect(rows("workspaces").find((w) => w.id === made.workspaceId).archivedAt).toEqual(new Date("2026-11-20T00:00:00Z"));
+    // And an ended membership leaves the owner's own archive date alone.
+    await updateMembership({ externalId: "sub-1001", plan: null, status: "ended" });
+    expect(rows("workspaces").find((w) => w.id === made.workspaceId).archivedAt).toEqual(new Date("2026-11-20T00:00:00Z"));
+  });
+
+  it("ended sent twice is ended once", async () => {
+    await provisionMembership(sale());
+    await updateMembership({ externalId: "sub-1001", plan: null, status: "ended" });
+    const endedAt = rows("membership_links")[0].endedAt;
+    const again = await updateMembership({ externalId: "sub-1001", plan: null, status: "ended" });
+    expect(again).toMatchObject({ status: "ended", previous: { status: "ended" } });
+    expect(rows("membership_links")[0].endedAt).toBe(endedAt);
+    expect(h.audits.filter((a) => a.action === "update")).toHaveLength(1);
+  });
+
   it("a workspace with no membership is not one whose membership ended", async () => {
     expect(await membershipEnded(LSI)).toBe(false);
     rows("workspaces").find((w) => w.id === LSI).archivedAt = new Date();
