@@ -54,6 +54,7 @@ import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard"
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
 import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
+import { TableSourceKeyCard } from "@/components/usip/settings/TableSourceKeyCard";
 import { PrimarySourceCard } from "@/components/usip/settings/PrimarySourceCard";
 import { OwnKeysOptionalHeading, ProspectAllowanceCard } from "@/components/usip/settings/ProspectAllowanceCard";
 import { ProspectSourceChoiceCard } from "@/components/usip/settings/ProspectSourceChoiceCard";
@@ -386,6 +387,8 @@ export default function SettingsHub() {
             <QuickEnrichSourceCard />
             <ApolloSourceCard />
             <LeadOceanSourceCard />
+            <TableSourceKeyCard slug="aleads" />
+            <TableSourceKeyCard slug="clugtm" />
             <ReoonVerifierCard />
             <KeySharingCard kinds={SOURCE_KEY_KINDS} />
           </div>

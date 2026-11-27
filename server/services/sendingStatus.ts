@@ -184,6 +184,7 @@ export async function sendingStatus(workspaceId: number, now: Date = new Date())
 /** Display names for the ledger's sources (the registry's, without loading every adapter). */
 const SOURCE_NAMES: Record<string, string> = {
   apollo: "Apollo", warmysender: "WarmySender", leadocean: "LeadOcean", quickenrich: "QuickEnrich",
+  aleads: "A-Leads", clugtm: "CluGTM",
   reoon: "Reoon", hunter: "Hunter", lemlist: "lemlist",
 };
 

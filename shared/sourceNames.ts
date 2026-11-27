@@ -45,6 +45,10 @@ const KNOWN_SPELLINGS: Record<string, string> = {
   quickenrich: String.raw`\bquick[\s-]?enrich(?:'s)?\b`,
   apollo: String.raw`\bapollo(?:\.io)?(?:'s)?\b`,
   leadocean: String.raw`\blead[\s-]?ocean(?:'s)?\b`,
+  // "A-Leads" or "aleads"; never "a leads", which is ordinary English.
+  aleads: String.raw`\ba-?leads(?:\.co)?(?:'s)?\b`,
+  // Formerly Cleanlist AI.
+  clugtm: String.raw`\b(?:clu[\s-]?gtm|cleanlist(?:\s+ai)?)(?:'s)?\b`,
 };
 const NEVER_REWRITTEN = new Set(["hunter", "lemlist"]);
 

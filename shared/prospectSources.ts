@@ -64,6 +64,9 @@ export const PROSPECT_SOURCE_SLUGS = [
   "leadocean",
   "hunter",
   "lemlist",
+  // Owner go-ahead 2026-11-25: AppSumo accounts shared through the pool.
+  "aleads",
+  "clugtm",
 ] as const;
 export type ProspectSourceSlug = (typeof PROSPECT_SOURCE_SLUGS)[number];
 

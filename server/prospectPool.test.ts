@@ -306,7 +306,7 @@ describe("E. the owner's seed (2026-11-25)", () => {
 
   it("starts from the known ceilings and the approved descriptions, word for word", async () => {
     const cfg = await poolConfig();
-    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.monthlyCeiling]))).toEqual({ leadocean: 214_000, quickenrich: 6_000, warmysender: null, apollo: null });
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.monthlyCeiling]))).toEqual({ leadocean: 214_000, aleads: 100_000, clugtm: 25_000, quickenrich: 6_000, warmysender: null, apollo: null });
     for (const [slug, text] of Object.entries(SEEDED)) expect(cfg.sources[slug].description).toBe(text);
     const { POOL_SOURCE_SEED } = await import("./services/prospectPoolSeed");
     expect(POOL_SOURCE_SEED.aleads).toEqual({ monthlyCeiling: 100_000, description: "Verified B2B contacts, checked for catch-all domains." });
@@ -317,8 +317,8 @@ describe("E. the owner's seed (2026-11-25)", () => {
 
   it("numbers by ceiling: LeadOcean, A-Leads, CluGTM, QuickEnrich, then WarmySender; Apollo always last", async () => {
     const cfg = await poolConfig();
-    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, quickenrich: 2, warmysender: 3, apollo: 4 });
-    // With the two adapters still to come in the registry:
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, aleads: 2, clugtm: 3, quickenrich: 4, warmysender: 5, apollo: 6 });
+    // The seed alone, in any order:
     const { POOL_SOURCE_SEED, ALWAYS_LAST_SOURCES } = await import("./services/prospectPoolSeed");
     const all = ["warmysender", "quickenrich", "apollo", "leadocean", "aleads", "clugtm"];
     expect(numberSources(all, Object.fromEntries(all.map((s) => [s, { ceiling: POOL_SOURCE_SEED[s].monthlyCeiling }])), ALWAYS_LAST_SOURCES))
@@ -329,13 +329,13 @@ describe("E. the owner's seed (2026-11-25)", () => {
     await setPoolSource("warmysender", { monthlyCeiling: 30_000 });
     await setPoolSource("apollo", { monthlyCeiling: 10_000_000 });
     let cfg = await poolConfig();
-    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, warmysender: 2, quickenrich: 3, apollo: 4 });
+    expect(Object.fromEntries(Object.values(cfg.sources).map((s) => [s.slug, s.number]))).toEqual({ leadocean: 1, aleads: 2, warmysender: 3, clugtm: 4, quickenrich: 5, apollo: 6 });
     await setPoolSource("quickenrich", { number: 1 });
     cfg = await poolConfig();
     expect([cfg.sources.quickenrich.number, cfg.sources.leadocean.number]).toEqual([1, 2]);
     await setPoolSource("quickenrich", { number: null });
     cfg = await poolConfig();
-    expect([cfg.sources.leadocean.number, cfg.sources.quickenrich.number]).toEqual([1, 3]);
+    expect([cfg.sources.leadocean.number, cfg.sources.quickenrich.number]).toEqual([1, 5]);
   });
 
   it("changing one field keeps the seeded others", async () => {

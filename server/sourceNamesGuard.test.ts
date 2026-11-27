@@ -37,8 +37,8 @@ import { describeEnrichmentError } from "@shared/enrichmentErrorLabel";
 import { ARE_SOURCES } from "@shared/areSources";
 
 const ROOT = join(__dirname, "..");
-const VENDOR_WORD = /(?<![A-Za-z])(QuickEnrich|Quick Enrich|Apollo|WarmySender|Warmy Sender|LeadOcean|Lead Ocean)(?![A-Za-z])/;
-const VENDORS_ANY_CASE = /apollo|quick[\s-]?enrich|warmy[\s-]?sender|lead[\s-]?ocean/i;
+const VENDOR_WORD = /(?<![A-Za-z])(QuickEnrich|Quick Enrich|Apollo|WarmySender|Warmy Sender|LeadOcean|Lead Ocean|A-Leads|CluGTM|Cleanlist)(?![A-Za-z])/;
+const VENDORS_ANY_CASE = /apollo|quick[\s-]?enrich|warmy[\s-]?sender|lead[\s-]?ocean|a-?leads|clu[\s-]?gtm|cleanlist/i;
 
 /** A file's code with its comments removed, and its allowed regions cut. */
 function memberFacingCode(rel: string): string {
@@ -72,6 +72,7 @@ const OWN_KEY_CARDS = new Set([
   "client/src/components/usip/settings/QuickEnrichSourceCard.tsx",
   "client/src/components/usip/settings/WarmySenderSourceCard.tsx",
   "client/src/components/usip/settings/LeadOceanSourceCard.tsx",
+  "client/src/components/usip/settings/TableSourceKeyCard.tsx",
   // Lending this workspace's own keys to another workspace of the same admin.
   "client/src/components/usip/settings/KeySharingCard.tsx",
 ]);
