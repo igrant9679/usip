@@ -27,7 +27,7 @@ import { getReoonKey } from "./reoon";
 import { keySourceOf, sharedKeyPolicy, sharedUsedToday } from "./spend";
 import { allowanceFor } from "./prospectAllowance";
 
-export async function sourceBudgets(workspaceId: number, userId: number, isAdmin: boolean): Promise<SourceBudgets> {
+export async function sourceBudgets(workspaceId: number, userId: number, isAdmin: boolean, viewer: { platformOwner: boolean } = { platformOwner: false }): Promise<SourceBudgets> {
   const [apolloKey, qeKey, reoonKey] = await Promise.all([
     getApolloKey(workspaceId).catch(() => ""),
     getQuickEnrichKey(workspaceId).catch(() => ""),
@@ -75,7 +75,15 @@ export async function sourceBudgets(workspaceId: number, userId: number, isAdmin
     prospectDataNote = "Prospect data: this month's allowance could not be read, so the shared prospect databases are not used until it can be";
   }
 
+  // What this viewer calls each prospect source ("Source N" for members).
+  let labels: Record<string, string> = {};
+  try {
+    const { sourceNamesFor } = await import("./prospectPool");
+    labels = Object.fromEntries((await sourceNamesFor(viewer)).map((x) => [x.slug, x.label]));
+  } catch { /* the sentences fall back to "Prospect source" */ }
+
   return {
+    labels,
     prospectData,
     ...(prospectDataNote ? { prospectDataNote } : {}),
     apollo: { configured: !!apolloKey, allowance: { used: apolloUsed, cap: apolloCap } },

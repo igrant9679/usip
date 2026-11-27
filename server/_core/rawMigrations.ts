@@ -5533,6 +5533,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `prospect_allowance_usage` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `period` char(7) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_allowance_period` (`workspaceId`, `period`))",
     ],
   },
+
+  // ── 0445: One shared prospect pool, one source per plan workspace, each person once (owner, 2026-11-25) ──
+  // The platform owner names a pool workspace whose prospect-source keys every
+  // workspace may use (platform_settings, prospect_pool_sources), each pool
+  // source with a monthly platform ceiling (prospect_pool_usage). A workspace
+  // on a plan finds people through one chosen source (prospectSource; NULL =
+  // the default), counts each person once, ever (prospect_allowance_people),
+  // and has a daily cap per source for shared use (prospect_allowance_daily).
+  // All additive; nothing changes until the owner names a pool.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0445_prospect_pool.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `prospectSource` varchar(32) NULL",
+      "CREATE TABLE IF NOT EXISTS `prospect_allowance_people` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `personKey` varchar(191) NOT NULL, `period` char(7) NOT NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_allowance_person` (`workspaceId`, `personKey`))",
+      "CREATE TABLE IF NOT EXISTS `prospect_allowance_daily` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `source` varchar(32) NOT NULL, `day` char(10) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_allowance_daily` (`workspaceId`, `source`, `day`))",
+      "CREATE TABLE IF NOT EXISTS `platform_settings` (`settingKey` varchar(64) NOT NULL PRIMARY KEY, `value` json NULL, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+      "CREATE TABLE IF NOT EXISTS `prospect_pool_sources` (`slug` varchar(32) NOT NULL PRIMARY KEY, `shared` boolean NOT NULL DEFAULT false, `monthlyCeiling` int NULL, `sourceNumber` int NULL, `description` varchar(255) NULL, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+      "CREATE TABLE IF NOT EXISTS `prospect_pool_usage` (`id` int AUTO_INCREMENT PRIMARY KEY, `slug` varchar(32) NOT NULL, `period` char(7) NOT NULL, `used` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_prospect_pool_usage` (`slug`, `period`))",
+    ],
+  },
+
   // Sign-up from the website and from the app (owner, 2026-11-26). One row per
   // membership: which workspace it made, and whether it is still paid up. The
   // unique key is what makes a sign-up sent twice find its workspace. Additive.

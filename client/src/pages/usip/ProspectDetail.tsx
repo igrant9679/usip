@@ -114,7 +114,7 @@ export default function ProspectDetail() {
   const budgets = useSourceBudgets();
   const verify = trpc.prospects.verifyEmail.useMutation({
     // Says so when the second verifier decided (services/secondVerifier).
-    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}${r.verifier === "warmysender" ? " · decided by WarmySender, Reoon could not" : ""}`); invalidatePeopleReads(utils); },
+    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}${r.verifier === "warmysender" ? " · decided by the second verifier, Reoon could not" : ""}`); invalidatePeopleReads(utils); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.prospects.review.useMutation({

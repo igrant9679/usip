@@ -20,6 +20,9 @@
  *   2. **Nothing is ever cut mid-token.** Every clip lands on a whitespace
  *      boundary, so a shortened line ends in a word rather than half of one.
  */
+import { anonymizeVendorText } from "./sourceNames";
+import { PROSPECT_DATABASE_SLUGS } from "./prospectSources";
+
 export type EnrichmentErrorTone = "info" | "warn" | "error";
 
 export interface EnrichmentErrorLabel {
@@ -76,16 +79,29 @@ export function enrichmentReasonFrom(err: unknown): string {
 /** Where a Drizzle message stops being a reason and starts being SQL. */
 const QUERY_DUMP = /(?:^|\s|—\s*)failed query:/i;
 
+/**
+ * Members read a prospect source as such, never by its vendor's name (owner
+ * 2026-11-25): the stored reasons carry the slug the pass wrote
+ * ("quickenrich: no_match"), so both the label and its detail are worded
+ * without it.
+ */
+const NO_VENDOR = PROSPECT_DATABASE_SLUGS.map((slug) => ({ slug, label: "prospect database" }));
+
 export function describeEnrichmentError(raw: string | null | undefined): EnrichmentErrorLabel | null {
+  const out = describeEnrichmentErrorRaw(raw);
+  return out ? { ...out, label: anonymizeVendorText(out.label, NO_VENDOR), detail: anonymizeVendorText(out.detail, NO_VENDOR) } : null;
+}
+
+function describeEnrichmentErrorRaw(raw: string | null | undefined): EnrichmentErrorLabel | null {
   const detail = (raw ?? "").trim();
   if (!detail) return null;
   const m = /^quickenrich:\s*(\S+)(.*)$/i.exec(detail);
   if (m) {
     const reason = m[1].toLowerCase();
     const rest = m[2] ?? "";
-    if (reason === "no_match") return { label: "Not in QuickEnrich", tone: "info", detail };
-    if (/transport failure|will retry/i.test(rest)) return { label: "QuickEnrich unavailable — will retry", tone: "warn", detail };
-    return { label: `QuickEnrich: ${reason.replace(/_/g, " ")}`, tone: "warn", detail };
+    if (reason === "no_match") return { label: "Not in the prospect database", tone: "info", detail };
+    if (/transport failure|will retry/i.test(rest)) return { label: "Prospect database unavailable — will retry", tone: "warn", detail };
+    return { label: `Prospect database: ${reason.replace(/_/g, " ")}`, tone: "warn", detail };
   }
 
   // One line, because a stack trace's second line is not a better explanation

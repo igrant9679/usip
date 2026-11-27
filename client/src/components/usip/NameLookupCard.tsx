@@ -150,7 +150,7 @@ export function NameLookupCard({ variant = "card" }: { variant?: "card" | "bare"
     if (cost.total === 0) return go();
     confirmAction({
       title: `Create ${rows.length} ${rows.length === 1 ? "record" : "records"}?`,
-      description: `This spends ${cost.text}. Rows from LinkedIn, Apollo and QuickEnrich are free.`,
+      description: `This spends ${cost.text}. Rows from LinkedIn and from prospect sources that search for free cost nothing.`,
       confirmLabel: `Create and spend ${cost.total}`,
     }, go);
   };

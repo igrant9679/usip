@@ -112,7 +112,11 @@ describe("Find Prospects — the picker is the fan-out", () => {
     // 2026-11-07 (audit A56, batch ARES): the queued run also carries the
     // campaign a launch adds its finds to; the selection is passed as before.
     expect(svc).toContain("fanOutAndSave(db, workspaceId, p.runId, startedAt, p.mode, p.input, {\n      sources: p.sources, holdForReview: p.holdForReview,");
-    expect(svc).toContain("selectRunSources(candidates.map((c) => c.id), enabledSources, opts?.sources)");
+    // Since 2026-11-25 a plan workspace's one chosen source replaces the other
+    // prospect databases first (services/prospectSourceChoice); with no plan,
+    // `selected` is the picker's selection unchanged.
+    expect(svc).toContain("selectRunSources(candidates.map((c) => c.id), enabledSources, selected)");
+    expect(svc).toContain("let selected = opts?.sources ?? null;");
     // Order matters: the mask is resolved first, then the selection narrows it.
     const maskAt = svc.indexOf("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS)");
     const pickAt = svc.indexOf("selectRunSources(");

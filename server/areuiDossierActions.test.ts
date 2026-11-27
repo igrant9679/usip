@@ -53,9 +53,11 @@ describe("the spend the confirms state is what the agents can spend", () => {
     };
     const one = areEnrichText(1, b);
     expect(one).toContain("2 AI calls");
-    expect(one).toContain("1 QuickEnrich credit");
+    // Prospect sources are never named by their vendors since 2026-11-25.
+    expect(one).toContain("1 prospect-database email lookup");
     expect(one).toContain("3 Reoon instant and 4 Reoon daily credits");
-    expect(one).toContain("QuickEnrich pulls: 90 of 100 left today");
+    expect(one).toContain("Prospect source pulls: 90 of 100 left today");
+    expect(areEnrichText(1, { ...b, labels: { quickenrich: "Source 2" } })).toContain("Source 2 pulls: 90 of 100 left today");
     expect(one).toContain("Reoon shared key: 460 of 500 left today");
     expect(one).toContain("AI tokens this month: 120,000 of 2,000,000");
     expect(areEnrichText(5)).toContain("For 5 people that is 10 AI calls");

@@ -96,7 +96,9 @@ export async function warmySenderSecondOpinion(
     // "Use WarmySender" off in Settings means off everywhere, verification included.
     if (await sourceSwitchedOff(workspaceId, SLUG)) return { decided: false, why: "source_off" };
     const creds = await loadCredentials(workspaceId, source);
-    if (!creds?.secrets.apiKey) return { decided: false, why: "no_key" };
+    // The shared pool is for finding people, not for checking addresses: a
+    // pooled key verifies nothing here (services/prospectPool).
+    if (!creds?.secrets.apiKey || creds.origin === "pool") return { decided: false, why: "no_key" };
     const config = creds.config as { verifyUndecided?: boolean; scopes?: unknown };
     if (config.verifyUndecided === false) return { decided: false, why: "option_off" };
     // Scopes are recorded at Test connection. A key known to lack the scope is

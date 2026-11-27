@@ -49,6 +49,7 @@ import { NoLinkedInConnected } from "@/components/usip/NoLinkedInConnected";
 import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
 import { invalidatePeopleReads } from "@/lib/entityCache";
+import { useSourceNames } from "@/lib/sourceNames";
 
 /* ─── Chip-input shared between the two forms ───────────────────────── */
 function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -526,9 +527,9 @@ function initialParams(): { runId: number | null; q: string } {
 // No "web" (audit 2026-10-27, P62): it reads a page at a URL, and this search is text.
 const PERSON_SOURCES: AreSourceId[] = ["linkedin", "news", "apollo", "quickenrich"];
 const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "news", "apollo"];
-const SOURCE_LABEL: Record<string, string> = Object.fromEntries(ARE_SOURCES.map((s) => [s.id, s.label]));
 
 export function FindProspectsPanel() {
+  const sourceNames = useSourceNames();
   // This page ignored its own URL params entirely, so two links elsewhere in
   // the app quietly went nowhere useful: ProspectDetail's "Run #N" link
   // (/find-prospects?runId=…) landed on a blank new-search page instead of the
@@ -662,7 +663,7 @@ export function FindProspectsPanel() {
                       >
                         <Checkbox className="size-3.5" disabled={!enabled} checked={enabled && runSources.includes(id)} onCheckedChange={() => toggleSource(id)} />
                         <span className={enabled ? "text-[11.5px]" : "text-[11.5px] text-muted-foreground"}>
-                          {SOURCE_LABEL[id] ?? id}
+                          {sourceNames.label(id)}
                           {!enabled && <span className="ml-1 text-[10.5px]">(off in Settings → Revenue Engine)</span>}
                         </span>
                       </label>

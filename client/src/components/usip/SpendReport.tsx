@@ -21,12 +21,21 @@ import { Section } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { METER_LABEL, VENDOR_LABEL, type SpendSummary } from "@shared/spendReport";
+import { useSourceNames } from "@/lib/sourceNames";
+import { isProspectDatabase } from "@shared/prospectSources";
+
+/** A vendor as this viewer may read it: a prospect source is "Source N" to members (owner 2026-11-25). */
+function useVendorLabel(): (v: string) => string {
+  const names = useSourceNames();
+  return (v) => (isProspectDatabase(v) ? names.label(v) : VENDOR_LABEL[v] ?? v);
+}
 import { formatUsd } from "@shared/researchModels";
-import { MEMBERSHIP_PLANS, PLAN_LABEL, isMembershipPlan, planOptionLabel, resetDayShort, type MembershipPlan } from "@shared/prospectAllowance";
+import { MEMBERSHIP_PLANS, PLAN_LABEL, isMembershipPlan, planDailyCap, planOptionLabel, resetDayShort, type MembershipPlan } from "@shared/prospectAllowance";
 
 const n = (v: number) => v.toLocaleString();
 
 export function SpendTable({ summary, empty }: { summary: SpendSummary; empty: string }) {
+  const vendorLabel = useVendorLabel();
   if (summary.lines.length === 0) return <div className="p-4 text-sm text-muted-foreground">{empty}</div>;
   return (
     <div className="overflow-x-auto">
@@ -47,7 +56,7 @@ export function SpendTable({ summary, empty }: { summary: SpendSummary; empty: s
         <tbody>
           {summary.lines.map((l) => (
             <tr key={`${l.vendor}|${l.meter}|${l.model}|${l.keySource}`} className="border-b last:border-0">
-              <td className="px-3 py-1.5 whitespace-nowrap">{VENDOR_LABEL[l.vendor] ?? l.vendor}</td>
+              <td className="px-3 py-1.5 whitespace-nowrap">{vendorLabel(l.vendor)}</td>
               <td className="px-3 py-1.5 whitespace-nowrap">{METER_LABEL[l.meter] ?? l.meter}</td>
               <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground">{l.model || "—"}</td>
               <td className="px-3 py-1.5 whitespace-nowrap">{l.keySource === "shared" ? "Shared" : "Own"}</td>
@@ -65,6 +74,7 @@ export function SpendTable({ summary, empty }: { summary: SpendSummary; empty: s
 }
 
 function TopFeatures({ summary }: { summary: SpendSummary }) {
+  const vendorLabel = useVendorLabel();
   const top = summary.features.slice(0, 8);
   if (top.length === 0) return null;
   return (
@@ -72,7 +82,7 @@ function TopFeatures({ summary }: { summary: SpendSummary }) {
       <div className="font-medium">Where it went</div>
       {top.map((f) => (
         <div key={`${f.vendor}|${f.feature}|${f.meter}`} className="flex gap-2">
-          <span className="text-muted-foreground w-28 shrink-0">{VENDOR_LABEL[f.vendor] ?? f.vendor}</span>
+          <span className="text-muted-foreground w-28 shrink-0">{vendorLabel(f.vendor)}</span>
           <span className="flex-1 truncate">{f.feature}</span>
           <span className="tabular-nums">{n(f.total)} {f.meter === "tokens" ? "tokens" : (METER_LABEL[f.meter] ?? f.meter).toLowerCase()}</span>
         </div>
@@ -99,6 +109,7 @@ function PeriodPicker({ days, setDays }: { days: number; setDays: (d: number) =>
  * below keeps the per-day detail a vendor dashboard is checked against.
  */
 export function MonthSpendCard() {
+  const vendorLabel = useVendorLabel();
   const q = trpc.spend.month.useQuery();
   if (q.isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading this month…</div>;
   if (q.error) return <div className="p-4 text-sm text-red-600 dark:text-red-400">This month's spend could not load: {q.error.message}</div>;
@@ -125,7 +136,7 @@ export function MonthSpendCard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
           {rows.map((r) => (
             <div key={`${r.vendor}|${r.meter}`} className="flex justify-between gap-2">
-              <span className="text-muted-foreground truncate">{VENDOR_LABEL[r.vendor] ?? r.vendor} · {METER_LABEL[r.meter] ?? r.meter}</span>
+              <span className="text-muted-foreground truncate">{vendorLabel(r.vendor)} · {METER_LABEL[r.meter] ?? r.meter}</span>
               <span className="tabular-nums shrink-0">{n(r.total)}{r.estUsd !== null ? ` · ${formatUsd(r.estUsd)}` : ""}</span>
             </div>
           ))}
@@ -163,7 +174,7 @@ export function SpendSection() {
           </>
         )}
       </Section>
-      {user?.role === "admin" && <PlatformSpendSection />}
+      {user?.role === "admin" && <><ProspectPoolSection /><PlatformSpendSection /></>}
     </>
   );
 }
@@ -247,10 +258,124 @@ function MembershipPlanCell({
         {allowance.unreadable
           ? "Allowance could not be read"
           : allowance.plan && allowance.limit != null
-            ? `${n(Math.min(allowance.used ?? 0, allowance.limit))} of ${n(allowance.limit)} used · resets ${allowance.resetsOn ? resetDayShort(allowance.resetsOn) : "on the 1st"}`
+            ? `${n(Math.min(allowance.used ?? 0, allowance.limit))} of ${n(allowance.limit)} used · resets ${allowance.resetsOn ? resetDayShort(allowance.resetsOn) : "on the 1st"} · ${isMembershipPlan(allowance.plan) ? n(planDailyCap(allowance.plan)) : "?"} a day per source on shared keys`
             : "Unlimited, uncounted"}
       </div>
     </div>
+  );
+}
+
+/**
+ * The shared prospect pool, for the platform owner only (owner 2026-11-25):
+ * which workspace's prospect-source keys every workspace may use, and per
+ * source its TRUE name (this is the one screen that shows it), whether it is
+ * shared, its monthly platform ceiling (the vendor account's real allowance),
+ * what was used this month, and the number and description members see
+ * instead of the name. Each field saves on its own.
+ */
+function ProspectPoolSection() {
+  const utils = trpc.useUtils();
+  const q = trpc.spend.pool.useQuery();
+  const setWs = trpc.spend.setPoolWorkspace.useMutation({
+    onSuccess: () => { utils.spend.pool.invalidate(); toast.success("Pool workspace saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const d = q.data;
+  return (
+    <Section
+      title="Shared prospect pool (platform owner)"
+      description="Every workspace may use the pool workspace's key for each source switched on here, after its own key and any key lent to it. Members see each source as its number and description, never its name. The monthly ceiling is the vendor account's real allowance: once pool use reaches it, the source is unavailable from the pool until the month turns. Every source starts shared, with the known ceilings and the approved descriptions. Numbers follow the ceilings (highest first, Apollo last) until you set one; leave the number empty to go back to following them."
+    >
+      {q.error && <div className="p-4 text-sm text-red-600 dark:text-red-400">{q.error.message}</div>}
+      {d && (
+        <div className="space-y-3 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium">Pool workspace</span>
+            <select
+              aria-label="Pool workspace"
+              className="h-7 rounded-md border bg-background px-1.5 text-xs"
+              value={d.poolWorkspaceId ?? ""}
+              disabled={setWs.isPending}
+              onChange={(e) => setWs.mutate({ workspaceId: e.target.value === "" ? null : Number(e.target.value) })}
+            >
+              <option value="">None (nothing is shared)</option>
+              {d.workspaces.map((w) => <option key={w.id} value={w.id}>{w.name} #{w.id}</option>)}
+            </select>
+            {d.poolArchived && <span className="text-amber-700 dark:text-amber-400">That workspace is archived: it lends nothing.</span>}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-muted-foreground">
+                  <th className="text-left font-medium px-3 py-2">Source (true name)</th>
+                  <th className="text-left font-medium px-3 py-2">Shared</th>
+                  <th className="text-left font-medium px-3 py-2">Monthly ceiling</th>
+                  <th className="text-right font-medium px-3 py-2">Used this month</th>
+                  <th className="text-left font-medium px-3 py-2">Number and description members see</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.sources.map((s) => <PoolSourceRow key={`${s.slug}:${s.storedNumber}:${s.monthlyCeiling}:${s.description}`} s={s} />)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function PoolSourceRow({ s }: {
+  s: { slug: string; trueName: string; shared: boolean; monthlyCeiling: number | null; usedThisMonth: number; number: number; storedNumber: number | null; description: string; poolHasKey: boolean };
+}) {
+  const utils = trpc.useUtils();
+  const [ceiling, setCeiling] = useState(s.monthlyCeiling == null ? "" : String(s.monthlyCeiling));
+  const [num, setNum] = useState(s.storedNumber == null ? "" : String(s.storedNumber));
+  const [desc, setDesc] = useState(s.description);
+  const save = trpc.spend.setPoolSource.useMutation({
+    onSuccess: () => { utils.spend.pool.invalidate(); toast.success("Saved"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const slug = s.slug as "warmysender" | "quickenrich" | "apollo" | "leadocean" | "hunter" | "lemlist";
+  const used = s.monthlyCeiling != null && s.usedThisMonth >= s.monthlyCeiling;
+  return (
+    <tr className="border-b last:border-0 align-top">
+      <td className="px-3 py-2">
+        <div className="font-medium">{s.trueName}</div>
+        <div className="text-muted-foreground">{s.poolHasKey ? "pool workspace has a key" : "pool workspace has no key"}</div>
+      </td>
+      <td className="px-3 py-2">
+        <Switch aria-label={`Share ${s.trueName} with every workspace`} checked={s.shared} disabled={save.isPending}
+          onCheckedChange={(v) => save.mutate({ slug, shared: v })} />
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-1">
+          <Input aria-label={`${s.trueName} monthly ceiling`} className="h-7 w-24 text-xs" type="number" min={0} placeholder="Not set"
+            value={ceiling} onChange={(e) => setCeiling(e.target.value)} />
+          <Button size="sm" variant="outline" className="h-7" disabled={save.isPending}
+            onClick={() => save.mutate({ slug, monthlyCeiling: ceiling.trim() === "" ? null : Math.max(0, Math.floor(Number(ceiling) || 0)) })}>
+            Set
+          </Button>
+        </div>
+      </td>
+      <td className={`px-3 py-2 text-right tabular-nums ${used ? "text-amber-700 dark:text-amber-400" : ""}`}>
+        {n(s.usedThisMonth)}{s.monthlyCeiling != null ? ` of ${n(s.monthlyCeiling)}` : ""}{used ? " · used up" : ""}
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-muted-foreground">Source</span>
+          <Input aria-label={`${s.trueName} public number`} className="h-7 w-14 text-xs" type="number" min={1} max={99}
+            placeholder={String(s.number)} title={s.storedNumber == null ? "Follows the ceilings" : "Set by you"}
+            value={num} onChange={(e) => setNum(e.target.value)} />
+          <Input aria-label={`${s.trueName} public description`} className="h-7 w-56 text-xs" maxLength={255}
+            value={desc} onChange={(e) => setDesc(e.target.value)} />
+          <Button size="sm" variant="outline" className="h-7" disabled={save.isPending}
+            onClick={() => save.mutate({ slug, number: num.trim() === "" ? null : Math.max(1, Math.min(99, Math.floor(Number(num) || 1))), description: desc.trim() || null })}>
+            Save
+          </Button>
+        </div>
+      </td>
+    </tr>
   );
 }
 

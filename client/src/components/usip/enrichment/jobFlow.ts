@@ -48,7 +48,7 @@ export const OBJECT_OPTIONS: CardOption[] = [
 
 export const TYPE_OPTIONS: CardOption[] = [
   { value: "email", label: "Find & verify email", hint: "Free-source finder + Reoon verification" },
-  { value: "linkedin", label: "LinkedIn profile", hint: "QuickEnrich profile match" },
+  { value: "linkedin", label: "LinkedIn profile", hint: "Prospect database profile match" },
   { value: "company_identity", label: "Company identity", hint: "Domain + brand resolution" },
 ];
 

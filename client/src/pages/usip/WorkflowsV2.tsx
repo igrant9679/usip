@@ -68,11 +68,11 @@ function describeSweepResult(r: any): string {
   const domains = r?.domainsResolved ?? 0;
   const qe = r?.quickenrichFound ?? 0;
   return `found ${emails} email${emails === 1 ? "" : "s"}`
-    + (qe > 0 ? ` (${qe} via QuickEnrich)` : "")
+    + (qe > 0 ? ` (${qe} from a prospect database)` : "")
     + (domains > 0 ? `, resolved ${domains} company domain${domains === 1 ? "" : "s"} free` : "")
     + ` (${why})`
     // The monthly prospect-data allowance stopped the QuickEnrich pass early.
-    + (r?.quickenrichStopped ? ` QuickEnrich lookups stopped: ${r.quickenrichStopped}` : "");
+    + (r?.quickenrichStopped ? ` Prospect-database lookups stopped: ${r.quickenrichStopped}` : "");
 }
 
 export default function WorkflowsV2() {
@@ -405,8 +405,8 @@ export default function WorkflowsV2() {
                           <div className="text-sm font-medium">Run an enrichment sweep now</div>
                           <div className="text-[11px] text-muted-foreground">
                             {(sweepAp.data as any).candidates} ready to verify
-                            {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable via QuickEnrich (LinkedIn lookup, 1 credit per hit)` : ""}
-                            {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} waiting on a company domain (found via LinkedIn/QuickEnrich enrichment)` : ""}
+                            {(sweepAp.data as any).quickenrichReady ? ` · ${(sweepAp.data as any).quickenrichReady} reachable through a prospect database (LinkedIn lookup, 1 credit per hit)` : ""}
+                            {(sweepAp.data as any).queue?.needsDomain ? ` · ${(sweepAp.data as any).queue.needsDomain} waiting on a company domain (found through LinkedIn or prospect-database enrichment)` : ""}
                             {/* Key-gated again since 2026-08-12: the free Apollo domain
                                 pre-pass is gone (owner removed Apollo from the
                                 waterfall), so a keyless sweep now genuinely does

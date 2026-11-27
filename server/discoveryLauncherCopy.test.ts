@@ -55,7 +55,7 @@ const launcherDoc = (() => {
 
 /** Candidate ids in one branch of the mode split. */
 function candidates(mode: "person" | "account"): string[] {
-  const split = service.indexOf('const candidates: SourceTask[] = mode === "person"');
+  const split = service.indexOf('const baseCandidates: SourceTask[] = mode === "person"');
   expect(split, "the mode split in runDiscovery").toBeGreaterThan(-1);
   const q = service.indexOf("\n    ? [", split);
   const colon = service.indexOf("\n    : [", split);
@@ -67,16 +67,22 @@ function candidates(mode: "person" | "account"): string[] {
   return [...block.matchAll(/\{ id: "([a-z_]+)"/g)].map((m) => m[1]);
 }
 
-/** What the sentence has to call each source for a reader to recognise it. */
+/**
+ * What the sentence has to call each source for a reader to recognise it.
+ * Since 2026-11-25 (owner decision) members never read a prospect database's
+ * vendor name: the copy says "prospect sources", and each one is "Source N"
+ * wherever it is named on its own.
+ */
 const SPOKEN: Record<string, string> = {
   linkedin: "LinkedIn",
   news: "news",
-  apollo: "Apollo",
-  quickenrich: "QuickEnrich",
+  apollo: "prospect source",
+  quickenrich: "prospect source",
   google_business: "Google Business",
   internal: "Internal CRM",
-  warmysender: "WarmySender",
+  warmysender: "prospect source",
 };
+const VENDOR_NAMES = /apollo|quick\s?enrich|warmy\s?sender|lead\s?ocean/i;
 
 describe("the discovery launcher describes the run it actually performs", () => {
   it("runs person mode, so its candidates are the person-mode four", () => {
@@ -147,8 +153,9 @@ describe("the discovery launcher describes the run it actually performs", () => 
     const i = seed.indexOf("**Find Prospects** (sidebar");
     expect(i, "the Find Prospects article").toBeGreaterThan(-1);
     const article = seed.slice(i, seed.indexOf("`,", i));
-    expect(article).toContain("Person: LinkedIn, News, Apollo, QuickEnrich");
-    expect(article).toContain("Account: Google Business, News, Apollo");
+    expect(article).toContain("Person: LinkedIn, News and your prospect sources");
+    expect(article).toContain("Account: Google Business, News and a prospect source");
+    expect(article).not.toMatch(VENDOR_NAMES);
     expect(article).not.toMatch(/\bWeb\b/);
   });
 
@@ -165,9 +172,10 @@ describe("the discovery launcher describes the run it actually performs", () => 
     const i = hub.indexOf('title: "Prospect Discovery"');
     expect(i, "the Prospect Discovery card").toBeGreaterThan(-1);
     const card = hub.slice(i, hub.indexOf("},", i));
-    for (const word of ["CRM", "QuickEnrich", "Apollo", "WarmySender", "LeadOcean", "Google Business", "LinkedIn", "news"]) {
+    for (const word of ["CRM", "our prospect databases", "Google Business", "LinkedIn", "news"]) {
       expect(card, word).toContain(word);
     }
+    expect(card).not.toMatch(VENDOR_NAMES);
     // One word per ARE source, so a ninth source makes this fail rather than
     // leaving the explainer quietly short. (Eight since LeadOcean, 2026-11-02.)
     expect(ARE_SOURCE_IDS).toHaveLength(8);
@@ -214,8 +222,9 @@ describe("the discovery launcher describes the run it actually performs", () => 
     const step = seed.slice(seed.indexOf('{ title: "Run discovery"'));
     const body = step.slice(0, step.indexOf("},") + 2);
     expect(body).not.toMatch(/\bweb\b/i);
-    for (const word of ["LinkedIn", "Apollo", "QuickEnrich", "news", "Google Business"]) {
+    for (const word of ["LinkedIn", "prospect source", "news", "Google Business"]) {
       expect(body, word).toContain(word);
     }
+    expect(body).not.toMatch(VENDOR_NAMES);
   });
 });

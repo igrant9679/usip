@@ -22,6 +22,7 @@
  *   - CLIENT refinement filters narrow the *loaded page* without another round
  *     trip: seniority, confidence tier, has-phone, has-linkedin, and the sort.
  */
+import { useSourceNames } from "@/lib/sourceNames";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -1310,6 +1311,7 @@ const fmtShortDate = (d: string | Date | null | undefined) => {
 };
 
 function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => void; onOpenFull: () => void }) {
+  const sourceNames = useSourceNames();
   // A 384 px panel beside the table on a desktop; the whole screen on a phone (R78).
   // The list row (p) renders instantly; the full record carries the resolved
   // profile_image (stripped from search results) so the avatar can show here.
@@ -1488,10 +1490,11 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
                   <span
                     key={field}
                     className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px]"
-                    title={`${field}: ${prov.source}${prov.verification ? ` (${prov.verification})` : ""}${prov.corroboratedBy?.length ? ` · corroborated by ${prov.corroboratedBy.join(", ")}` : ""} · confidence ${prov.confidence}`}
+                    title={sourceNames.text(`${field}: ${prov.source}${prov.verification ? ` (${prov.verification})` : ""}${prov.corroboratedBy?.length ? ` · corroborated by ${prov.corroboratedBy.join(", ")}` : ""} · confidence ${prov.confidence}`)}
                   >
                     <span className="text-foreground/90">{field}</span>
-                    <span className="text-muted-foreground">{prov.source.replace(/_/g, " ")}</span>
+                    {/* A prospect source is "Source N" to members, whatever the ledger's own word for it (owner 2026-11-25). */}
+                    <span className="text-muted-foreground">{sourceNames.text(prov.source.replace(/_/g, " "))}</span>
                     <span className="tabular-nums font-semibold" style={{ color: prov.confidence >= 85 ? "#059669" : prov.confidence >= 65 ? "#D97706" : "#DC2626" }}>
                       {prov.confidence}
                     </span>
@@ -1544,6 +1547,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
  * prospects legitimately have nothing to show.
  */
 function FieldHistorySection({ prospectId }: { prospectId: number }) {
+  const sourceNames = useSourceNames();
   const SHOWN = 12;
   const { data } = trpc.prospects.fieldHistory.useQuery({ prospectId });
   if (!data || data.length === 0) return null;
@@ -1564,7 +1568,7 @@ function FieldHistorySection({ prospectId }: { prospectId: number }) {
                 <span>{h.newValue || "—"}</span>
               </div>
               <div className="text-[11px] text-muted-foreground">
-                {h.newSource.replace(/_/g, " ")} · {h.newConfidence} · {fmtShortDate(h.changedAt)}
+                {sourceNames.text(h.newSource.replace(/_/g, " "))} · {h.newConfidence} · {fmtShortDate(h.changedAt)}
               </div>
             </div>
           </div>

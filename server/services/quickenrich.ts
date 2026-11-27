@@ -118,7 +118,11 @@ export async function getQuickenrichDailyPullCap(workspaceId: number): Promise<n
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return row?.cap ?? 50;
+  const own = row?.cap ?? 50;
+  // A workspace on a plan using a key that is not its own runs under the
+  // plan's daily cap instead (owner 2026-11-25, services/prospectAllowance).
+  const { effectiveDailyCap } = await import("./prospectAllowance");
+  return effectiveDailyCap(workspaceId, "quickenrich", own);
 }
 
 /** Records pulled today, via are_scrape_jobs — the same ledger Apollo uses. */
@@ -597,7 +601,9 @@ export async function quickenrichFindEmailByLinkedIn(
   // shared or lent key uncounted. Own keys and workspaces on no plan pass
   // straight through.
   const { holdAllowance } = await import("./prospectAllowance");
-  const hold = await holdAllowance(meter.workspaceId, "quickenrich", 1, { apiKey });
+  // The person is known before the call: someone this workspace was charged
+  // for already (found earlier, say, by discovery) costs nothing more.
+  const hold = await holdAllowance(meter.workspaceId, "quickenrich", 1, { apiKey, person: { linkedinUrl } });
   if (hold.granted === 0) {
     return { email: null, reason: "allowance_exhausted", note: hold.reason ?? undefined, companyName: null, companyDomain: null };
   }
@@ -605,7 +611,7 @@ export async function quickenrichFindEmailByLinkedIn(
   try {
     r = await findEmailByLinkedIn(apiKey, linkedinUrl);
   } finally {
-    await hold.settle(r?.reason === "found" ? 1 : 0);
+    await hold.settle(r?.reason === "found" ? [{ linkedinUrl, email: r.email }] : []);
   }
   // 1 credit, charged only when an address comes back (audit P84: these
   // were billed and counted nowhere).

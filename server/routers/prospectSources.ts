@@ -25,8 +25,9 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { checkPermission, getDb } from "../db";
 import { getOrSeedSettings } from "./admin";
 import { recordAudit } from "../audit";
-import { LEADOCEAN_EMAIL_STATUSES, PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
-import { describeSources, forgetDisplayBudget, getSource, listSources } from "../services/prospectSources/registry";
+import { LEADOCEAN_EMAIL_STATUSES, PROSPECT_SOURCE_SLUGS, isProspectDatabase } from "@shared/prospectSources";
+import { forViewer, isPlatformOwner, sourceNamesFor } from "../services/prospectPool";
+import { describeSources, forgetDisplayBudget, getSource, listSources, periodsFor } from "../services/prospectSources/registry";
 import { credentialView, loadCredentials, recordValidation, saveCredentials } from "../services/prospectSources/credentials";
 import { ledgerView } from "../services/prospectSources/ledger";
 import {
@@ -61,7 +62,48 @@ export const prospectSourcesRouter = router({
     .query(async ({ ctx, input }) => {
       const sources = await describeSources(ctx.workspace.id, input?.criteria ?? null);
       // Strip anything a secret could hide in; config holds schemas/tier only.
-      return sources.map((s) => ({ ...s, credential: { ...s.credential, config: redactConfig(s.credential.config) } }));
+      const out = sources.map((s) => ({ ...s, credential: { ...s.credential, config: redactConfig(s.credential.config) } }));
+      // Members read "Source N" and its description, never the vendor's name
+      // or its site (owner 2026-11-25); only the platform owner reads them.
+      const platformOwner = isPlatformOwner(ctx.user);
+      if (platformOwner) return out;
+      const names = new Map((await sourceNamesFor({ platformOwner: false })).map((n) => [n.slug, n]));
+      return forViewer(out.map((s) => ({ ...s, displayName: names.get(s.slug)?.label ?? s.displayName, docsUrl: "" })), { platformOwner: false });
+    }),
+
+  /**
+   * What each prospect source is called for this viewer (owner 2026-11-25):
+   * "Source N" and its description for every member; the vendor's name for
+   * the platform owner only. Every screen that names a source reads this.
+   */
+  names: workspaceProcedure.query(async ({ ctx }) => {
+    const platformOwner = isPlatformOwner(ctx.user);
+    return { platformOwner, sources: await sourceNamesFor({ platformOwner }) };
+  }),
+
+  /**
+   * The one prospect source a workspace on a plan finds people through, and
+   * every source it could choose, each with whether it has room this month
+   * (Settings → Data sources). `onPlan: false` = no plan: the waterfall runs
+   * as before and there is nothing to choose.
+   */
+  choices: workspaceProcedure.query(async ({ ctx }) => {
+    const { sourceChoices } = await import("../services/prospectSourceChoice");
+    return sourceChoices(ctx.workspace.id);
+  }),
+
+  /** Choose this workspace's one prospect source, or go back to the default (null). Admins only. */
+  setChoice: adminWsProcedure
+    .input(z.object({ slug: slugSchema.nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const { setProspectSource } = await import("../services/prospectSourceChoice");
+      if (input.slug && !isProspectDatabase(input.slug)) throw new TRPCError({ code: "BAD_REQUEST", message: "That source cannot be chosen." });
+      await setProspectSource(ctx.workspace.id, input.slug);
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "workspace_settings", entityId: ctx.workspace.id,
+        after: { prospectSource: input.slug },
+      });
+      return { ok: true as const, slug: input.slug };
     }),
 
   saveCredentials: adminWsProcedure
@@ -170,7 +212,7 @@ export const prospectSourcesRouter = router({
       const s = getSource(input.slug);
       const creds = await loadCredentials(ctx.workspace.id, s);
       if (!creds) return { configured: false as const, rows: [], vendor: [] };
-      const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
+      const periods = periodsFor(s, creds);
       const rows = await ledgerView(ctx.workspace.id, input.slug, periods);
       let vendor: Awaited<ReturnType<typeof s.remainingBudget>> = [];
       try { vendor = await s.remainingBudget(creds); } catch { vendor = []; }
@@ -208,12 +250,14 @@ export const prospectSourcesRouter = router({
     .query(async ({ ctx, input }) => {
       const r = await getRun(ctx.workspace.id, input.runId);
       if (!r) throw new TRPCError({ code: "NOT_FOUND" });
-      return r;
+      // The run's notes and per-source reasons as members may read them; the
+      // found people's own fields are data and are not rewritten.
+      return { ...r, run: await forViewer(r.run, { platformOwner: isPlatformOwner(ctx.user) }) };
     }),
 
   listRuns: workspaceProcedure
     .input(z.object({ limit: z.number().int().min(1).max(100).default(20) }).optional())
-    .query(async ({ ctx, input }) => listRuns(ctx.workspace.id, input?.limit ?? 20)),
+    .query(async ({ ctx, input }) => forViewer(await listRuns(ctx.workspace.id, input?.limit ?? 20), { platformOwner: isPlatformOwner(ctx.user) })),
 
   /** The vendor's raw row for one staged result (run inspector). */
   resultRaw: workspaceProcedure
@@ -244,7 +288,7 @@ export const prospectSourcesRouter = router({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_search_run", entityId: input.runId,
         after: { selected: input.resultIds.length, promoted: r.promoted, acquired: r.acquired, unitsSpent: r.unitsSpent, failed: r.failed },
       });
-      return r;
+      return { ...r, errors: await forViewer(r.errors, { platformOwner: isPlatformOwner(ctx.user) }) };
     }),
 });
 

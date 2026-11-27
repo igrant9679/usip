@@ -371,8 +371,10 @@ async function notifyOwner(workspaceId: number, userId: number | null, title: st
   try {
     const db = await getDb();
     if (!db) return;
+    // Read by members: "Source N", never a vendor's name (services/prospectPool).
+    const { forMembers } = await import("./prospectPool");
     await db.insert(notifications).values({
-      workspaceId, userId, kind: "system", title, body: body.slice(0, 1000),
+      workspaceId, userId, kind: "system", title: await forMembers(title), body: (await forMembers(body)).slice(0, 1000),
     } as never);
   } catch (e) {
     console.error("[EnrichmentSweep] notify failed:", (e as Error).message);

@@ -507,7 +507,7 @@ describe("the DeepSeek key is a key like the others", () => {
     expect(before).toMatchObject({ label: "DeepSeek", hasOwnKey: true, sharedWith: [] });
 
     await caller(A).keyShares.share({ kind: "deepseek", targetWorkspaceId: B });
-    expect(await linkedKeys(B, ["anthropic", "openai", "gemini", "deepseek"])).toEqual({ deepseek: { ownerWorkspaceId: A, key: DS_KEY_A } });
+    expect(await linkedKeys(B, ["anthropic", "openai", "gemini", "deepseek"])).toEqual({ deepseek: { ownerWorkspaceId: A, key: DS_KEY_A, via: "loan" } });
     expect((await caller(B).aiCredentials.get()).deepseek).toEqual({ configured: true, masked: "", sharedFrom: "LSI Media", model: "" });
     // Nothing was stored in the borrower, and its calls go out on the lender's key.
     expect(settings(B).deepseekApiKeyEnc).toBeNull();
@@ -555,7 +555,7 @@ describe("before migration 0443 has run", () => {
     expect(h.anthropic).toEqual([{ apiKey: "sk-ant-own-B", model: HAIKU }]);
     expect(h.ledger[0]).toMatchObject({ vendor: "anthropic", keySource: "workspace" });
     // The lent key still resolves, asked for alongside DeepSeek as the funnels ask.
-    expect(await linkedKeys(B, ["openai", "gemini", "deepseek"])).toEqual({ openai: { ownerWorkspaceId: A, key: "sk-openai-lsi" } });
+    expect(await linkedKeys(B, ["openai", "gemini", "deepseek"])).toEqual({ openai: { ownerWorkspaceId: A, key: "sk-openai-lsi", via: "loan" } });
     // Settings still opens, with DeepSeek shown as not set.
     const got = await caller(B).aiCredentials.get();
     expect(got.anthropic.configured).toBe(true);

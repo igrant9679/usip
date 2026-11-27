@@ -24,7 +24,7 @@
 import type { ProspectSourceSlug, SearchCriteria } from "@shared/prospectSources";
 import { canonicalText } from "@shared/canonicalText";
 import type { ProspectRecord, SearchContext, VendorFailure } from "./types";
-import type { EligibleSource } from "./registry";
+import { periodsFor, type EligibleSource } from "./registry";
 import { Deduper } from "./dedupe";
 import { commit, markExhausted, release, remainingUnits, reserve } from "./ledger";
 import { recordFailure, recordSuccess } from "./circuit";
@@ -119,7 +119,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     if (e.leadsRemaining != null) ask = Math.min(ask, e.leadsRemaining);
     if (ask <= 0) { outcome.error = "no budget headroom"; outcome.errorReason = "budget_exhausted"; continue; }
 
-    const periods = s.budgetPeriods({ now: new Date(), credentials: e.credentials });
+    const periods = periodsFor(s, e.credentials);
     const meters = periods.length > 0 && s.acquisition === "on_demand" && opts.mode === "acquire";
     // A free preview costs nothing; only acquisition is held against the
     // ledger, and only for what we will actually try to acquire (remaining,

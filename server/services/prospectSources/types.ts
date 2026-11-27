@@ -28,6 +28,16 @@ export interface SourceCredentials {
   /** Non-secret configuration stored beside the secret (billing anniversary
    *  day, plan allowance, purchased credit balance, captured tool schema …). */
   config: Record<string, unknown>;
+  /**
+   * Whose key this is (services/prospectPool): the workspace's own, an
+   * explicit loan, the shared pool, or the deployment's environment key.
+   * Pool use is governed by the platform ceiling, not the lender's own
+   * per-workspace ledger; shared use by a workspace on a plan by the plan's
+   * daily cap (services/prospectAllowance). Absent = own (tests, fakes).
+   */
+  origin?: "own" | "loan" | "pool" | "env";
+  /** The daily cap that replaces the vendor's own for this use (a plan's shared use), or absent. */
+  dailyCapOverride?: number | null;
 }
 
 export interface CredentialValidationResult {

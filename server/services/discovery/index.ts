@@ -49,6 +49,9 @@ import {
 } from "../quickenrich";
 import { processRun, skippedCount, type PersistResult } from "./consolidate";
 import { holdAllowance, type AllowanceHold } from "../prospectAllowance";
+import { singleSourceFor } from "../prospectSourceChoice";
+import { forMembers as forMembersText } from "../prospectPool";
+import { isProspectDatabase, type ProspectSourceSlug } from "@shared/prospectSources";
 import { alreadyInWorkspace, workspaceIdentityIndex } from "../prospectSources/dedupe";
 import { enqueueJob, findActiveJob, kickJobs, registerJobKind, withHeartbeat } from "../jobs/runner";
 import { affectedRowsOf } from "../../_core/claim";
@@ -286,6 +289,38 @@ async function discoverViaQuickEnrich(
   };
 }
 
+/**
+ * A prospect database this page has no search of its own for, searched
+ * through the registry (services/prospectSources): the chosen source of a
+ * workspace on a plan. Acquires only net-new people, no more than the
+ * prospect-data allowance grants.
+ */
+async function discoverViaRegistry(workspaceId: number, slug: ProspectSourceSlug, input: PersonSearchInput): Promise<SourceOut> {
+  const lists = personLists(input);
+  const { criteriaFromTargeting, recordToQueueRow } = await import("../prospectSources/bridge");
+  const { eligibleFor } = await import("../prospectSources/registry");
+  const { runWaterfall } = await import("../prospectSources/executor");
+  const { workspaceDeduper } = await import("../prospectSources/dedupe");
+  const criteria = criteriaFromTargeting({ titles: lists.titles, industries: lists.industries, geos: lists.locations, keywords: input.keywords ?? [] });
+  const { eligible, skipped } = await eligibleFor(workspaceId, criteria, { only: [slug] });
+  if (eligible.length === 0) return { raw: [], note: skipped.find((x) => x.slug === slug)?.detail ?? "not available to this workspace" };
+  const hold = await holdAllowance(workspaceId, slug, 25);
+  if (hold.granted === 0) return { raw: [], note: hold.reason ?? "prospect data for this month is used up" };
+  let result: Awaited<ReturnType<typeof runWaterfall>>;
+  try {
+    result = await runWaterfall({
+      workspaceId, criteria, target: hold.granted, sources: eligible, deduper: await workspaceDeduper(workspaceId),
+      mode: "acquire", queryLabel: "find prospects",
+    });
+  } catch (e) {
+    await hold.settle(0);
+    throw e;
+  }
+  const outcome = result.perSource[0];
+  const raw = result.collected.map((c) => ({ ...recordToQueueRow(c.record), sourceUrl: c.record.linkedinUrl ?? null }));
+  return { raw, hold, ...(outcome?.error ? { note: outcome.error } : outcome?.note ? { note: outcome.note } : {}) };
+}
+
 export type SearchMode = "person" | "account";
 
 export interface PersonSearchInput {
@@ -451,13 +486,16 @@ async function emitLog(
   try {
     const db = await getDb();
     if (!db) return;
+    // Run logs are read by members: a prospect source is "Source N", never its
+    // vendor's name (owner 2026-11-25, services/prospectPool).
+    const { forMembers, forViewer } = await import("../prospectPool");
     await db.insert(discoveryLogs).values({
       workspaceId,
       runId,
       phase,
       level,
-      message: message.slice(0, 800),
-      details: details === undefined ? null : (details as any),
+      message: (await forMembers(message)).slice(0, 800),
+      details: details === undefined ? null : ((await forViewer(details, { platformOwner: false })) as any),
     });
   } catch (e) {
     console.error("[discovery] emitLog failed:", e);
@@ -706,7 +744,7 @@ async function settleFindHolds(
 ): Promise<void> {
   const countedKeys = new Set<string>();
   for (const [source, hold] of Array.from(holds.entries())) {
-    let delivered = 0;
+    const delivered: Array<typeof rawFinds.$inferInsert> = [];
     if (hold.metered) {
       for (const row of rows) {
         if (row.source !== source || seen.unstored.has(row)) continue;
@@ -716,11 +754,12 @@ async function settleFindHolds(
           if (countedKeys.has(key)) continue;
           countedKeys.add(key);
         }
-        delivered++;
+        delivered.push(row);
       }
     }
+    // Each person once per workspace, ever: someone counted before is free.
     await hold.settle(delivered);
-    if (hold.reason) await emitLog(workspaceId, runId, "source.allowance", "info", `Source ${source}: ${hold.reason}`, { source, granted: hold.granted, asked: hold.asked, counted: delivered });
+    if (hold.reason) await emitLog(workspaceId, runId, "source.allowance", "info", `${source}: ${hold.reason}`, { source, granted: hold.granted, asked: hold.asked, delivered: delivered.length });
   }
 }
 
@@ -766,7 +805,7 @@ async function fanOutAndSave(
   // page at a URL, and this search is text, so it returned nothing every time
   // while showing as a source. It stays on the Scraper tab, for a URL.
   type SourceTask = { id: AreSourceId; run: () => Promise<{ source: string } & SourceOut> };
-  const candidates: SourceTask[] = mode === "person"
+  const baseCandidates: SourceTask[] = mode === "person"
     ? [
       { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, personQueries(input as PersonSearchInput).queries).then((r) => ({ source: "linkedin_people", ...r })) },
       { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
@@ -787,11 +826,30 @@ async function fanOutAndSave(
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
   const enabledSources = new Set(resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS));
+  // ONE prospect database for a workspace on a plan (owner 2026-11-25,
+  // services/prospectSourceChoice): the chosen source replaces every other
+  // prospect database in the mix (searched through the registry when this
+  // page has no search of its own for it); LinkedIn, news and Google Business
+  // are untouched. A workspace with no plan keeps today's mix.
+  const single = await singleSourceFor(workspaceId);
+  let candidates = baseCandidates;
+  let selected = opts?.sources ?? null;
+  if (single && baseCandidates.some((c) => isProspectDatabase(c.id))) {
+    const chosen = baseCandidates.find((c) => c.id === single.slug)
+      ?? (mode === "person"
+        ? { id: single.slug as AreSourceId, run: () => discoverViaRegistry(workspaceId, single.slug, input as PersonSearchInput).then((r) => ({ source: single.slug as string, ...r })) }
+        : null);
+    candidates = [...baseCandidates.filter((c) => !isProspectDatabase(c.id)), ...(chosen ? [chosen] : [])];
+    if (selected && selected.some((x) => isProspectDatabase(x))) selected = [...selected.filter((x) => !isProspectDatabase(x)), single.slug];
+    enabledSources.add(single.slug as AreSourceId);
+    await emitLog(workspaceId, runId, "discovery.source", "info",
+      `Finding people through ${single.slug} only: this workspace's one prospect source.`);
+  }
   // The per-run picker (owner ask 2026-09-22) narrows the mode's candidates
   // AFTER the mask: a selection can never re-enable a source Settings
   // disabled, nor add one the mode does not offer. Absent = every enabled
   // candidate, which is what this page ran before it had a picker.
-  const pick = selectRunSources(candidates.map((c) => c.id), enabledSources, opts?.sources);
+  const pick = selectRunSources(candidates.map((c) => c.id), enabledSources, selected);
   if (pick.masked.length > 0) {
     await emitLog(workspaceId, runId, "discovery.mask", "info",
       `Skipped — disabled in workspace Settings: ${pick.masked.join(", ")}`);
@@ -819,13 +877,16 @@ async function fanOutAndSave(
         `Source failed: ${reason}`, { reason });
       continue;
     }
-    const { source, raw, note, hold } = s.value;
+    const { source, raw, hold } = s.value;
+    // A source's note reaches the run and its log: "Source N", never a vendor's name.
+    const note = s.value.note ? await forMembersText(s.value.note) : undefined;
     if (hold) holds.set(source, hold);
     perSource[source] = { found: raw.length, ...(note ? { note } : {}) };
     totalFinds += raw.length;
     // A source that could not run says why (P63), and says it as a warning.
     await emitLog(workspaceId, runId, "source.complete", note ? "warn" : "info",
-      `Source ${source} returned ${raw.length} finds${note ? ` — ${note}` : ""}`, { source, count: raw.length, ...(note ? { note } : {}) });
+      // A prospect database reads "Source N" once the sink rewrites its slug.
+      `${isProspectDatabase(source) ? source : `Source ${source}`} returned ${raw.length} finds${note ? ` — ${note}` : ""}`, { source, count: raw.length, ...(note ? { note } : {}) });
     for (const r of raw) {
       rowsToInsert.push(toRawFindRow(workspaceId, runId, source, r));
     }

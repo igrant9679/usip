@@ -34,7 +34,18 @@ export type SourceBudgets = {
    */
   prospectData?: ProspectAllowance | null;
   prospectDataNote?: string;
+  /**
+   * What this viewer calls each prospect source: "Source N" for members, the
+   * vendor's name for the platform owner only (owner 2026-11-25). Absent from
+   * older callers: then a neutral "Prospect source".
+   */
+  labels?: Partial<Record<string, string>>;
 };
+
+/** A prospect source's name in a sentence, never a vendor's unless the server said so. */
+export function sourceLabelIn(b: SourceBudgets | null | undefined, slug: string): string {
+  return b?.labels?.[slug] ?? "Prospect source";
+}
 
 const n = (v: number) => v.toLocaleString("en-US");
 
@@ -72,8 +83,8 @@ export function launcherBudgetLine(sources: readonly string[], b: SourceBudgets 
   } else if (b.prospectDataNote) {
     parts.push(b.prospectDataNote);
   }
-  if (sources.includes("apollo")) parts.push(allowanceLine("Apollo", b.apollo.configured, b.apollo.allowance));
-  if (sources.includes("quickenrich")) parts.push(allowanceLine("QuickEnrich", b.quickenrich.configured, b.quickenrich.allowance));
+  if (sources.includes("apollo")) parts.push(allowanceLine(sourceLabelIn(b, "apollo"), b.apollo.configured, b.apollo.allowance));
+  if (sources.includes("quickenrich")) parts.push(allowanceLine(sourceLabelIn(b, "quickenrich"), b.quickenrich.configured, b.quickenrich.allowance));
   if (sources.includes("linkedin")) {
     parts.push(b.linkedin.accounts === 0 ? "LinkedIn: no account connected, skipped" : `LinkedIn: ${n(b.linkedin.left)} of ${n(b.linkedin.cap)} lookups left today`);
   }
@@ -95,12 +106,12 @@ export const ENRICH_FULLY_MAX = { quickenrich: 1, reoonInstant: 3, reoonDaily: 4
 export function enrichFullyText(people: number, b?: SourceBudgets | null): string {
   const m = ENRICH_FULLY_MAX;
   const parts = [
-    `For each person it can use up to ${m.quickenrich} QuickEnrich credit (only when an email is found), ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to check addresses, and ${m.linkedin} LinkedIn lookup when no profile is on file.`,
-    people > 1 ? `For ${n(people)} people that is at most ${n(people * m.quickenrich)} QuickEnrich, ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon and ${n(people * m.linkedin)} LinkedIn.` : "",
+    `For each person it can use up to ${m.quickenrich} prospect-database email lookup (only when an email is found), ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to check addresses, and ${m.linkedin} LinkedIn lookup when no profile is on file.`,
+    people > 1 ? `For ${n(people)} people that is at most ${n(people * m.quickenrich)} prospect-database lookups, ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon and ${n(people * m.linkedin)} LinkedIn.` : "",
   ];
   if (b) {
     const left: string[] = [];
-    if (b.quickenrich.configured) left.push(allowanceLine("QuickEnrich pulls", true, b.quickenrich.allowance));
+    if (b.quickenrich.configured) left.push(allowanceLine(`${sourceLabelIn(b, "quickenrich")} pulls`, true, b.quickenrich.allowance));
     if (b.reoon.allowance) left.push(`Reoon shared key: ${n(leftOf(b.reoon.allowance)!)} of ${n(b.reoon.allowance.cap)} left today`);
     if (b.linkedin.accounts > 0) left.push(`LinkedIn: ${n(b.linkedin.left)} lookups left today`);
     if (left.length) parts.push(`${left.join(" · ")}.`);
@@ -122,12 +133,12 @@ export const ARE_ENRICH_MAX = { aiCalls: 2, quickenrich: 1, reoonInstant: 3, reo
 export function areEnrichText(people: number, b?: SourceBudgets | null): string {
   const m = ARE_ENRICH_MAX;
   const parts = [
-    `For each person this makes ${m.aiCalls} AI calls (the ICP score and the dossier), billed to this workspace's AI provider, and when no email is on file it can use up to ${m.quickenrich} QuickEnrich credit (only when an email is found) and ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to find and check an address.`,
-    people > 1 ? `For ${n(people)} people that is ${n(people * m.aiCalls)} AI calls and at most ${n(people * m.quickenrich)} QuickEnrich and ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon.` : "",
+    `For each person this makes ${m.aiCalls} AI calls (the ICP score and the dossier), billed to this workspace's AI provider, and when no email is on file it can use up to ${m.quickenrich} prospect-database email lookup (only when an email is found) and ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to find and check an address.`,
+    people > 1 ? `For ${n(people)} people that is ${n(people * m.aiCalls)} AI calls and at most ${n(people * m.quickenrich)} prospect-database lookups and ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon.` : "",
   ];
   if (b) {
     const left: string[] = [];
-    if (b.quickenrich.configured) left.push(allowanceLine("QuickEnrich pulls", true, b.quickenrich.allowance));
+    if (b.quickenrich.configured) left.push(allowanceLine(`${sourceLabelIn(b, "quickenrich")} pulls`, true, b.quickenrich.allowance));
     if (b.reoon.allowance) left.push(`Reoon shared key: ${n(leftOf(b.reoon.allowance)!)} of ${n(b.reoon.allowance.cap)} left today`);
     left.push(b.ai.cap ? `AI tokens this month: ${n(b.ai.used)} of ${n(b.ai.cap)}` : `AI tokens this month: ${n(b.ai.used)} (no monthly budget set)`);
     parts.push(`${left.join(" · ")}.`);

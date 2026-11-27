@@ -82,6 +82,7 @@ export function ProspectSourceRegistryCard() {
                     </td>
                     <td className="py-2 pr-3">
                       {!s.credential.configured ? <span className="text-muted-foreground">not connected</span>
+                        : s.credential.source === "pool" ? <span className="text-emerald-700 dark:text-emerald-400">shared, included</span>
                         : s.credential.status === "valid" ? <span className="text-emerald-700 dark:text-emerald-400">valid{s.credential.lastValidatedAt ? <span className="text-muted-foreground"> · {new Date(s.credential.lastValidatedAt).toLocaleDateString()}</span> : null}</span>
                         : s.credential.status === "invalid" ? <span className="text-rose-700 dark:text-rose-400" title={s.credential.validationError ?? ""}>invalid</span>
                         : <span className="text-amber-700 dark:text-amber-400">untested</span>}

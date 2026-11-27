@@ -48,25 +48,29 @@ export const ARE_SOURCES = [
     label: "News & trigger events",
     description: "Track funding rounds, launches, and leadership changes that signal buying intent.",
   },
+  // The prospect databases. Members never read these labels: every screen names
+  // them through prospectSources.names ("Source N" and its description; the
+  // vendor's name for the platform owner only; owner 2026-11-25). The labels
+  // here are neutral so a screen that forgets that still names no vendor.
   {
     id: "apollo",
-    label: "Apollo.io",
-    description: "Search your Apollo account for matching people. Costs no Apollo credits.",
+    label: "Prospect source",
+    description: "People and company details from a B2B database. Searching is free; it returns no emails, which are found during enrichment.",
   },
   {
     id: "quickenrich",
-    label: "QuickEnrich",
-    description: "Discover people matching your titles and industries from the QuickEnrich database. Discovery is free; emails are found during enrichment, one credit per hit.",
+    label: "Prospect source",
+    description: "People matching your titles and industries from a B2B contact database. Discovery is free; emails are found during enrichment, one credit per hit.",
   },
   {
     id: "warmysender",
-    label: "WarmySender leads",
-    description: "Search WarmySender's B2B lead database (US/Canada deepest). Searching is free and masked; one lead unit is spent per net-new person acquired.",
+    label: "Prospect source",
+    description: "A B2B lead database (US/Canada deepest). Searching is free and masked; one lead unit is spent per net-new person acquired.",
   },
   {
     id: "leadocean",
-    label: "LeadOcean",
-    description: "Search your LeadOcean account for people with an address you accept. Every search row and every lookup counts as a record, so a person costs two. Only runs on a campaign that ticks it, with this workspace's own key.",
+    label: "Prospect source",
+    description: "People with an address you accept, from a B2B contact database. Every search row and every lookup counts as a record, so a person costs two. Runs only where a campaign or search ticks it.",
   },
 ] as const;
 

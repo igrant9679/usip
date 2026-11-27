@@ -2172,6 +2172,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // platform owner (spend.setMembershipPlan); read only through
   // services/prospectAllowance.
   membershipPlan: varchar("membershipPlan", { length: 20 }),
+  // ── The one prospect-database source (migration 0445; owner 2026-11-25) ──
+  // A workspace on a membership plan finds people through ONE prospect
+  // database at a time, chosen by its admins on Settings → Data sources and
+  // shown as "Source N". A registry slug; NULL = the default (the pool source
+  // with the most room, services/prospectSourceChoice). Ignored for a
+  // workspace with no plan, which keeps its waterfall.
+  prospectSource: varchar("prospectSource", { length: 32 }),
   // Per-workspace ARE source checking ORDER (Migration 0172): AreSourceId[].
   // Read ONLY through @shared/areSources.resolveSourceOrder together with
   // areScraperSources (the EXISTING enable mask — one vocabulary, runtime-
@@ -2628,6 +2635,94 @@ export const prospectAllowanceUsage = mysqlTable(
   }),
 );
 export type ProspectAllowanceUsageRow = typeof prospectAllowanceUsage.$inferSelect;
+
+/**
+ * The people a workspace on a plan has been charged for, ever (migration
+ * 0445; owner 2026-11-25: "a person counts once per workspace, ever"). One
+ * row per identity key of a counted person (li:<LinkedIn slug>, e:<email>,
+ * or n:<name>@<company> when a person has neither): a person is counted
+ * when none of their keys is here, and never again once one is.
+ * services/prospectAllowance writes it; `period` is the month it was counted.
+ */
+export const prospectAllowancePeople = mysqlTable(
+  "prospect_allowance_people",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    personKey: varchar("personKey", { length: 191 }).notNull(),
+    period: char("period", { length: 7 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_prospect_allowance_person").on(t.workspaceId, t.personKey),
+  }),
+);
+
+/**
+ * A plan workspace's prospect data per source per UTC day (migration 0445):
+ * the daily cap for shared use is ceil(plan monthly / 10), one counter per
+ * (workspace, source, day). Written only by services/prospectAllowance.
+ */
+export const prospectAllowanceDaily = mysqlTable(
+  "prospect_allowance_daily",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    source: varchar("source", { length: 32 }).notNull(),
+    day: char("day", { length: 10 }).notNull(),
+    used: int("used").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_prospect_allowance_daily").on(t.workspaceId, t.source, t.day),
+  }),
+);
+
+/**
+ * Platform-wide settings, set only by the platform owner (users.role
+ * 'admin'; migration 0445). One row per key, its value JSON. First key:
+ * `prospectPool`, the workspace whose prospect-source keys every other
+ * workspace may use (services/prospectPool).
+ */
+export const platformSettings = mysqlTable("platform_settings", {
+  settingKey: varchar("settingKey", { length: 64 }).primaryKey(),
+  value: json("value"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/**
+ * The shared prospect pool, per source (migration 0445): whether the pool
+ * workspace's key for it is shared with every workspace, the vendor
+ * account's real monthly allowance (the platform ceiling), the public number
+ * ("Source N") and description members see instead of the vendor's name.
+ */
+export const prospectPoolSources = mysqlTable("prospect_pool_sources", {
+  slug: varchar("slug", { length: 32 }).primaryKey(),
+  shared: boolean("shared").default(false).notNull(),
+  monthlyCeiling: int("monthlyCeiling"),
+  sourceNumber: int("sourceNumber"),
+  description: varchar("description", { length: 255 }),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+/**
+ * Pool data used per source per UTC month, across every workspace
+ * (migration 0445): the counter the platform ceiling is held against,
+ * consumed together with the workspace's own allowance.
+ */
+export const prospectPoolUsage = mysqlTable(
+  "prospect_pool_usage",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    slug: varchar("slug", { length: 32 }).notNull(),
+    period: char("period", { length: 7 }).notNull(),
+    used: int("used").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_prospect_pool_usage").on(t.slug, t.period),
+  }),
+);
 
 /**
  * A workspace that exists because of a membership (migration 0447; owner,

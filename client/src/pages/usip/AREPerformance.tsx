@@ -34,6 +34,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { RANGE_PRESETS, performanceCsv, presetRange, type RangePreset } from "./arePerformanceModel";
+import { useSourceNames } from "@/lib/sourceNames";
+import { isProspectDatabase } from "@shared/prospectSources";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -50,7 +52,6 @@ const SOURCE_LABEL: Record<string, string> = {
      still exist and still need a name. Saying so here is cheaper than a reader
      wondering why the number never grows (2026-11-01). */
   industry_event: "Industry event (source disabled)",
-  apollo: "Apollo.io",
   zoominfo: "ZoomInfo",
   clay: "Clay",
   ai_research: "AI research",
@@ -94,6 +95,9 @@ const CONF_TONE: Record<string, string> = {
 };
 
 export default function AREPerformance() {
+  // A prospect database is "Source N" to members (owner 2026-11-25).
+  const sourceNames = useSourceNames();
+  const srcLabel = (x: string) => (isProspectDatabase(x) ? sourceNames.label(x) : label(SOURCE_LABEL, x));
   const accent = useAccentColor();
   const utils = trpc.useUtils();
   const recs = trpc.optimization.list.useQuery({ status: "pending", limit: 50 } as any, { retry: false });
@@ -217,7 +221,7 @@ export default function AREPerformance() {
     const csv = performanceCsv({
       scopeLabel,
       areSteps: areStepRows, sources: sourceRows, replies: replyRows, sequenceSteps: stepRows,
-      sourceLabel: (x) => label(SOURCE_LABEL, x), replyLabel: (x) => label(REPLY_LABEL, x),
+      sourceLabel: srcLabel, replyLabel: (x) => label(REPLY_LABEL, x),
     });
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -618,7 +622,7 @@ export default function AREPerformance() {
                       <tbody>
                         {sourceRows.map((r) => (
                           <tr key={r.sourceType} className="hover:bg-muted/50">
-                            <td className={`${td} font-medium`}>{label(SOURCE_LABEL, r.sourceType)}</td>
+                            <td className={`${td} font-medium`}>{srcLabel(r.sourceType)}</td>
                             <td className={td}>{r.discovered}</td>
                             <td className={td}>{r.avgIcpScore || <span className="text-muted-foreground">—</span>}</td>
                             <td className={td}>{r.contacted}</td>

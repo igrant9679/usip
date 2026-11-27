@@ -73,6 +73,9 @@ import { resolveBookingUrl } from "./mergeVars";
 import { campaignSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { isAllowanceVendor } from "@shared/prospectAllowance";
 import { holdAllowance } from "./services/prospectAllowance";
+import { applySingleSource, singleSourceFor } from "./services/prospectSourceChoice";
+import { forMembers, forViewer } from "./services/prospectPool";
+import { isProspectDatabase, type ProspectSourceSlug } from "@shared/prospectSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { campaignChannelOn, normalizeSequence } from "@shared/areSequenceSteps";
@@ -361,7 +364,11 @@ async function emitLog(
   try {
     const db = await getDb();
     if (!db) return;
-    const text = message.slice(0, 500);
+    // Campaign logs are read by members: a prospect source is "Source N",
+    // never its vendor's name, whoever wrote the sentence (an adapter's own
+    // error included; owner 2026-11-25, services/prospectPool).
+    const text = (await forMembers(message)).slice(0, 500);
+    details = details === undefined ? undefined : await forViewer(details, { platformOwner: false });
     const key = `${campaignId ?? 0}|${phase}`;
     const signature = `${level}|${text}`;
     const now = Date.now();
@@ -2982,7 +2989,20 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, campaign.workspaceId))
     .limit(1);
-  const runOrder = resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[]);
+  const maskedOrder = resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[]);
+  // ONE prospect database for a workspace on a membership plan (owner
+  // 2026-11-25, services/prospectSourceChoice): a campaign that sources from
+  // any prospect database sources from the workspace's chosen one, and from no
+  // other; its own channels (LinkedIn, the internal CRM, news) and Google
+  // Business are untouched. A workspace with no plan keeps its waterfall.
+  const single = await singleSourceFor(campaign.workspaceId);
+  let runOrder: AreSourceId[] = maskedOrder;
+  if (single && (sources as string[]).some((id) => isProspectDatabase(id))) {
+    const unmasked = resolveSourceOrder(wsSourceRow?.order, {}, sources as AreSourceId[]);
+    runOrder = applySingleSource(unmasked.filter((id) => isProspectDatabase(id) || maskedOrder.includes(id)), single) as AreSourceId[];
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `Finding people through ${single.slug} only: this workspace's one prospect source${single.chosen ? "" : " (the default; choose another in Settings → Data sources)"}.`);
+  }
 
   if (runOrder.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
@@ -3044,7 +3064,12 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     let value: SourceResult;
     try {
       // Tokens a source spends are recorded under its own feature (F12).
-      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](ask));
+      // A prospect database added to the registry after this engine was
+      // written runs through the registry, with no factory of its own.
+      const factory = taskFactories[id] ?? ((n: number) =>
+        discoverViaRegistrySource(campaign, id as unknown as ProspectSourceSlug, vendorTargeting, n, null, neverTarget)
+          .then(({ raw, refused, restUntil }) => ({ sourceType: id as unknown as SourceType, query, raw, refused, restUntil })));
+      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => factory(ask));
     } catch (err) {
       await hold?.settle(0);
       const empty = (sourceState[id]?.empty ?? 0) + 1;
@@ -3146,7 +3171,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       // Already filtered against this run's read of the whole queue, and
       // claimed in it (A34): the save does not read the queue again.
       const queued = await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, toQueue, { identityChecked: true });
-      // Counted: the people actually queued (suppressed and identity-less rows are kept out there).
+      // Counted: the people actually queued (suppressed and identity-less rows
+      // are kept out there), each person once per workspace, ever.
       await hold?.settle(queued);
       totalNew += toQueue.length;
       // Keyed by the source's id, as every other perSource entry is: the
@@ -3466,7 +3492,7 @@ export function scoreIcpMatch(
  */
 async function discoverViaRegistrySource(
   campaign: Campaign,
-  slug: "warmysender" | "leadocean",
+  slug: ProspectSourceSlug,
   targeting: { titles: string[]; industries: string[]; geos: string[]; keywords: string[]; size?: { employeeMin?: number; employeeMax?: number } },
   remaining: number,
   /** Where the last tick's search left off (WarmySender walks titles, then pages). */

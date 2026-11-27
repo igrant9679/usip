@@ -32,6 +32,7 @@ import { spendDay, spendSince, sharedUsedToday } from "../services/spend";
 import { dayRange, summarizeSpend } from "@shared/spendReport";
 import { recordAudit } from "../audit";
 import { MEMBERSHIP_PLANS } from "@shared/prospectAllowance";
+import { PROSPECT_SOURCE_SLUGS, isProspectDatabase } from "@shared/prospectSources";
 
 const periodInput = z.object({ days: z.number().int().min(1).max(92).default(7) }).optional();
 
@@ -65,7 +66,8 @@ export const spendRouter = router({
    */
   budgets: workspaceProcedure.query(async ({ ctx }) => {
     const { sourceBudgets } = await import("../services/sourceBudgets");
-    return sourceBudgets(ctx.workspace.id, ctx.user.id, isAdminRole(ctx.member.role));
+    const { isPlatformOwner } = await import("../services/prospectPool");
+    return sourceBudgets(ctx.workspace.id, ctx.user.id, isAdminRole(ctx.member.role), { platformOwner: isPlatformOwner(ctx.user) });
   }),
 
   /**
@@ -191,6 +193,65 @@ export const spendRouter = router({
         after: { [`shared_${input.vendor}_key`]: input.allowed, dailyCap: input.dailyCap },
       });
       return { ok: true };
+    }),
+
+  /**
+   * The shared prospect pool (owner 2026-11-25, services/prospectPool), for
+   * the platform owner only: the pool workspace, and per source its true
+   * name, shared switch, monthly platform ceiling, use this month, number
+   * and description; plus the workspaces the pool can be.
+   */
+  pool: adminProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const { poolOverview } = await import("../services/prospectPool");
+    const list = await db.select({ id: workspaces.id, name: workspaces.name, archivedAt: workspaces.archivedAt }).from(workspaces);
+    return { ...(await poolOverview()), workspaces: list.filter((w) => !w.archivedAt).map((w) => ({ id: w.id, name: w.name })) };
+  }),
+
+  /** Name (or clear) the pool workspace. Platform owner only. */
+  setPoolWorkspace: adminProcedure
+    .input(z.object({ workspaceId: z.number().int().positive().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.workspaceId != null) {
+        const [ws] = await db.select({ id: workspaces.id, archivedAt: workspaces.archivedAt }).from(workspaces).where(eq(workspaces.id, input.workspaceId)).limit(1);
+        if (!ws || ws.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "No such workspace." });
+      }
+      const { setPoolWorkspace } = await import("../services/prospectPool");
+      await setPoolWorkspace(input.workspaceId);
+      await recordAudit({
+        workspaceId: input.workspaceId ?? 0, actorUserId: ctx.user.id, action: "update",
+        entityType: "platform_settings", entityId: null, after: { prospectPoolWorkspaceId: input.workspaceId },
+      });
+      return { ok: true as const };
+    }),
+
+  /**
+   * One pool source: shared with every workspace or not, its monthly platform
+   * ceiling (the vendor account's real monthly allowance), its public number
+   * and description. Platform owner only.
+   */
+  setPoolSource: adminProcedure
+    .input(z.object({
+      slug: z.enum(PROSPECT_SOURCE_SLUGS),
+      shared: z.boolean().optional(),
+      monthlyCeiling: z.number().int().min(0).max(100_000_000).nullable().optional(),
+      number: z.number().int().min(1).max(99).nullable().optional(),
+      description: z.string().trim().max(255).nullable().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (!isProspectDatabase(input.slug)) throw new TRPCError({ code: "BAD_REQUEST", message: "That source cannot be pooled." });
+      const { setPoolSource, poolConfig } = await import("../services/prospectPool");
+      const { slug, ...patch } = input;
+      await setPoolSource(slug, patch);
+      const cfg = await poolConfig();
+      await recordAudit({
+        workspaceId: cfg.poolWorkspaceId ?? 0, actorUserId: ctx.user.id, action: "update",
+        entityType: "prospect_pool_sources", entityId: null, after: { slug, ...patch },
+      });
+      return { ok: true as const };
     }),
 
   /**

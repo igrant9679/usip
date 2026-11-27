@@ -151,12 +151,14 @@ describe("assistant product knowledge digest", () => {
     expect(hub).toContain("integrations (AI provider keys, model tiers and webhooks; NOT the data vendors)");
     // Model tiers (2026-11-16) are a card of the AI providers screen, which the Integrations section renders.
     expect(legacy.slice(legacy.indexOf("function AIProvidersSection("), legacy.indexOf("function ProposalsTab("))).toContain("<ModelTiersCard isAdmin={isAdmin} />");
-    expect(hub).toContain("for Apollo, QuickEnrich, WarmySender, LeadOcean and Reoon)");
+    // 2026-11-25: members read every prospect source as "Source N" (owner
+    // decision), so the digest names no vendor; the own-key cards still do.
+    expect(hub).toContain("then a card per vendor for a key of your own, and Reoon)");
     const dataSources = hubSource.slice(hubSource.indexOf('{section === "data-sources" && ('), hubSource.indexOf('{section === "workspace" &&'));
     for (const vendor of ["Apollo", "QuickEnrich", "WarmySender", "LeadOcean", "Reoon"]) expect(dataSources.toLowerCase(), vendor).toContain(vendor.toLowerCase());
     // The same day she called Apollo's entry "a row in a table". Each vendor
     // is a card of its own with its key field, and the order is its own card.
-    expect(hub).toContain("data-sources (Data sources: a read-only table of the vendors in checking order, then a card per vendor with its key field, for Apollo");
+    expect(hub).toContain("data-sources (Data sources: the plan's prospect data and its Prospect source choice, a read-only table of the sources in checking order");
     // The table at the top of that section is the registry, and it only reports.
     const registry = read("../client/src/components/usip/settings/ProspectSourceRegistryCard.tsx");
     expect(dataSources.indexOf("<ProspectSourceRegistryCard />")).toBeLessThan(dataSources.indexOf("<WarmySenderSourceCard />"));
@@ -186,12 +188,13 @@ describe("assistant product knowledge digest", () => {
   // card": the page has one Save Settings button, in a bar under its last
   // section.
   it("sends the order and every source's on/off to the Revenue Engine's settings, and says which key cards have a switch", () => {
-    const start = PRODUCT_KNOWLEDGE.indexOf("Prospect sources (");
+    const start = PRODUCT_KNOWLEDGE.indexOf("Prospect sources: ");
     expect(start).toBeGreaterThan(-1);
     const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
     expect(para).toContain("Keys: Settings → Data sources.");
     expect(para).toContain("The order, and on/off for every source: Revenue Engine → ARE Settings tab (/are/settings), the Prospect Sources & Checking Order card: arrows and a toggle per source; nothing saves until Save Settings, the page's one save button, in the bar under its last section.");
-    expect(para).toContain("Only the WarmySender and LeadOcean key cards also have a Use switch (saves at once); Apollo's and QuickEnrich's have no on/off.");
+    expect(para).toContain("Two of the own-key cards also have a Use switch (saves at once); the other two have no on/off.");
+    expect(para).toContain("never name their vendors");
     expect(para).not.toContain("NOT there");
     expect(para).not.toContain("then Save.");
     expect(PRODUCT_KNOWLEDGE).not.toContain("on/off under Settings");

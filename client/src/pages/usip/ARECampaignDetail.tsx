@@ -1680,7 +1680,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
     title: "Run discovery for this campaign?",
     description:
       `It makes up to ${searches} LinkedIn search${searches === 1 ? "" : "es"} (one per title and place pair${total > searches ? `; ${total - searches} more pairs wait for the next run` : ""}), `
-      + "one Apollo and one QuickEnrich search with every value, and one news read, each only while today's allowance lasts. "
+      + "one search with every value in each prospect source this workspace uses, and one news read, each only while today's allowance lasts. "
       + (launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], budgets.data) ? `Today: ${launcherBudgetLine(["linkedin", "news", "apollo", "quickenrich"], budgets.data)}. ` : "")
       + "New people are saved to People and added to this campaign; nothing is sent.",
     confirmLabel: "Run discovery",
@@ -1706,7 +1706,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold">Multi-source discovery (recommended)</div>
             <div className="text-[11px] text-muted-foreground mt-0.5">
-              One-click search across LinkedIn, Apollo, QuickEnrich and news for this campaign's targeting — whichever
+              One-click search across LinkedIn, this workspace's prospect sources and news for this campaign's targeting — whichever
               of those four your workspace has enabled in Settings. New people are consolidated, scored and saved to{" "}
               <Link href="/v2/people"><span className="underline">People</span></Link> and added to this campaign; the
               per-step trace appears in this campaign's Logs tab.
@@ -1720,7 +1720,7 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
                 </div>
                 <div className="text-[10px] text-muted-foreground">
                   Every value above is searched: up to {searches} LinkedIn search{searches === 1 ? "" : "es"}
-                  {total > searches ? ` (${total - searches} more pairs wait for the next run)` : ""}, and one search each on Apollo and QuickEnrich.
+                  {total > searches ? ` (${total - searches} more pairs wait for the next run)` : ""}, and one search in each prospect source this workspace uses.
                 </div>
               </div>
             ) : (

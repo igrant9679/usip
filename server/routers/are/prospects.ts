@@ -1150,12 +1150,14 @@ async function emitSeqLog(
   details?: unknown,
 ): Promise<void> {
   try {
+    // Campaign logs are read by members: "Source N", never a vendor's name.
+    const { forMembers } = await import("../../services/prospectPool");
     await db.insert(areEngineLogs).values({
       workspaceId,
       campaignId,
       phase,
       level,
-      message: message.slice(0, 500),
+      message: (await forMembers(message)).slice(0, 500),
       details: details === undefined ? null : (details as any),
     });
   } catch (e) {

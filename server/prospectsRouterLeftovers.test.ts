@@ -157,7 +157,7 @@ describe("3 · a paid email lookup that found nothing is not paid for again", ()
     rows("prospect_queue").push(queueRow(51, 6, { linkedinUrl: "linkedin.com/in/ann-lee-123" }));
     await runEnrichAgent(51, WS);
     expect(h.qe).toHaveLength(1);
-    expect(rows("are_engine_logs").some((l) => /Did not pay to look up Ann Lee's email again: QuickEnrich/.test(String(l.message)))).toBe(true);
+    expect(rows("are_engine_logs").some((l) => /Did not pay to look up Ann Lee's email again: Source \d+/.test(String(l.message)))).toBe(true);
   });
 
   it("the finder's definitive miss is remembered; a failure that says nothing about the person is not", async () => {

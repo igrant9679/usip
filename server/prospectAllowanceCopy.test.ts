@@ -16,7 +16,8 @@ import { ARTICLES, TOURS } from "./seedHelpContent";
 import { PRODUCT_KNOWLEDGE } from "./productKnowledge";
 
 describe("the help content says the same numbers, and names no vendor", () => {
-  const VENDORS = /apollo|quickenrich|warmysender|leadocean|reoon/i;
+  // The prospect sources members read as "Source N" (Reoon is the member's own verifier, not one of them).
+  const VENDORS = /apollo|quick\s?enrich|warmy\s?sender|lead\s?ocean/i;
 
   it("the article lists every plan's number and the app's own sentences", () => {
     const a = ARTICLES.find((x) => x.slug === "prospect-data-allowance");

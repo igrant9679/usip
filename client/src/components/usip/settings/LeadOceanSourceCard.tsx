@@ -61,7 +61,10 @@ export function LeadOceanSourceCard({ variant = "standalone" }: { variant?: "sta
   const describe = trpc.prospectSources.describe.useQuery(undefined);
   const source = describe.data?.find((s) => s.slug === "leadocean");
   const cred = source?.credential;
-  const configured = !!cred?.configured;
+  // A key from the shared pool is never shown on a vendor's own card: members
+  // read pool sources as "Source N" (owner 2026-11-25). This card is for the
+  // workspace's own key, or one it borrows.
+  const configured = !!cred?.configured && cred?.source !== "pool";
   const config = (cred?.config ?? {}) as Reported;
   const ledger = trpc.prospectSources.ledger.useQuery({ slug: "leadocean" }, { enabled: configured });
 
