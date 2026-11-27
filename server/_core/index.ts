@@ -76,6 +76,7 @@ import { backfillMicrosoftBridges } from "../services/microsoftBridge";
 import { registerGraphOAuthRoutes } from "../graphOAuth";
 import { registerUnsubscribeRoute } from "../unsubscribe";
 import { registerPasswordAuthRoutes } from "../passwordAuth";
+import { registerMembershipRoutes } from "../membershipApi";
 import { registerPublicRateLimits } from "../publicRateLimit";
 import { registerHealthRoute } from "../health";
 import { guardOverlap } from "./cronGuard";
@@ -163,6 +164,8 @@ async function startServer() {
   attachPlivoStream(server);
   registerUnsubscribeRoute(app);
   registerPasswordAuthRoutes(app);
+  // Sign-up from the membership site: signed, server to server (owner 2026-11-26).
+  registerMembershipRoutes(app);
   registerGraphOAuthRoutes(app);
   registerLLMStreamRoutes(app);
   registerProposalsStreamRoutes(app);
