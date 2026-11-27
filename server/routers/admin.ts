@@ -2611,6 +2611,16 @@ export const dangerZoneRouter = router({
     if (ctx.member.role !== "super_admin") {
       throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can restore a workspace" });
     }
+    // A workspace archived because its membership ended is restored by the
+    // membership becoming active again (services/membership.updateMembership),
+    // not from here. The platform owner still can: it is their deployment.
+    if (ctx.user.role !== "admin") {
+      const { membershipEnded } = await import("../services/membership");
+      if (await membershipEnded(ctx.workspace.id)) {
+        const { MEMBERSHIP_ENDED_RESTORE_MESSAGE } = await import("@shared/membership");
+        throw new TRPCError({ code: "FORBIDDEN", message: MEMBERSHIP_ENDED_RESTORE_MESSAGE });
+      }
+    }
     const { workspaces } = await import("../../drizzle/schema");
     await db.update(workspaces).set({ archivedAt: null }).where(eq(workspaces.id, ctx.workspace.id));
     invalidateArchivedWorkspaceCache();

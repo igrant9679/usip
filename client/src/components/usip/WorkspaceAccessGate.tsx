@@ -13,11 +13,13 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { canOpenWorkspace } from "@/lib/activeWorkspace";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Archive, Loader2, MailQuestion, UserX } from "lucide-react";
+import { Archive, Building2, Loader2, MailQuestion, UserX } from "lucide-react";
+import { CreateOwnWorkspace } from "@/components/usip/CreateOwnWorkspace";
 import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
 import { PendingInvitations } from "@/components/usip/PendingInvitations";
 
-export type AccessProblem = "deactivated" | "invite_pending" | "none" | "archived";
+/** "create" is "none" for someone the app will make a workspace for (owner, 2026-11-26: sign up from within the app). */
+export type AccessProblem = "deactivated" | "invite_pending" | "none" | "archived" | "create";
 
 const COPY: Record<AccessProblem, { title: string; body: string }> = {
   deactivated: {
@@ -31,6 +33,10 @@ const COPY: Record<AccessProblem, { title: string; body: string }> = {
   none: {
     title: "You're not in a workspace yet",
     body: "Your account is ready. Workspaces are set up by your administrator: ask them to invite you, or open the activation link they sent you.",
+  },
+  create: {
+    title: "Create your workspace",
+    body: "Your account is ready. Name your workspace to get started; you can rename it later in Settings.",
   },
   archived: {
     title: "This workspace is archived",
@@ -47,6 +53,8 @@ export function WorkspaceAccessScreen({
   onSignOut,
   notice,
   invitations,
+  body,
+  create,
 }: {
   problem: AccessProblem;
   workspaceName?: string | null;
@@ -57,21 +65,26 @@ export function WorkspaceAccessScreen({
   notice?: ReactNode;
   /** Invitations waiting for this person, with Accept (U10). */
   invitations?: ReactNode;
+  /** Said in place of the standing sentence: why the app will not make a workspace yet. */
+  body?: string | null;
+  /** The create-your-workspace form, or the link to where plans are bought. */
+  create?: ReactNode;
 }) {
   const copy = COPY[problem];
-  const Icon = problem === "archived" ? Archive : problem === "invite_pending" ? MailQuestion : UserX;
+  const Icon = problem === "archived" ? Archive : problem === "invite_pending" ? MailQuestion : problem === "create" ? Building2 : UserX;
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-6">
       <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-sm space-y-4" role="alert">
         <div className="flex items-start gap-3">
-          <Icon className="size-5 shrink-0 text-amber-500 mt-0.5" aria-hidden="true" />
+          <Icon className={problem === "create" ? "size-5 shrink-0 text-primary mt-0.5" : "size-5 shrink-0 text-amber-500 mt-0.5"} aria-hidden="true" />
           <div className="space-y-1">
             <h1 className="text-base font-semibold">{copy.title}</h1>
             {problem === "archived" && workspaceName && <p className="text-sm font-medium">{workspaceName}</p>}
-            <p className="text-sm text-muted-foreground">{copy.body}</p>
+            <p className="text-sm text-muted-foreground">{body || copy.body}</p>
           </div>
         </div>
         {notice}
+        {create}
         {invitations}
         {others.length > 0 && onSwitch && (
           <div className="space-y-1.5">
@@ -96,6 +109,8 @@ export function WorkspaceAccessGate({ children }: { children: ReactNode }) {
   const { logout } = useAuth();
   const empty = !isLoading && workspaces.length === 0;
   const access = trpc.workspace.access.useQuery(undefined, { enabled: empty });
+  // Whether the app will make this person a workspace of their own, and where plans are bought.
+  const signUp = trpc.workspace.signUp.useQuery(undefined, { enabled: empty && access.data?.state === "none" });
 
   if (empty) {
     const state = access.data?.state;
@@ -105,7 +120,19 @@ export function WorkspaceAccessGate({ children }: { children: ReactNode }) {
     // A stranger who just signed up lands here, so the confirm-your-email
     // banner (F1) belongs here as well as in the shell.
     // Invitations waiting for this account can be accepted right here (U10).
-    return <WorkspaceAccessScreen problem={state} onSignOut={() => void logout()} notice={<EmailVerificationBanner compact />} invitations={<PendingInvitations className="rounded-md border border-border" />} />;
+    // With nothing at all, the app may make them a workspace (sign-up from
+    // within the app): the form when it will, the reason when it will not yet.
+    const offer = state === "none" ? signUp.data : undefined;
+    return (
+      <WorkspaceAccessScreen
+        problem={offer?.open ? "create" : state}
+        body={offer && !offer.open && offer.block === "email_unconfirmed" ? offer.message : null}
+        onSignOut={() => void logout()}
+        notice={<EmailVerificationBanner compact />}
+        create={offer ? <CreateOwnWorkspace open={offer.open} offer={offer.offer} plansUrl={offer.membershipSiteUrl} /> : null}
+        invitations={<PendingInvitations className="rounded-md border border-border" />}
+      />
+    );
   }
   if (current && !canOpenWorkspace(current)) {
     return (

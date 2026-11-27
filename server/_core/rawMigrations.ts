@@ -5566,6 +5566,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum('internal_contact','internal_lead','google_business','linkedin_company','linkedin_people','web_scrape','news_event','industry_event','apollo','zoominfo','clay','ai_research','quickenrich','warmysender','leadocean','aleads','clugtm') NOT NULL",
     ],
   },
+
+  // Sign-up from the website and from the app (owner, 2026-11-26). One row per
+  // membership: which workspace it made, and whether it is still paid up. The
+  // unique key is what makes a sign-up sent twice find its workspace. Additive.
+  // 0445 and 0446 are taken by two branches still open (the prospect pool and
+  // the CluGTM and A-Leads sources), so this is 0447.
+  {
+    name: "0447_membership_links.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `membership_links` (`id` int AUTO_INCREMENT PRIMARY KEY, `source` varchar(40) NOT NULL, `externalId` varchar(120) NOT NULL, `workspaceId` int NOT NULL, `userId` int NOT NULL, `email` varchar(320) NOT NULL, `status` varchar(16) NOT NULL DEFAULT 'active', `endedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_membership_link_external` (`source`, `externalId`), KEY `ix_membership_link_ws` (`workspaceId`))",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
