@@ -5578,6 +5578,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "CREATE TABLE IF NOT EXISTS `membership_links` (`id` int AUTO_INCREMENT PRIMARY KEY, `source` varchar(40) NOT NULL, `externalId` varchar(120) NOT NULL, `workspaceId` int NOT NULL, `userId` int NOT NULL, `email` varchar(320) NOT NULL, `status` varchar(16) NOT NULL DEFAULT 'active', `endedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_membership_link_external` (`source`, `externalId`), KEY `ix_membership_link_ws` (`workspaceId`))",
     ],
   },
+
+  // ── 0448: OpenRouter, a fifth AI provider (owner decisions 2026-11-27) ───
+  // One key for many vendors' models. A workspace can enter its own key and
+  // pick a model from OpenRouter's list; without one it uses the platform's
+  // shared key (OPENROUTER_API_KEY). Both NULL = no key of its own, and a
+  // NULL model = the newest Claude Sonnet in OpenRouter's live list. The
+  // platform default provider needs no column: it is a platform_settings row
+  // (0445's table), absent until the platform owner sets it.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0448_openrouter_provider.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `openrouterApiKeyEnc` text NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `openrouterModel` varchar(128) NULL",
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------

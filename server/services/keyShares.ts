@@ -28,11 +28,12 @@ import { prospectSourceCredentials, workspaceKeyShares, workspaceSettings, works
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { deepseekSettings } from "./deepseekSettings";
+import { openrouterSettings } from "./openrouterSettings";
 import { poolLenderFor } from "./prospectPool";
 import { isProspectDatabase } from "@shared/prospectSources";
 
 /** Keys kept as a column on the lender's workspace_settings row. */
-export const SETTINGS_SHARE_KINDS = ["anthropic", "openai", "gemini", "deepseek", "xai", "apollo", "reoon", "quickenrich"] as const;
+export const SETTINGS_SHARE_KINDS = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "xai", "apollo", "reoon", "quickenrich"] as const;
 /** Keys kept as the lender's prospect_source_credentials row (the source's slug). */
 export const SOURCE_SHARE_KINDS = ["warmysender", "leadocean"] as const;
 export const SHARE_KINDS = [...SETTINGS_SHARE_KINDS, ...SOURCE_SHARE_KINDS] as const;
@@ -46,6 +47,7 @@ export const SHARE_KIND_LABEL: Record<ShareKind, string> = {
   openai: "OpenAI",
   gemini: "Google Gemini",
   deepseek: "DeepSeek",
+  openrouter: "OpenRouter",
   xai: "xAI (voice agents)",
   apollo: "Apollo",
   reoon: "Reoon email verifier",
@@ -56,10 +58,11 @@ export const SHARE_KIND_LABEL: Record<ShareKind, string> = {
 
 /**
  * The column each kind is kept in, for the kinds read together in one select.
- * DeepSeek's column came later (migration 0443) and is read by itself, through
- * services/deepseekSettings, which says why.
+ * DeepSeek's and OpenRouter's columns came later (migrations 0443, 0448) and
+ * are each read by themselves, through services/deepseekSettings and
+ * services/openrouterSettings, which say why.
  */
-const SETTINGS_COLUMN: Record<Exclude<SettingsShareKind, "deepseek">, "anthropicApiKeyEnc" | "openaiApiKeyEnc" | "geminiApiKeyEnc" | "xaiApiKeyEnc" | "apolloApiKeyEnc" | "reoonApiKeyEnc" | "quickenrichApiKeyEnc"> = {
+const SETTINGS_COLUMN: Record<Exclude<SettingsShareKind, SeparateKind>, "anthropicApiKeyEnc" | "openaiApiKeyEnc" | "geminiApiKeyEnc" | "xaiApiKeyEnc" | "apolloApiKeyEnc" | "reoonApiKeyEnc" | "quickenrichApiKeyEnc"> = {
   anthropic: "anthropicApiKeyEnc",
   openai: "openaiApiKeyEnc",
   gemini: "geminiApiKeyEnc",
@@ -68,6 +71,16 @@ const SETTINGS_COLUMN: Record<Exclude<SettingsShareKind, "deepseek">, "anthropic
   reoon: "reoonApiKeyEnc",
   quickenrich: "quickenrichApiKeyEnc",
 };
+
+/** The kinds whose column is read by itself, never in the shared select. */
+type SeparateKind = "deepseek" | "openrouter";
+function isSeparateKind(kind: SettingsShareKind): kind is SeparateKind {
+  return kind === "deepseek" || kind === "openrouter";
+}
+/** A separately read kind's stored (encrypted) key; a failed read is none. */
+async function separateKeyEnc(kind: SeparateKind, workspaceId: number): Promise<string | null> {
+  return kind === "deepseek" ? (await deepseekSettings(workspaceId)).keyEnc : (await openrouterSettings(workspaceId)).keyEnc;
+}
 
 export function isShareKind(v: string): v is ShareKind {
   return (SHARE_KINDS as readonly string[]).includes(v);
@@ -155,7 +168,7 @@ export async function linkedKeys(workspaceId: number, kinds: readonly SettingsSh
     for (const kind of kinds) {
       const owner = lenders[kind];
       if (!owner) continue;
-      const enc = kind === "deepseek" ? (await deepseekSettings(owner)).keyEnc : byOwner.get(owner)?.[SETTINGS_COLUMN[kind]];
+      const enc = isSeparateKind(kind) ? await separateKeyEnc(kind, owner) : byOwner.get(owner)?.[SETTINGS_COLUMN[kind]];
       const key = tryDecryptSecret(enc);
       if (key) out[kind] = { ownerWorkspaceId: owner, key, via: loans[kind] ? "loan" : "pool" };
     }
@@ -297,9 +310,8 @@ export async function ownKeyKinds(workspaceId: number): Promise<Set<ShareKind>> 
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  const deepseekEnc = (await deepseekSettings(workspaceId)).keyEnc;
   for (const kind of SETTINGS_SHARE_KINDS) {
-    if (tryDecryptSecret(kind === "deepseek" ? deepseekEnc : row?.[SETTINGS_COLUMN[kind]])) out.add(kind);
+    if (tryDecryptSecret(isSeparateKind(kind) ? await separateKeyEnc(kind, workspaceId) : row?.[SETTINGS_COLUMN[kind]])) out.add(kind);
   }
   const sources = await db
     .select({ slug: prospectSourceCredentials.sourceSlug, status: prospectSourceCredentials.status, enc: prospectSourceCredentials.credentialsEnc })

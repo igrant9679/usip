@@ -38,13 +38,16 @@ describe("the client reads the workspace role", () => {
   });
 
   /**
-   * The two places the PLATFORM role is the right one: editing the global
+   * The places the PLATFORM role is the right one: editing the global
    * page descriptions (pageDescriptions.update allows only users.role =
-   * "admin") and the platform-wide spend report (spend.platform, the same).
+   * "admin"), the platform-wide spend report (spend.platform, the same), and
+   * the platform default AI provider on Settings → Integrations
+   * (aiCredentials.platformAi / setPlatformDefault, adminProcedure, 2026-11-27).
    */
   const PLATFORM_ROLE_SITES: Record<string, number> = {
     "client/src/components/usip/Shell.tsx": 1,
     "client/src/components/usip/SpendReport.tsx": 1,
+    "client/src/pages/usip/Settings.tsx": 1,
   };
 
   it("useAuth()'s user.role is read only where a platform-owner feature means it", () => {

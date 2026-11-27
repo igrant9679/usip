@@ -6,6 +6,9 @@
  *   aiCredentials.upsert  — set/clear API key + model per provider (admin only)
  *   aiCredentials.test    — issue a tiny "ping" call against a provider (admin only)
  *   aiCredentials.getTiers / setTier / setTaskTier / testTier — model tiers (shared/aiTiers.ts)
+ *   aiCredentials.openrouterModels — OpenRouter's models that can give structured answers, with prices (any role)
+ *   aiCredentials.platformAi / setPlatformDefault / checkSharedOpenRouterKey — the platform
+ *     default provider and the shared OpenRouter key's credit (platform owner only)
  */
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
@@ -18,12 +21,23 @@ import {
   maskSecret,
   tryDecryptSecret,
 } from "../_core/crypto";
+import { ENV } from "../_core/env";
 import { invokeLLM, type ProviderName } from "../_core/llm";
 import { borrowedKeys } from "../services/keyShares";
 import { deepseekSettings } from "../services/deepseekSettings";
+import { openrouterSettings } from "../services/openrouterSettings";
+import { checkOpenRouterKey, getOpenRouterModels } from "../services/openrouter";
+import { platformDefaultProvider, setPlatformDefaultProvider } from "../services/platformAi";
 import { forgetTierConfig } from "../services/aiTiers";
-import { AI_PROVIDER_IDS, AI_TASK_IDS, AI_TIERS, cleanTaskTiers, cleanTierModels, type AiProviderId, type AiTask } from "@shared/aiTiers";
-import { router } from "../_core/trpc";
+import { AI_PROVIDER_IDS, AI_PROVIDER_LABEL, AI_TASK_IDS, AI_TIERS, cleanTaskTiers, cleanTierModels, type AiProviderId, type AiTask } from "@shared/aiTiers";
+import {
+  OPENROUTER_FALLBACK_MODEL,
+  canAnswerStructured,
+  defaultOpenRouterModel,
+  modelsForStructuredAnswers,
+  priceLabel,
+} from "@shared/openrouterModels";
+import { adminProcedure, router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 
 const providerEnum = z.enum(AI_PROVIDER_IDS);
@@ -34,13 +48,54 @@ const KEY_COLUMN = {
   openai: "openaiApiKeyEnc",
   gemini: "geminiApiKeyEnc",
   deepseek: "deepseekApiKeyEnc",
+  openrouter: "openrouterApiKeyEnc",
 } as const satisfies Record<AiProviderId, string>;
 const MODEL_COLUMN = {
   anthropic: "anthropicModel",
   openai: "openaiModel",
   gemini: "geminiModel",
   deepseek: "deepseekModel",
+  openrouter: "openrouterModel",
 } as const satisfies Record<AiProviderId, string>;
+
+/** The deployment's key per provider, as the env var the owner sets on Railway. */
+const ENV_KEY_NAME: Record<AiProviderId, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  gemini: "GEMINI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+};
+
+/** Whether the deployment holds a key per provider. Booleans only: no key, or any part of one, leaves the server. */
+function deploymentKeys(): Record<AiProviderId, boolean> {
+  return {
+    anthropic: !!ENV.anthropicApiKey,
+    openai: !!ENV.openaiApiKey,
+    gemini: !!ENV.geminiApiKey,
+    deepseek: !!ENV.deepseekApiKey,
+    openrouter: !!ENV.openrouterApiKey,
+  };
+}
+
+/**
+ * Refuses an OpenRouter model that is not in OpenRouter's list, or that
+ * cannot give a structured answer: every tier and the default model carry
+ * structured work here, so only those models are offered (shared/
+ * openrouterModels). With the list unreadable nothing is refused; the
+ * model funnel still never sends a structured call to a model that cannot
+ * answer it.
+ */
+async function assertOpenRouterModel(model: string): Promise<void> {
+  if (!model) return;
+  const list = await getOpenRouterModels();
+  if (list.models.length === 0) return;
+  const m = list.models.find((x) => x.id === model);
+  if (!m) throw new TRPCError({ code: "BAD_REQUEST", message: `OpenRouter has no model "${model}". Pick one from the list.` });
+  if (!canAnswerStructured(m)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `${m.name} cannot give structured answers on OpenRouter (no tools or structured outputs), and Velocity's AI features need them. Pick another model.` });
+  }
+}
 const tierEnum = z.enum(AI_TIERS);
 const taskEnum = z.enum(AI_TASK_IDS as [AiTask, ...AiTask[]]);
 
@@ -92,8 +147,9 @@ export const aiCredentialsRouter = router({
       .limit(1);
 
     const row = rows[0];
-    // DeepSeek's two columns are read apart from the rest (services/deepseekSettings).
+    // DeepSeek's and OpenRouter's columns are read apart from the rest (services/deepseekSettings, openrouterSettings).
     const deepseek = await deepseekSettings(ctx.workspace.id);
+    const openrouter = await openrouterSettings(ctx.workspace.id);
     // A key another workspace lends this one (services/keyShares) is in use
     // and named, but never shown here — not even its tail.
     const borrowed = await borrowedKeys(ctx.workspace.id);
@@ -120,6 +176,13 @@ export const aiCredentialsRouter = router({
         ...mask(deepseek.keyEnc, "deepseek"),
         model: deepseek.model ?? "",
       },
+      openrouter: {
+        ...mask(openrouter.keyEnc, "openrouter"),
+        model: openrouter.model ?? "",
+        // Whether the platform's shared OpenRouter key is there to fall back on
+        // (a boolean: the key itself never leaves the server).
+        platformKey: !!ENV.openrouterApiKey,
+      },
       defaultProvider: row?.aiDefaultProvider ?? "",
     };
   }),
@@ -143,9 +206,25 @@ export const aiCredentialsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
 
+      // An OpenRouter key is checked with OpenRouter before it is kept
+      // (GET /api/v1/key): a refused key is not saved, and OpenRouter's own
+      // words say why. The answer carries the key's credit when it has a limit.
+      let keyCheck: Awaited<ReturnType<typeof checkOpenRouterKey>> | null = null;
+      if (input.provider === "openrouter") {
+        const apiKey = input.apiKey?.trim();
+        if (apiKey) {
+          try {
+            keyCheck = await checkOpenRouterKey(apiKey, "workspace");
+          } catch (err) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "OpenRouter did not accept the key" });
+          }
+        }
+        if (input.model) await assertOpenRouterModel(input.model);
+      }
+
       const updates: Record<string, string | null> = {};
       if (input.apiKey !== undefined) {
-        updates[KEY_COLUMN[input.provider]] = input.apiKey === "" ? null : encryptSecret(input.apiKey);
+        updates[KEY_COLUMN[input.provider]] = input.apiKey === "" ? null : encryptSecret(input.provider === "openrouter" ? input.apiKey.trim() : input.apiKey);
       }
       if (input.model !== undefined) {
         updates[MODEL_COLUMN[input.provider]] = input.model === "" ? null : input.model;
@@ -158,7 +237,7 @@ export const aiCredentialsRouter = router({
           .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       }
 
-      return { ok: true };
+      return keyCheck ? { ok: true, keyCheck } : { ok: true };
     }),
 
   /**
@@ -202,6 +281,8 @@ export const aiCredentialsRouter = router({
       const g = reenc(from.geminiApiKeyEnc); if (g) { updates.geminiApiKeyEnc = g; updates.geminiModel = from.geminiModel ?? null; copied.push("gemini"); }
       const fromDeepseek = await deepseekSettings(input.fromWorkspaceId);
       const d = reenc(fromDeepseek.keyEnc); if (d) { updates.deepseekApiKeyEnc = d; updates.deepseekModel = fromDeepseek.model ?? null; copied.push("deepseek"); }
+      const fromOpenrouter = await openrouterSettings(input.fromWorkspaceId);
+      const r = reenc(fromOpenrouter.keyEnc); if (r) { updates.openrouterApiKeyEnc = r; updates.openrouterModel = fromOpenrouter.model ?? null; copied.push("openrouter"); }
       if (from.aiDefaultProvider) updates.aiDefaultProvider = from.aiDefaultProvider;
       if (copied.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The source workspace has no AI keys to copy" });
       await db.update(workspaceSettings).set(updates).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
@@ -238,6 +319,7 @@ export const aiCredentialsRouter = router({
     .input(z.object({ tier: tierEnum, provider: providerEnum, model: z.string().trim().max(128) }))
     .mutation(async ({ ctx, input }) => {
       await checkPermission(ctx, "manage_api_keys");
+      if (input.provider === "openrouter") await assertOpenRouterModel(input.model);
       await ensureSettingsRow(ctx.workspace.id);
       const { db, tiers } = await readTiers(ctx.workspace.id);
       const before = tiers[input.tier] ?? null;
@@ -330,4 +412,84 @@ export const aiCredentialsRouter = router({
         });
       }
     }),
+
+  /**
+   * OpenRouter's models for the pickers: only those that can give a
+   * structured answer (every tier and the default model carry structured
+   * work), each with its price per million tokens, and the default model,
+   * the newest Claude Sonnet that takes tools, from the live list. A public
+   * list, so any member may read it. Cached for three hours (services/openrouter);
+   * `error` says why it could not be read, beside whatever list was last read.
+   */
+  openrouterModels: workspaceProcedure.query(async () => {
+    const list = await getOpenRouterModels();
+    const offered = modelsForStructuredAnswers(list.models).sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      models: offered.map((m) => ({
+        id: m.id,
+        name: m.name,
+        contextLength: m.contextLength,
+        promptPerMillion: m.promptPerMillion,
+        completionPerMillion: m.completionPerMillion,
+        price: priceLabel(m),
+        tools: m.supportedParameters.includes("tools"),
+        structuredOutputs: m.supportedParameters.includes("structured_outputs"),
+      })),
+      defaultModelId: defaultOpenRouterModel(list.models)?.id ?? OPENROUTER_FALLBACK_MODEL,
+      /** Models in OpenRouter's list that are not offered because they cannot give structured answers. */
+      notOffered: list.models.length - offered.length,
+      fetchedAt: list.fetchedAt,
+      error: list.error,
+    };
+  }),
+
+  /**
+   * The platform default provider (services/platformAi), for the platform
+   * owner (users.role 'admin') only: what it is set to (null = not set, so the
+   * deployment's AI_DEFAULT_PROVIDER and the fallback order decide, as before),
+   * and which providers the deployment holds a shared key for. Booleans only.
+   */
+  platformAi: adminProcedure.query(async () => ({
+    defaultProvider: await platformDefaultProvider(),
+    envDefaultProvider: ENV.aiDefaultProvider || null,
+    deploymentKeys: deploymentKeys(),
+  })),
+
+  /**
+   * Set (or clear, with "") the platform default provider. Platform owner only.
+   * It applies to workspaces that have made no AI choice and hold no AI key
+   * of their own. A provider the deployment has no key for is refused: no
+   * workspace could use it, and they would quietly fall through to the next.
+   */
+  setPlatformDefault: adminProcedure
+    .input(z.object({ provider: providerEnum.or(z.literal("")) }))
+    .mutation(async ({ ctx, input }) => {
+      const provider = input.provider === "" ? null : input.provider;
+      if (provider && !deploymentKeys()[provider]) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `There is no shared ${AI_PROVIDER_LABEL[provider]} key on the server yet. Set ${ENV_KEY_NAME[provider]} on Railway first, then switch.`,
+        });
+      }
+      const before = await platformDefaultProvider();
+      await setPlatformDefaultProvider(provider);
+      await recordAudit({
+        workspaceId: 0, actorUserId: ctx.user.id, action: "update",
+        entityType: "platform_settings", entityId: null,
+        before: { aiDefaultProvider: before }, after: { aiDefaultProvider: provider },
+      });
+      return { ok: true as const, defaultProvider: provider };
+    }),
+
+  /** Ask OpenRouter about the platform's shared key: valid, and its credit if it has a limit. Platform owner only. */
+  checkSharedOpenRouterKey: adminProcedure.mutation(async () => {
+    if (!ENV.openrouterApiKey) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "OPENROUTER_API_KEY is not set on the server." });
+    }
+    try {
+      return { ok: true as const, ...(await checkOpenRouterKey(ENV.openrouterApiKey, "shared")) };
+    } catch (err) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "OpenRouter did not accept the shared key" });
+    }
+  }),
 });

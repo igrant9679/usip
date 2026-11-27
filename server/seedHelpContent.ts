@@ -181,6 +181,9 @@ A time the prospect picked themselves through your **booking link** is booked st
     pageKey: "help",
     bodyMarkdown: `A summary of what changed in Velocity between late September and mid November 2026, grouped by area. Each item names the article with the details where there is one.
 
+**OpenRouter (November 27)**
+- **A fifth AI provider.** Settings → Integrations has an **OpenRouter** card: one key for models from many vendors, picked from OpenRouter's own list with prices. With no key of your own, the platform's shared OpenRouter key is used once you pick OpenRouter. See "AI providers: OpenRouter".
+
 **Elsie Assist (November 16)**
 - **Suggestions beside the page.** The **Assist** button next to Elsie in the top bar opens a pane with up to three suggestions for the page you are on, each with the reason behind it and one button. It works on Home, a campaign's page, Inbox and a person's record. It is closed until you open it. See "Settings hub".
 
@@ -462,7 +465,7 @@ She never deletes records. She never changes team members, passwords, keys, key 
 
 An admin can let another workspace use this workspace's key. It is a live link, not a copy.
 
-- **Where.** Open **Settings** in the workspace that owns the key. The panel **Share keys with other workspaces** is in three sections: **Integrations** (Anthropic, OpenAI, Google Gemini and DeepSeek keys), **Voice agents and numbers** (the xAI key) and **Data sources** (the prospect-source keys and Reoon).
+- **Where.** Open **Settings** in the workspace that owns the key. The panel **Share keys with other workspaces** is in three sections: **Integrations** (Anthropic, OpenAI, Google Gemini, DeepSeek and OpenRouter keys), **Voice agents and numbers** (the xAI key) and **Data sources** (the prospect-source keys and Reoon).
 - **Who.** You must be an admin or super admin of both workspaces, and have the **Manage API keys** permission. The panel lists only the other workspaces you are an admin of. Other members do not see the panel.
 - **How.** Tick the box under the other workspace's name and confirm **Share key**. The workspace must have a key of its own to share.
 - **What the other workspace gets.** It uses the key while the box is ticked, and the vendor's card in its Settings reads "Connected · using [workspace]'s key". Nobody there can see the key. If you change or remove the key here, that applies there too. What it uses is charged to the key's own vendor account.
@@ -1078,13 +1081,48 @@ The left rail groups everything:
 
 **Switching workspace.** The workspace switcher at the top of the rail lets an admin of several workspaces change another workspace's settings without leaving the page. The section reloads for the workspace you pick.
 
-**Model tiers.** Under **Integrations**, below the AI provider keys, **Model tiers** decides which AI model does which kind of work. There are three tiers: **Fast** (the cheapest model you trust for sorting, scoring and short suggestions), **Standard** (Elsie's chat, help answers, research on a record) and **Deep** (what a prospect reads, and who a campaign targets). For each tier an admin picks a provider that has a key (Anthropic, OpenAI, Google Gemini or DeepSeek) and types the model's name exactly as the provider lists it, then presses that tier's own **Save**; **Test** sends that model a one-word request. Below the tiers, every kind of work has a row showing the tier it runs on and the model that means right now; change the tier there and it is saved as soon as you pick it, with no Save button, and applies to the next AI call of that kind; **Reset** puts it back on its default. A tier left blank uses the default provider's model, so a workspace that sets nothing behaves as it always has. Two things move a request up one tier when a stronger tier is set: Elsie's answer after she has looked things up, and a reply that had to be structured data and came back as plain text.
+**Model tiers.** Under **Integrations**, below the AI provider keys, **Model tiers** decides which AI model does which kind of work. There are three tiers: **Fast** (the cheapest model you trust for sorting, scoring and short suggestions), **Standard** (Elsie's chat, help answers, research on a record) and **Deep** (what a prospect reads, and who a campaign targets). For each tier an admin picks a provider that has a key (Anthropic, OpenAI, Google Gemini, DeepSeek or OpenRouter) and types the model's name exactly as the provider lists it (for OpenRouter, the picker beside the box fills it from OpenRouter's list), then presses that tier's own **Save**; **Test** sends that model a one-word request. Below the tiers, every kind of work has a row showing the tier it runs on and the model that means right now; change the tier there and it is saved as soon as you pick it, with no Save button, and applies to the next AI call of that kind; **Reset** puts it back on its default. A tier left blank uses the default provider's model, so a workspace that sets nothing behaves as it always has. Two things move a request up one tier when a stronger tier is set: Elsie's answer after she has looked things up, and a reply that had to be structured data and came back as plain text.
 
 **DeepSeek.** DeepSeek is the fourth AI provider: its key card is in the same list as the other three, with the same **Test**, **Set default** and **Clear key** buttons, and the key can be shared with your other workspaces in the same panel. A DeepSeek key on its own changes nothing while another provider has a key. DeepSeek is used for a tier you set to it, or for everything a blank tier covers once you make it the default provider. Velocity calls DeepSeek models with their thinking mode off, so a DeepSeek model answers directly, as the other providers' models do here.
+
+**OpenRouter.** OpenRouter is the fifth AI provider: one key for models from many vendors, with a card in the same list. Its model is picked from OpenRouter's own list, with prices. Without a key of your own, the platform's shared OpenRouter key is used once OpenRouter is the default or on a tier, and the card says so. See "AI providers: OpenRouter".
 
 **Elsie Assist.** The **Assist** button beside Elsie in the top bar (or the **Assist** switch in her drawer) opens a pane beside the page. It shows up to three suggestions for the page you are on, on Home, a campaign's page, Inbox and a person's record; on other pages it says it has none yet. Each suggestion has a title, the reason from your records, and one button. The button either opens the page where the work is, or puts a request to Elsie in her chat, where anything that changes data still asks you to confirm. The pane itself changes nothing. The **X** hides one suggestion until the numbers behind it change; **Not useful** stops that kind of suggestion for you, and the list at the bottom of the pane brings a kind back with **Suggest again**. The pane is closed until you open it, and your choice follows your account. While it is open, Elsie's offer of a tour for the page appears near the bottom of the pane, above **Ask Elsie**, and not as a card over the page. The suggestions come from your records by fixed rules. When there are two or more, an AI model puts them in order and rewords them; **AI wording today** at the bottom shows how many times that has run, and an admin can change the daily number with **Change** (0 turns the rewording off and keeps the suggestions).
 
 Profile changes save with the **Save** button. Your colour theme syncs to your account, so it follows you across browsers. **Workspace overview** also holds the workspace time zone, the fiscal calendar and currency, and the **send window** (see "The send window"). To let another workspace use one of this workspace's keys, see "Running multiple workspaces".`,
+  },
+  // 2026-11-27: OpenRouter, the fifth AI provider (owner decisions 2026-11-27).
+  {
+    slug: "ai-providers-openrouter",
+    categorySlug: "settings-account",
+    title: "AI providers: OpenRouter",
+    summary: "One key for many vendors' models: which key is used, picking a model, what it costs, and what its errors mean.",
+    readingTimeMinutes: 3,
+    tags: ["openrouter", "ai providers", "models", "api key", "integrations", "claude"],
+    pageKey: "admin-setup",
+    bodyMarkdown: `**What it is.** OpenRouter is the fifth AI provider in Velocity, beside Anthropic, OpenAI, Google Gemini and DeepSeek. One OpenRouter key reaches models from many vendors. It can run all of Velocity's text AI: writing, Elsie's chat, scoring, research, summaries and structured answers. Images, video and voice stay on their own providers.
+
+**Which key is used.**
+1. This workspace's own OpenRouter key, entered on the **OpenRouter** card under **Settings → Integrations**.
+2. Otherwise a key another of your workspaces lends this one (see "Running multiple workspaces").
+3. Otherwise the platform's shared OpenRouter key, which the platform owner pays for. The card then reads **Using the platform's shared key**, and **Test** and **Set default** work without a key of your own.
+
+Whichever key pays, every call counts against this workspace's monthly AI budget (**Settings → Billing and credits**) and the same per-minute limit as any other AI request.
+
+**When OpenRouter is used.** A key on its own moves nothing. OpenRouter runs this workspace's AI when an admin presses **Set default** on its card, or sets a model tier to OpenRouter (see "The Settings hub"). The platform owner can also make OpenRouter the platform default: it then runs AI for workspaces that have picked no provider and hold no AI key of their own. A workspace's own choice and its own keys always come first.
+
+**Entering a key.** Paste the key and press **Save**. Velocity checks it with OpenRouter first: a key OpenRouter refuses is not saved, and OpenRouter's reason is shown. An accepted key shows the credit left when the key has a limit. Keys are encrypted at rest; afterwards only their last four characters are shown.
+
+**Picking a model.** The model box on the OpenRouter card, and the OpenRouter picker beside a tier's model box, list models from OpenRouter's own list with the price per million tokens, in and out. Only models that can give structured answers are listed, because scoring, reading replies and campaign targeting all need them. With no model picked, OpenRouter uses the newest Claude Sonnet in its list, and moves to a newer one when OpenRouter adds it.
+
+**What it costs.** **Settings → Billing and credits** shows OpenRouter's tokens per day and a **Cost the vendor reported** line: what OpenRouter charged, in millionths of a dollar. That is OpenRouter's own figure, not an estimate. Use on the platform's shared key is marked **Shared**.
+
+**When something goes wrong.** Velocity shows OpenRouter's own message, and says whose key it was:
+- **401**: the key is wrong or has been revoked. Enter a new one.
+- **402**: the key is out of credit. Add credit at openrouter.ai, or raise the key's limit.
+- **429** and server errors: Velocity tries again after one second and then three before it gives up.
+
+**For the platform owner.** The shared key is the **OPENROUTER_API_KEY** variable on the Velocity service in Railway. Once it is set, **Platform default provider** under **Settings → Integrations** lets you make OpenRouter the default for workspaces with no AI choice or key, and **Check shared OpenRouter key** shows its credit. The platform default stays on today's default until you switch it.`,
   },
   {
     slug: "mfa-security",

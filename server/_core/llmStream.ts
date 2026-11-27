@@ -20,8 +20,11 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { linkedKeys } from "../services/keyShares";
 import { deepseekSettings } from "../services/deepseekSettings";
+import { openrouterSettings } from "../services/openrouterSettings";
+import { preferredProvider } from "../services/platformAi";
+import { OPENROUTER_CHAT_URL, defaultOpenRouterModelId, lookupOpenRouterModel, openrouterFailure, openrouterHeaders } from "../services/openrouter";
 import { ENV } from "./env";
-import { DEEPSEEK_CHAT_URL, DEEPSEEK_THINKING_OFF, checkLlmBurst, checkMonthlyCap, deepseekUsage, type InvokeParams, type ProviderName, type TextContent } from "./llm";
+import { DEEPSEEK_CHAT_URL, DEEPSEEK_THINKING_OFF, checkLlmBurst, checkMonthlyCap, deepseekUsage, openrouterUsage, type InvokeParams, type ProviderName, type TextContent } from "./llm";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
@@ -32,6 +35,8 @@ const DEFAULT_MODELS = {
   openai: "gpt-4o-mini",
   gemini: "gemini-2.5-flash",
   deepseek: "deepseek-flash",
+  // From OpenRouter's live list at call time, as in invokeLLM.
+  openrouter: "",
 } as const;
 
 type ResolvedCreds = {
@@ -39,10 +44,12 @@ type ResolvedCreds = {
   openaiApiKey: string;
   geminiApiKey: string;
   deepseekApiKey: string;
+  openrouterApiKey: string;
   anthropicModel: string;
   openaiModel: string;
   geminiModel: string;
   deepseekModel: string;
+  openrouterModel: string;
   defaultProvider: string;
   sources: Record<ProviderName, KeySource>;
 };
@@ -52,16 +59,24 @@ const ENV_CREDS: ResolvedCreds = {
   openaiApiKey: ENV.openaiApiKey,
   geminiApiKey: ENV.geminiApiKey,
   deepseekApiKey: ENV.deepseekApiKey,
+  openrouterApiKey: ENV.openrouterApiKey,
   anthropicModel: DEFAULT_MODELS.anthropic,
   openaiModel: DEFAULT_MODELS.openai,
   geminiModel: DEFAULT_MODELS.gemini,
   deepseekModel: DEFAULT_MODELS.deepseek,
+  openrouterModel: DEFAULT_MODELS.openrouter,
   defaultProvider: ENV.aiDefaultProvider,
-  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared" },
+  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared", openrouter: "shared" },
 };
 
+/** The deployment's keys alone, with the platform default provider when one is set (as in invokeLLM). */
+async function envCreds(): Promise<ResolvedCreds> {
+  const preferred = await preferredProvider(null, false, ENV.aiDefaultProvider);
+  return preferred === ENV_CREDS.defaultProvider ? ENV_CREDS : { ...ENV_CREDS, defaultProvider: preferred };
+}
+
 async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
-  if (!workspaceId) return ENV_CREDS;
+  if (!workspaceId) return envCreds();
   try {
     const db = await getDb();
     if (!db) return ENV_CREDS;
@@ -80,18 +95,20 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       .limit(1);
 
     const row = rows[0];
-    if (!row) return ENV_CREDS;
-    // Read apart from the select above; a failed read is "no DeepSeek key" (services/deepseekSettings).
+    if (!row) return envCreds();
+    // Read apart from the select above; a failed read is "no key" (services/deepseekSettings, services/openrouterSettings).
     const deepseek = await deepseekSettings(workspaceId);
+    const openrouter = await openrouterSettings(workspaceId);
     const own = {
       anthropic: tryDecryptSecret(row.anthropicApiKeyEnc),
       openai: tryDecryptSecret(row.openaiApiKeyEnc),
       gemini: tryDecryptSecret(row.geminiApiKeyEnc),
       deepseek: tryDecryptSecret(deepseek.keyEnc),
+      openrouter: tryDecryptSecret(openrouter.keyEnc),
     };
     // A key another workspace lends this one counts as its own for every
     // purpose here (services/keyShares): own first, then lent, then the env.
-    const missing = (["anthropic", "openai", "gemini", "deepseek"] as const).filter((p) => !own[p]);
+    const missing = (["anthropic", "openai", "gemini", "deepseek", "openrouter"] as const).filter((p) => !own[p]);
     if (missing.length > 0) {
       const lent = await linkedKeys(workspaceId, missing);
       for (const p of missing) if (lent[p]) own[p] = lent[p]!.key;
@@ -101,16 +118,19 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       openaiApiKey: own.openai || ENV.openaiApiKey,
       geminiApiKey: own.gemini || ENV.geminiApiKey,
       deepseekApiKey: own.deepseek || ENV.deepseekApiKey,
+      openrouterApiKey: own.openrouter || ENV.openrouterApiKey,
       anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
       openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
       geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
       deepseekModel: deepseek.model || DEFAULT_MODELS.deepseek,
-      defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
+      openrouterModel: openrouter.model || DEFAULT_MODELS.openrouter,
+      defaultProvider: await preferredProvider(row.aiDefaultProvider, Object.values(own).some(Boolean), ENV.aiDefaultProvider),
       sources: {
         anthropic: own.anthropic ? "workspace" : "shared",
         openai: own.openai ? "workspace" : "shared",
         gemini: own.gemini ? "workspace" : "shared",
         deepseek: own.deepseek ? "workspace" : "shared",
+        openrouter: own.openrouter ? "workspace" : "shared",
       },
     };
   } catch (err) {
@@ -129,11 +149,13 @@ function resolveProvider(
   if (preferred === "gemini" && creds.geminiApiKey) return "gemini";
   if (preferred === "anthropic" && creds.anthropicApiKey) return "anthropic";
   if (preferred === "deepseek" && creds.deepseekApiKey) return "deepseek";
+  if (preferred === "openrouter" && creds.openrouterApiKey) return "openrouter";
   if (creds.anthropicApiKey) return "anthropic";
   if (creds.openaiApiKey) return "openai";
   if (creds.geminiApiKey) return "gemini";
-  // Last, as in invokeLLM: reached unasked only when it is the one key there is.
+  // Last, as in invokeLLM: reached unasked only when theirs are the only keys there are.
   if (creds.deepseekApiKey) return "deepseek";
+  if (creds.openrouterApiKey) return "openrouter";
   throw new Error("No AI provider configured");
 }
 
@@ -163,8 +185,8 @@ function flatten(params: InvokeParams): { system: string; turns: SimpleMsg[] } {
   return { system: system.join("\n\n"), turns };
 }
 
-/** What the provider reports a stream used, filled in as the stream goes. */
-type StreamUsage = { model: string | null; input: number; output: number; cacheWrite: number; cacheRead: number };
+/** What the provider reports a stream used, filled in as the stream goes. costUsd: what it charged, when it says (OpenRouter). */
+type StreamUsage = { model: string | null; input: number; output: number; cacheWrite: number; cacheRead: number; costUsd?: number | null };
 
 // ─── Anthropic ──────────────────────────────────────────────────────────────
 
@@ -395,7 +417,73 @@ async function* streamDeepSeek(
   });
 }
 
-// ─── SSE parser shared by OpenAI, Gemini and DeepSeek ───────────────────────
+// ─── OpenRouter ─────────────────────────────────────────────────────────────
+
+/**
+ * OpenAI's stream format at OpenRouter's address. A stream is plain text, so
+ * any model in the list can take it; a parameter the model's listing does
+ * not take is left out. OpenRouter puts the usage, cost included, on the last
+ * chunk, and an error after the stream has started arrives as a chunk with an
+ * `error` at the top level (the status stays 200), which is thrown.
+ */
+async function* streamOpenRouter(
+  params: InvokeParams,
+  creds: ResolvedCreds,
+  signal: AbortSignal,
+  usage: StreamUsage,
+): AsyncGenerator<string> {
+  if (!creds.openrouterApiKey) throw new Error("OpenRouter API key not configured");
+  const { system, turns } = flatten(params);
+  const model = params.model ?? (creds.openrouterModel || (await defaultOpenRouterModelId()));
+  const listing = await lookupOpenRouterModel(model);
+  const takes = (p: string) => !listing.model || listing.model.supportedParameters.includes(p);
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages: [...(system ? [{ role: "system", content: system }] : []), ...turns],
+    stream: true,
+  };
+  if (takes("max_tokens")) payload.max_tokens = params.maxTokens ?? params.max_tokens ?? 4096;
+  if (typeof params.temperature === "number" && takes("temperature")) payload.temperature = params.temperature;
+
+  const whose = creds.sources.openrouter;
+  const res = await fetch(OPENROUTER_CHAT_URL, {
+    method: "POST",
+    headers: openrouterHeaders(creds.openrouterApiKey),
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    throw openrouterFailure(res.status, res.statusText, text, whose);
+  }
+
+  usage.model = model;
+  yield* parseSSE(res.body, line => {
+    if (line === "[DONE]") return null;
+    let j: any;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (j?.error) throw openrouterFailure(Number(j.error.code) || 502, "", { error: j.error }, whose);
+    if (typeof j?.model === "string") usage.model = j.model;
+    if (j?.usage) {
+      const u = openrouterUsage(j.usage);
+      usage.input = u.input;
+      usage.output = u.output;
+      usage.cacheRead = u.cacheRead;
+      usage.cacheWrite = u.cacheWrite;
+      usage.costUsd = u.costUsd;
+    }
+    const delta = j?.choices?.[0]?.delta?.content;
+    return typeof delta === "string" ? delta : null;
+  });
+}
+
+// ─── SSE parser shared by OpenAI, Gemini, DeepSeek and OpenRouter ───────────
 
 async function* parseSSE(
   body: ReadableStream<Uint8Array>,
@@ -471,6 +559,9 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
       case "deepseek":
         yield* streamDeepSeek(params, creds, signal, usage);
         return;
+      case "openrouter":
+        yield* streamOpenRouter(params, creds, signal, usage);
+        return;
     }
   } finally {
     // Runs when the stream ends, fails, or the reader stops early: whatever
@@ -482,7 +573,13 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
       model: usage.model ?? params.model ?? null,
       keySource: creds.sources[provider],
       feature: params.feature ?? getRequestFeature() ?? "stream",
-      usage: { input: usage.input, output: usage.output, cacheWrite: usage.cacheWrite, cacheRead: usage.cacheRead },
+      usage: {
+        input: usage.input,
+        output: usage.output,
+        cacheWrite: usage.cacheWrite,
+        cacheRead: usage.cacheRead,
+        ...(typeof usage.costUsd === "number" ? { costUsd: usage.costUsd } : {}),
+      },
     });
   }
 }

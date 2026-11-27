@@ -161,7 +161,7 @@ const GROUPS: HubGroup[] = [
       { id: "voice-agents", label: "Voice agents and numbers", icon: AudioLines, internal: true, keywords: ["voice", "phone", "phone numbers", "calls", "dialer", "plivo", "xai"] },
       { id: "security", label: "Security", icon: ShieldCheck, internal: true, keywords: ["mfa", "2fa", "two-factor", "require 2fa", "sso", "ip allowlist", "session timeout", "password"] },
       { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true, keywords: ["notifications", "notify", "policy"] },
-      { id: "integrations", label: "Integrations", icon: Plug, internal: true, keywords: ["webhook", "webhooks", "api key", "api keys", "ai providers", "openai", "anthropic", "gemini", "deepseek", "slack", "teams", "google maps", "sendgrid"] },
+      { id: "integrations", label: "Integrations", icon: Plug, internal: true, keywords: ["webhook", "webhooks", "api key", "api keys", "ai providers", "openai", "anthropic", "gemini", "deepseek", "openrouter", "slack", "teams", "google maps", "sendgrid"] },
       { id: "knowledge", label: "Knowledge base", icon: BookOpen, internal: true, keywords: ["documents", "faq", "knowledge"] },
       { id: "data-sources", label: "Data sources", icon: Database, internal: true, keywords: ["apollo", "reoon", "quickenrich", "warmysender", "leadocean", "vendors", "api key", "api keys", "verification", "providers", "primary source", "fallback", "source order"] },
       { id: "email-delivery", label: "Email delivery", icon: Send, internal: true, keywords: ["smtp", "from name", "sender", "deliverability", "email identity", "system email"] },

@@ -13,6 +13,12 @@ export const ENV = {
   geminiApiKey: process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
   // DeepSeek is never reached by the fallback order above unless it is the only key there is.
   deepseekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
+  // OpenRouter: the platform's SHARED key (the owner pays for its use), used
+  // by a workspace that has no OpenRouter key of its own. Like DeepSeek it is
+  // last in the fallback order, so setting it moves nobody: a workspace uses
+  // it when it picks OpenRouter, or when the platform owner makes OpenRouter
+  // the platform default (Settings → Integrations, services/platformAi).
+  openrouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
   aiDefaultProvider: process.env.AI_DEFAULT_PROVIDER ?? "",
 
   // Symmetric key used to encrypt secrets at rest (workspace AI keys, etc.).
