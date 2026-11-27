@@ -22,6 +22,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { OpenRouterModelPicker } from "./OpenRouterModelPicker";
 import {
   AI_PROVIDER_IDS,
   AI_PROVIDER_LABEL as PROVIDER_NAME,
@@ -55,7 +56,8 @@ export function ModelTiersCard({ isAdmin }: { isAdmin: boolean }) {
 
   const tiers = tiersQ.data?.tiers ?? {};
   const taskTiers = tiersQ.data?.taskTiers ?? {};
-  const hasKey = (p: AiProviderId) => !!credsQ.data?.[p]?.configured;
+  // OpenRouter also runs on the platform's shared key when the workspace has none of its own.
+  const hasKey = (p: AiProviderId) => !!credsQ.data?.[p]?.configured || (p === "openrouter" && !!credsQ.data?.openrouter.platformKey);
   const defaultProvider = (credsQ.data?.defaultProvider || "") as AiProviderId | "";
   const firstUsable: AiProviderId = (defaultProvider && hasKey(defaultProvider) ? defaultProvider : AI_PROVIDER_IDS.find(hasKey)) ?? "anthropic";
   const anySet = AI_TIERS.some((t) => !!tiers[t]);
@@ -118,6 +120,14 @@ export function ModelTiersCard({ isAdmin }: { isAdmin: boolean }) {
                         placeholder="Model name, exactly as the provider lists it"
                         className="h-8 text-xs flex-1 min-w-48 font-mono"
                       />
+                      {draft.provider === "openrouter" && (
+                        <OpenRouterModelPicker
+                          label={`${AI_TIER_LABEL[tier]} tier OpenRouter model`}
+                          value={draft.model.trim()}
+                          onChange={(id) => setDraft({ model: id })}
+                          className="w-56"
+                        />
+                      )}
                       <Button
                         size="sm"
                         disabled={setTier.isPending || !changed || !draft.model.trim()}

@@ -2066,12 +2066,17 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   anthropicModel: varchar("anthropicModel", { length: 128 }),
   openaiModel: varchar("openaiModel", { length: 128 }),
   geminiModel: varchar("geminiModel", { length: 128 }),
-  aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini' | 'deepseek'
+  aiDefaultProvider: varchar("aiDefaultProvider", { length: 32 }), // 'anthropic' | 'openai' | 'gemini' | 'deepseek' | 'openrouter'
   // DeepSeek, a fourth provider (Migration 0443). Same BYOK pattern, but READ
   // BY ITSELF (server/services/deepseekSettings.ts): the credential read every
   // model call makes must not name a column a migration has yet to add.
   deepseekApiKeyEnc: text("deepseekApiKeyEnc"),
   deepseekModel: varchar("deepseekModel", { length: 128 }),
+  // OpenRouter, a fifth provider (Migration 0448). Read by itself too
+  // (server/services/openrouterSettings.ts). NULL model = the newest Claude
+  // Sonnet in OpenRouter's live list (services/openrouter).
+  openrouterApiKeyEnc: text("openrouterApiKeyEnc"),
+  openrouterModel: varchar("openrouterModel", { length: 128 }),
   // AI model tiers (Migration 0441, shared/aiTiers.ts). NULL = nothing set,
   // and every call uses the default provider and model above, as before.
   aiTierModels: json("aiTierModels"), // { fast?: {provider, model}, standard?: …, deep?: … }

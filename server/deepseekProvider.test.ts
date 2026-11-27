@@ -217,7 +217,7 @@ describe("nothing reaches DeepSeek unasked", () => {
   });
 
   it("stored tiers naming DeepSeek are well-formed now", () => {
-    expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek"]);
+    expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek", "openrouter"]);
     expect(cleanTierModels({ fast: { provider: "deepseek", model: "deepseek-flash" } })).toEqual({ fast: { provider: "deepseek", model: "deepseek-flash" } });
   });
 });
@@ -588,7 +588,7 @@ describe("before migration 0443 has run", () => {
     // Both funnels and the two key-share reads go through it.
     for (const f of ["server/_core/llm.ts", "server/_core/llmStream.ts"]) {
       expect(read(f), f).toContain("const deepseek = await deepseekSettings(workspaceId);");
-      expect(read(f), f).toContain('const missing = (["anthropic", "openai", "gemini", "deepseek"] as const).filter((p) => !own[p]);');
+      expect(read(f), f).toContain('const missing = (["anthropic", "openai", "gemini", "deepseek", "openrouter"] as const).filter((p) => !own[p]);');
     }
   });
 
@@ -613,18 +613,18 @@ describe("the settings screens list DeepSeek where they list the others", () => 
   it("a key card, the tier picker, the sharing panel and settings search", () => {
     const page = read("client/src/pages/usip/Settings.tsx");
     const providers = page.slice(page.indexOf("const AI_PROVIDERS = ["), page.indexOf("function AIProvidersSection("));
-    expect(providers.match(/id: "(\w+)" as const/g)).toEqual(['id: "anthropic" as const', 'id: "openai" as const', 'id: "gemini" as const', 'id: "deepseek" as const']);
+    expect(providers.match(/id: "(\w+)" as const/g)).toEqual(['id: "anthropic" as const', 'id: "openai" as const', 'id: "gemini" as const', 'id: "deepseek" as const', 'id: "openrouter" as const']);
     expect(providers).toContain('docsUrl: "https://platform.deepseek.com/api_keys"');
     expect(providers).toContain("Velocity calls them with DeepSeek's thinking mode off.");
-    expect(page).toContain("Bring your own API keys for Anthropic, OpenAI, Gemini or DeepSeek.");
+    expect(page).toContain("Bring your own API keys for Anthropic, OpenAI, Gemini, DeepSeek or OpenRouter.");
 
     // The tier picker lists the shared list of providers by their shared names.
     const card = read("client/src/components/usip/settings/ModelTiersCard.tsx");
     expect(card).toContain("AI_PROVIDER_LABEL as PROVIDER_NAME,");
     expect(card).toContain("{AI_PROVIDER_IDS.map((p) => (");
-    expect(AI_PROVIDER_LABEL).toEqual({ anthropic: "Anthropic", openai: "OpenAI", gemini: "Google Gemini", deepseek: "DeepSeek" });
+    expect(AI_PROVIDER_LABEL).toEqual({ anthropic: "Anthropic", openai: "OpenAI", gemini: "Google Gemini", deepseek: "DeepSeek", openrouter: "OpenRouter" });
 
-    expect(read("client/src/components/usip/settings/KeySharingCard.tsx")).toContain('export const AI_KEY_KINDS: ShareableKind[] = ["anthropic", "openai", "gemini", "deepseek"];');
+    expect(read("client/src/components/usip/settings/KeySharingCard.tsx")).toContain('export const AI_KEY_KINDS: ShareableKind[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter"];');
     expect(read("client/src/pages/usip/SettingsHub.tsx")).toMatch(/id: "integrations".*"deepseek"/);
   });
 });

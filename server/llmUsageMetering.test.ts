@@ -106,9 +106,9 @@ describe("llmTokens", () => {
     const start = llm.indexOf("async function callProvider(");
     expect(start, "`callProvider` not found: re-anchor this test").toBeGreaterThan(-1);
     const fn = llm.slice(start, start + 1400);
-    // DeepSeek joined the three on 2026-11-16; it returns through the same meter.
-    for (const p of ["anthropic", "openai", "gemini", "deepseek"]) expect(fn).toContain(`case "${p}":`);
-    expect((fn.match(/result = await invokeVia/g) ?? []).length).toBe(4);
+    // DeepSeek joined the three on 2026-11-16, OpenRouter on 2026-11-27; both return through the same meter.
+    for (const p of ["anthropic", "openai", "gemini", "deepseek", "openrouter"]) expect(fn).toContain(`case "${p}":`);
+    expect((fn.match(/result = await invokeVia/g) ?? []).length).toBe(5);
     // The meter is in the same function as the provider call, after it.
     const whole = llm.slice(start, llm.indexOf("\n}\n", start));
     expect(whole).toMatch(/await recordLlmTokens\(workspaceId, result\.usage\?\.total_tokens \?\? 0\)/);
@@ -116,7 +116,7 @@ describe("llmTokens", () => {
     // And invokeLLM reaches a provider only through it: no call skips the meter.
     const invoke = llm.slice(llm.indexOf("export async function invokeLLM"), llm.indexOf("export function failedItsFormat("));
     expect(invoke.length).toBeGreaterThan(500);
-    expect(invoke).not.toMatch(/invokeVia(Anthropic|OpenAI|Gemini|DeepSeek)\(/);
+    expect(invoke).not.toMatch(/invokeVia(Anthropic|OpenAI|Gemini|DeepSeek|OpenRouter)\(/);
     expect((invoke.match(/callProvider\(/g) ?? []).length).toBe(2);
   });
 });

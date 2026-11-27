@@ -79,7 +79,7 @@ export function safeSendingAccount<T extends SendingAccountRow>(row: T) {
 
 /** Credentials no member's browser needs, admin or not: they are only ever written. */
 export const SETTINGS_SECRET_FIELDS = [
-  "anthropicApiKeyEnc", "openaiApiKeyEnc", "geminiApiKeyEnc", "deepseekApiKeyEnc", "xaiApiKeyEnc",
+  "anthropicApiKeyEnc", "openaiApiKeyEnc", "geminiApiKeyEnc", "deepseekApiKeyEnc", "openrouterApiKeyEnc", "xaiApiKeyEnc",
   "plivoAuthTokenEnc", "apolloApiKeyEnc", "reoonApiKeyEnc", "quickenrichApiKeyEnc",
   "sendgridInboundToken",
 ] as const;

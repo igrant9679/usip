@@ -108,7 +108,17 @@ describe("assistant product knowledge digest", () => {
     // sources" makes Elsie answer yes. One sentence of about 360 characters
     // says the numbers, what counts and what happens when it runs out; the
     // full article is "Prospect data included with your plan".
-    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(15500);
+    //
+    // 2026-11-27: 15500 → 15900. OpenRouter became the fifth AI provider
+    // (owner decisions 2026-11-27), with a shared platform key, a model
+    // picker and a platform default: asked "do I need an OpenRouter key?" or
+    // "which model does OpenRouter use?", a digest that only adds the name to
+    // the tiers' provider list would leave Elsie to guess. One paragraph of
+    // about 360 characters says the key order, the model list and default,
+    // and who can make it the platform default; the digest sat at 15,499, so
+    // the room came from here (and 23 characters cut from the Home sentence).
+    // The full article is "AI providers: OpenRouter".
+    expect(PRODUCT_KNOWLEDGE.length).toBeLessThan(15900);
   });
 
   it("says where Settings is, and names every section the hub has", () => {
@@ -240,10 +250,18 @@ describe("assistant product knowledge digest", () => {
     const para = PRODUCT_KNOWLEDGE.slice(start, PRODUCT_KNOWLEDGE.indexOf("\n", start));
     expect(AI_TIERS.map((t) => AI_TIER_LABEL[t])).toEqual(["Fast", "Standard", "Deep"]);
     expect(para).toContain("Model tiers (on integrations, below the AI keys): Fast, Standard and Deep. For each,");
-    // The providers she names are the ones the picker lists (DeepSeek joined them 2026-11-16).
+    // The providers she names are the ones the picker lists (DeepSeek joined them 2026-11-16, OpenRouter 2026-11-27).
     const { AI_PROVIDER_IDS } = await import("../shared/aiTiers");
-    expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek"]);
-    expect(para).toContain("an admin picks a provider that has a key (Anthropic, OpenAI, Gemini or DeepSeek) and types a model name, then that tier's Save;");
+    expect(AI_PROVIDER_IDS).toEqual(["anthropic", "openai", "gemini", "deepseek", "openrouter"]);
+    expect(para).toContain("an admin picks a provider that has a key (Anthropic, OpenAI, Gemini, DeepSeek or OpenRouter) and types a model name, then that tier's Save;");
+    // OpenRouter's own paragraph says what the code does: the key order, the list, the default and the filter.
+    const orAt = PRODUCT_KNOWLEDGE.indexOf("OpenRouter (one key, many vendors' models):");
+    expect(orAt).toBeGreaterThan(-1);
+    const orPara = PRODUCT_KNOWLEDGE.slice(orAt, PRODUCT_KNOWLEDGE.indexOf("\n", orAt));
+    expect(orPara).toContain("the workspace's own key first, else the platform's shared key");
+    expect(orPara).toContain("default: newest Claude Sonnet");
+    expect(orPara).toContain("only those that give structured answers");
+    expect(orPara).toContain("The platform owner can make it the default for workspaces with no AI choice or key.");
     // Each default the paragraph states is the catalog's.
     const said: Record<string, string[]> = {
       deep: ["outreach", "targeting"],

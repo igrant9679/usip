@@ -5,12 +5,24 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { linkedKey, linkedKeys } from "../services/keyShares";
 import { deepseekSettings } from "../services/deepseekSettings";
+import { openrouterSettings } from "../services/openrouterSettings";
+import { preferredProvider } from "../services/platformAi";
+import {
+  OPENROUTER_CHAT_URL,
+  OPENROUTER_RETRYABLE,
+  defaultOpenRouterModelId,
+  getOpenRouterModels,
+  lookupOpenRouterModel,
+  openrouterFailure,
+  openrouterHeaders,
+} from "../services/openrouter";
 import { ENV } from "./env";
 import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
 import { applyTier } from "../services/aiTiers";
 import type { AiProviderId, AiTask } from "@shared/aiTiers";
+import { openrouterMode, type OpenRouterMode, type OpenRouterNeed } from "@shared/openrouterModels";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -151,10 +163,13 @@ type ResolvedCreds = {
   openaiApiKey: string;
   geminiApiKey: string;
   deepseekApiKey: string;
+  openrouterApiKey: string;
   anthropicModel: string;
   openaiModel: string;
   geminiModel: string;
   deepseekModel: string;
+  /** "" = the newest Claude Sonnet in OpenRouter's live list, decided at call time. */
+  openrouterModel: string;
   defaultProvider: string;
   /** Whose account each provider's key bills: the workspace's own, or the deployment's env key. */
   sources: Record<ProviderName, KeySource>;
@@ -189,6 +204,8 @@ export type InvokeResult = {
     /** Anthropic prompt caching, billed at their own rates (not in total_tokens). */
     cache_creation_input_tokens?: number;
     cache_read_input_tokens?: number;
+    /** What the provider says it charged, in USD. OpenRouter reports it; the others do not. */
+    cost?: number;
   };
 };
 
@@ -215,6 +232,9 @@ const DEFAULT_MODELS: Record<ProviderName, string> = {
   gemini: "gemini-2.5-flash",
   // DeepSeek's low-cost model id (their model list, read 2026-11-16).
   deepseek: "deepseek-flash",
+  // None written here: a workspace with no OpenRouter model of its own gets
+  // the newest Claude Sonnet in OpenRouter's live list (services/openrouter).
+  openrouter: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -382,16 +402,24 @@ const ENV_CREDS: ResolvedCreds = {
   openaiApiKey: ENV.openaiApiKey,
   geminiApiKey: ENV.geminiApiKey,
   deepseekApiKey: ENV.deepseekApiKey,
+  openrouterApiKey: ENV.openrouterApiKey,
   anthropicModel: DEFAULT_MODELS.anthropic,
   openaiModel: DEFAULT_MODELS.openai,
   geminiModel: DEFAULT_MODELS.gemini,
   deepseekModel: DEFAULT_MODELS.deepseek,
+  openrouterModel: DEFAULT_MODELS.openrouter,
   defaultProvider: ENV.aiDefaultProvider,
-  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared" },
+  sources: { anthropic: "shared", openai: "shared", gemini: "shared", deepseek: "shared", openrouter: "shared" },
 };
 
+/** The deployment's keys alone, preferring the platform default provider when the owner has set one (services/platformAi). */
+async function envCreds(): Promise<ResolvedCreds> {
+  const preferred = await preferredProvider(null, false, ENV.aiDefaultProvider);
+  return preferred === ENV_CREDS.defaultProvider ? ENV_CREDS : { ...ENV_CREDS, defaultProvider: preferred };
+}
+
 async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
-  if (!workspaceId) return ENV_CREDS;
+  if (!workspaceId) return envCreds();
   try {
     const db = await getDb();
     if (!db) return ENV_CREDS;
@@ -410,20 +438,23 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       .limit(1);
 
     const row = rows[0];
-    if (!row) return ENV_CREDS;
+    if (!row) return envCreds();
 
-    // DeepSeek's key and model are read apart from the select above, and a
-    // failed read there is "no DeepSeek key" (services/deepseekSettings).
+    // DeepSeek's and OpenRouter's keys and models are read apart from the
+    // select above, and a failed read there is "no key" (services/
+    // deepseekSettings, services/openrouterSettings).
     const deepseek = await deepseekSettings(workspaceId);
+    const openrouter = await openrouterSettings(workspaceId);
     const own = {
       anthropic: tryDecryptSecret(row.anthropicApiKeyEnc),
       openai: tryDecryptSecret(row.openaiApiKeyEnc),
       gemini: tryDecryptSecret(row.geminiApiKeyEnc),
       deepseek: tryDecryptSecret(deepseek.keyEnc),
+      openrouter: tryDecryptSecret(openrouter.keyEnc),
     };
     // A key another workspace lends this one counts as its own for every
     // purpose here (services/keyShares): own first, then lent, then the env.
-    const missing = (["anthropic", "openai", "gemini", "deepseek"] as const).filter((p) => !own[p]);
+    const missing = (["anthropic", "openai", "gemini", "deepseek", "openrouter"] as const).filter((p) => !own[p]);
     if (missing.length > 0) {
       const lent = await linkedKeys(workspaceId, missing);
       for (const p of missing) if (lent[p]) own[p] = lent[p]!.key;
@@ -433,16 +464,21 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
       openaiApiKey: own.openai || ENV.openaiApiKey,
       geminiApiKey: own.gemini || ENV.geminiApiKey,
       deepseekApiKey: own.deepseek || ENV.deepseekApiKey,
+      // Its own OpenRouter key (or a lent one) first, then the platform's shared key.
+      openrouterApiKey: own.openrouter || ENV.openrouterApiKey,
       anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
       openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
       geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
       deepseekModel: deepseek.model || DEFAULT_MODELS.deepseek,
-      defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
+      openrouterModel: openrouter.model || DEFAULT_MODELS.openrouter,
+      // Its own choice, else the platform default (only with no key of its own), else the deployment's.
+      defaultProvider: await preferredProvider(row.aiDefaultProvider, Object.values(own).some(Boolean), ENV.aiDefaultProvider),
       sources: {
         anthropic: own.anthropic ? "workspace" : "shared",
         openai: own.openai ? "workspace" : "shared",
         gemini: own.gemini ? "workspace" : "shared",
         deepseek: own.deepseek ? "workspace" : "shared",
+        openrouter: own.openrouter ? "workspace" : "shared",
       },
     };
   } catch (err) {
@@ -457,6 +493,24 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
 
 /** Models seen refusing a forced tool choice in this process; their calls go straight to "auto". */
 const MODELS_REFUSING_FORCED_TOOL = new Set<string>();
+
+/**
+ * The one tool synthesised for a structured answer on a provider that gives
+ * JSON through a tool call (Anthropic, and OpenRouter's tool-taking models):
+ * its arguments ARE the JSON the caller asked for.
+ */
+const STRUCTURED_TOOL_NAME = "respond_with_structured_output";
+
+function structuredToolSpec(format: { type: "json_schema"; json_schema: JsonSchema } | { type: "json_object" }): { name: string; description: string; schema: Record<string, unknown> } {
+  return format.type === "json_schema"
+    ? { name: STRUCTURED_TOOL_NAME, description: "Return the response strictly as JSON matching the provided schema.", schema: format.json_schema.schema }
+    : { name: STRUCTURED_TOOL_NAME, description: "Return the response strictly as a single JSON object.", schema: { type: "object", additionalProperties: true } };
+}
+
+/** What the system prompt says when a tool is offered rather than forced. */
+function callToolInstruction(name: string): string {
+  return `Respond by calling the ${name} tool exactly once with the complete result. Do not answer in text.`;
+}
 
 export function __resetForcedToolMemoryForTests(): void {
   MODELS_REFUSING_FORCED_TOOL.clear();
@@ -580,7 +634,6 @@ async function invokeViaAnthropic(
     outputSchema,
     output_schema,
   });
-  const STRUCTURED_TOOL_NAME = "respond_with_structured_output";
   // Both json_schema (typed) and json_object (free-form) callers need forcing on
   // Anthropic — json_object has no OpenAI-style equivalent, so without this the
   // model returns prose and the caller's JSON.parse throws. Synthesize a forced
@@ -591,22 +644,9 @@ async function invokeViaAnthropic(
   const useStructuredTool =
     wantsStructured && (!anthropicTools || anthropicTools.length === 0);
 
-  const structuredInputSchema: Anthropic.Tool["input_schema"] =
-    structuredFormat?.type === "json_schema"
-      ? ((structuredFormat as { json_schema: JsonSchema }).json_schema.schema as Anthropic.Tool["input_schema"])
-      : ({ type: "object", additionalProperties: true } as Anthropic.Tool["input_schema"]);
-
-  const effectiveTools: Anthropic.Tool[] | undefined = useStructuredTool
-    ? [
-        {
-          name: STRUCTURED_TOOL_NAME,
-          description:
-            structuredFormat?.type === "json_schema"
-              ? "Return the response strictly as JSON matching the provided schema."
-              : "Return the response strictly as a single JSON object.",
-          input_schema: structuredInputSchema,
-        },
-      ]
+  const spec = useStructuredTool && structuredFormat ? structuredToolSpec(structuredFormat) : null;
+  const effectiveTools: Anthropic.Tool[] | undefined = spec
+    ? [{ name: spec.name, description: spec.description, input_schema: spec.schema as Anthropic.Tool["input_schema"] }]
     : anthropicTools;
   const effectiveToolChoice = useStructuredTool
     ? ({ type: "tool", name: STRUCTURED_TOOL_NAME } as Anthropic.ToolChoiceTool)
@@ -626,7 +666,7 @@ async function invokeViaAnthropic(
   const callInstruction = !forced
     ? ""
     : effectiveToolChoice?.type === "tool"
-      ? `Respond by calling the ${effectiveToolChoice.name} tool exactly once with the complete result. Do not answer in text.`
+      ? callToolInstruction(effectiveToolChoice.name)
       : "Respond by calling one of the tools.";
   const send = (auto: boolean) =>
     client.messages.create({
@@ -717,33 +757,15 @@ async function invokeViaAnthropic(
 // OpenAI (native — no proxy)
 // ---------------------------------------------------------------------------
 
-async function invokeViaOpenAI(
-  params: InvokeParams,
-  creds: ResolvedCreds
-): Promise<InvokeResult> {
-  if (!creds.openaiApiKey) {
-    throw new Error(
-      "OpenAI API key is not configured (workspace or OPENAI_API_KEY env)"
-    );
-  }
-
-  const {
-    messages,
-    tools,
-    toolChoice,
-    tool_choice,
-    outputSchema,
-    output_schema,
-    responseFormat,
-    response_format,
-    maxTokens,
-    max_tokens,
-    model,
-    temperature,
-  } = params;
+/**
+ * OpenAI's chat-completions request body for a call. The OpenAI path sends it
+ * as it is; OpenRouter, which takes the same shape, starts from it.
+ */
+export function openaiPayload(params: InvokeParams, model: string): Record<string, unknown> {
+  const { messages, tools, toolChoice, tool_choice, maxTokens, max_tokens, temperature } = params;
 
   const payload: Record<string, unknown> = {
-    model: model ?? creds.openaiModel,
+    model,
     messages: messages.map(normalizeMessageOpenAI),
     max_tokens: maxTokens ?? max_tokens ?? 4096,
   };
@@ -764,15 +786,24 @@ async function invokeViaOpenAI(
     payload.tool_choice = normalizedToolChoice;
   }
 
-  const normalizedResponseFormat = normalizeResponseFormat({
-    responseFormat,
-    response_format,
-    outputSchema,
-    output_schema,
-  });
+  const normalizedResponseFormat = normalizeResponseFormat(params);
   if (normalizedResponseFormat) {
     payload.response_format = normalizedResponseFormat;
   }
+  return payload;
+}
+
+async function invokeViaOpenAI(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.openaiApiKey) {
+    throw new Error(
+      "OpenAI API key is not configured (workspace or OPENAI_API_KEY env)"
+    );
+  }
+
+  const payload = openaiPayload(params, params.model ?? creds.openaiModel);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -1026,6 +1057,43 @@ export function deepseekUsage(u: DeepSeekUsage | null | undefined): { input: num
   return { input: miss, output: Math.max(0, Number(u?.completion_tokens ?? 0)), cacheRead: hit };
 }
 
+type ChatMessage = Record<string, unknown>;
+
+/** A chat-completions message's text, whether its content is a string or parts. */
+function chatText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (p && typeof p === "object" && (p as { type?: unknown }).type === "text" ? String((p as { text?: unknown }).text ?? "") : ""))
+      .join("\n");
+  }
+  return String(content ?? "");
+}
+
+/**
+ * For a JSON-mode request with no schema support (DeepSeek, and OpenRouter
+ * models that take only json_object): the schema goes in the system prompt,
+ * and a call that asks for a JSON object and never says the word "json" has
+ * it said for it (DeepSeek's JSON mode needs the word).
+ */
+function addJsonInstruction(messages: ChatMessage[], format: { type: "json_schema"; json_schema: JsonSchema } | { type: "json_object" }): void {
+  const instruction =
+    format.type === "json_schema"
+      ? `Reply with one JSON object and nothing else. It must match this JSON schema:\n${JSON.stringify(format.json_schema.schema)}`
+      : messages.some((m) => /json/i.test(chatText(m.content)))
+        ? ""
+        : "Reply with one JSON object and nothing else.";
+  if (instruction) addSystemText(messages, instruction);
+}
+
+/** Adds a paragraph to the system message, or makes one. */
+function addSystemText(messages: ChatMessage[], text: string): void {
+  const system = messages.find((m) => m.role === "system");
+  if (!system) messages.unshift({ role: "system", content: text });
+  else if (Array.isArray(system.content)) system.content = [...system.content, { type: "text", text }];
+  else system.content = `${String(system.content ?? "")}\n\n${text}`;
+}
+
 /** A message as DeepSeek takes it: text only, as the Gemini path sends it. */
 function deepseekMessage(message: Message): Record<string, unknown> {
   if (message.role === "tool" || message.role === "function") return normalizeMessageOpenAI(message);
@@ -1052,19 +1120,7 @@ export function deepseekPayload(params: InvokeParams, model: string): { payload:
   const format = normalizeResponseFormat(params);
   const wantsJson = !tools && (format?.type === "json_schema" || format?.type === "json_object");
 
-  if (wantsJson) {
-    const instruction =
-      format?.type === "json_schema"
-        ? `Reply with one JSON object and nothing else. It must match this JSON schema:\n${JSON.stringify(format.json_schema.schema)}`
-        : messages.some((m) => /json/i.test(String(m.content ?? "")))
-          ? ""
-          : "Reply with one JSON object and nothing else.";
-    if (instruction) {
-      const system = messages.find((m) => m.role === "system");
-      if (system) system.content = `${String(system.content ?? "")}\n\n${instruction}`;
-      else messages.unshift({ role: "system", content: instruction });
-    }
-  }
+  if (wantsJson && format) addJsonInstruction(messages, format);
 
   const payload: Record<string, unknown> = {
     model,
@@ -1173,6 +1229,244 @@ async function invokeViaDeepSeek(
 }
 
 // ---------------------------------------------------------------------------
+// OpenRouter (OpenAI-format chat completions at openrouter.ai)
+// ---------------------------------------------------------------------------
+
+type OpenRouterUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cost?: number;
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+};
+
+/**
+ * OpenRouter's usage in this module's terms. As at OpenAI, its prompt_tokens
+ * COUNTS the cached part, which is billed at its own rates, so cache reads
+ * and writes go where Anthropic's go and only the rest is input. `cost` is
+ * what OpenRouter charged, in credits (1 credit = 1 USD); null when absent.
+ */
+export function openrouterUsage(u: OpenRouterUsage | null | undefined): { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number | null } {
+  const n = (v: unknown) => Math.max(0, Number(v ?? 0) || 0);
+  const cacheRead = n(u?.prompt_tokens_details?.cached_tokens);
+  const cacheWrite = n(u?.prompt_tokens_details?.cache_write_tokens);
+  const cost = Number(u?.cost);
+  return {
+    input: Math.max(0, n(u?.prompt_tokens) - cacheRead - cacheWrite),
+    output: n(u?.completion_tokens),
+    cacheRead,
+    cacheWrite,
+    costUsd: u?.cost != null && Number.isFinite(cost) && cost >= 0 ? cost : null,
+  };
+}
+
+/** Which model an OpenRouter call goes to, and how it asks for structure. */
+export type OpenRouterPlan = {
+  model: string;
+  /** null for a plain text call. */
+  mode: OpenRouterMode | null;
+  /** The model's supported_parameters, or null when OpenRouter's list could not be read. */
+  supported: string[] | null;
+  /** True when the model asked for cannot give this answer and the default model takes the call. */
+  swapped: boolean;
+};
+
+const warnedSwap = new Set<string>();
+
+/**
+ * A call that needs a structured answer (its own tools, a JSON schema, a JSON
+ * object) goes only to a model whose OpenRouter listing says it can give one.
+ * A model that cannot (one typed into a tier by hand, or whose listing
+ * changed) is not sent the call: the default model, the newest Claude Sonnet
+ * that takes tools, answers it instead, and the spend report shows which
+ * model that was. With OpenRouter's list unreadable nothing can be checked,
+ * so the call goes as asked and OpenRouter's own answer decides.
+ */
+export async function planOpenRouterCall(params: InvokeParams, requested: string): Promise<OpenRouterPlan> {
+  const format = normalizeResponseFormat(params);
+  const need: OpenRouterNeed | null = params.tools && params.tools.length > 0
+    ? "tools"
+    : format?.type === "json_schema" || format?.type === "json_object" ? format.type : null;
+  const { known, model } = await lookupOpenRouterModel(requested);
+  if (!known) return { model: requested, mode: need === null ? null : need === "tools" ? "tools" : "forced_tool", supported: null, swapped: false };
+  if (!need) return { model: requested, mode: null, supported: model?.supportedParameters ?? null, swapped: false };
+  const mode = model ? openrouterMode(model.supportedParameters, need) : null;
+  if (model && mode) return { model: requested, mode, supported: model.supportedParameters, swapped: false };
+
+  const fallbackId = await defaultOpenRouterModelId();
+  const fallback = (await getOpenRouterModels()).models.find((m) => m.id === fallbackId) ?? null;
+  const fallbackMode = fallback ? openrouterMode(fallback.supportedParameters, need) : null;
+  if (!fallback || !fallbackMode || fallbackId === requested) {
+    throw new Error(`OpenRouter model "${requested}" cannot give the structured answer this feature needs, and no OpenRouter model that can was found. Pick another model in Settings → Integrations.`);
+  }
+  if (!warnedSwap.has(`${requested}:${need}`)) {
+    warnedSwap.add(`${requested}:${need}`);
+    console.warn(`[openrouter] "${requested}" ${model ? "does not support" : "is not in OpenRouter's list for"} ${need}; those calls go to ${fallbackId}.`);
+  }
+  return { model: fallbackId, mode: fallbackMode, supported: fallback.supportedParameters, swapped: true };
+}
+
+/**
+ * The request body: OpenAI's (openaiPayload), then what the plan says.
+ *   - a structured call asks the way its mode says (shared/openrouterModels);
+ *     a call with its own tools is not also put in JSON mode, as elsewhere
+ *   - a parameter the model's listing does not take is left out, so it is
+ *     not silently ignored and `require_parameters` can route on the rest
+ *   - a structured call routes only to providers that take every parameter
+ *     sent (`provider.require_parameters`), when the listing is known
+ * `offered`: the structured tool is offered rather than forced (a model that
+ * refused the forced choice).
+ */
+export function openrouterPayload(params: InvokeParams, plan: Pick<OpenRouterPlan, "model" | "mode" | "supported">, offered = false): Record<string, unknown> {
+  const format = normalizeResponseFormat(params);
+  const structured = plan.mode !== null && plan.mode !== "tools";
+  const payload = openaiPayload(
+    structured ? { ...params, tools: undefined, toolChoice: undefined, tool_choice: undefined } : params,
+    plan.model,
+  );
+  const messages = payload.messages as ChatMessage[];
+  const explicitMax = params.maxTokens ?? params.max_tokens;
+  if (plan.mode === "tools" || plan.mode === null) delete payload.response_format;
+  if (structured && explicitMax == null) payload.max_tokens = 8192;
+
+  if ((plan.mode === "forced_tool" || plan.mode === "offered_tool") && format && format.type !== "text") {
+    delete payload.response_format;
+    const spec = structuredToolSpec(format);
+    payload.tools = [{ type: "function", function: { name: spec.name, description: spec.description, parameters: spec.schema } }];
+    if (plan.mode === "forced_tool" && !offered) {
+      payload.tool_choice = { type: "function", function: { name: spec.name } };
+    } else {
+      addSystemText(messages, callToolInstruction(spec.name));
+    }
+  } else if (plan.mode === "json_object" && format && format.type !== "text") {
+    payload.response_format = { type: "json_object" };
+    addJsonInstruction(messages, format);
+  }
+
+  if (plan.supported) {
+    for (const p of ["temperature", "max_tokens"]) if (p in payload && !plan.supported.includes(p)) delete payload[p];
+    if (plan.mode !== null) payload.provider = { require_parameters: true };
+  }
+  return payload;
+}
+
+type OpenRouterError = { code?: number | string; message?: string; metadata?: Record<string, unknown> };
+type OpenRouterResponse = {
+  id?: string;
+  created?: number;
+  model?: string;
+  choices?: Array<{
+    index?: number;
+    message?: { role?: string; content?: string | null; tool_calls?: ToolCall[] };
+    finish_reason?: string | null;
+    error?: OpenRouterError;
+  }>;
+  usage?: OpenRouterUsage;
+  error?: OpenRouterError;
+};
+
+/** A 400 from a model that does not take a forced tool choice (OpenRouter passes the provider's words on). */
+function refusedForcedChoice(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status;
+  return status === 400 && /tool_choice/i.test(err instanceof Error ? err.message : String(err ?? ""));
+}
+
+async function invokeViaOpenRouter(
+  params: InvokeParams,
+  creds: ResolvedCreds
+): Promise<InvokeResult> {
+  if (!creds.openrouterApiKey) {
+    throw new Error(
+      "OpenRouter API key is not configured (workspace or OPENROUTER_API_KEY env)"
+    );
+  }
+  const requested = params.model ?? (creds.openrouterModel || (await defaultOpenRouterModelId()));
+  const plan = await planOpenRouterCall(params, requested);
+  const whose = creds.sources.openrouter;
+
+  // Rate limits and a provider being down clear in seconds: the same three
+  // tries, 0s, 1s, 3s, the DeepSeek and Gemini paths make. A 200 can still
+  // carry an error (a provider failed after accepting the request); it is
+  // treated by its own code. The error thrown carries the status.
+  const send = async (offered: boolean): Promise<OpenRouterResponse> => {
+    const body = JSON.stringify(openrouterPayload(params, plan, offered));
+    let failure: Error & { status: number } = openrouterFailure(0, "", "", whose);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(OPENROUTER_CHAT_URL, { method: "POST", headers: openrouterHeaders(creds.openrouterApiKey), body });
+      if (response.ok) {
+        const data = (await response.json()) as OpenRouterResponse;
+        const err = data.error ?? data.choices?.[0]?.error;
+        if (!err) return data;
+        failure = openrouterFailure(Number(err.code) || 502, "", { error: err }, whose);
+      } else {
+        failure = openrouterFailure(response.status, response.statusText, await response.text().catch(() => ""), whose);
+      }
+      if (!OPENROUTER_RETRYABLE.has(failure.status) || attempt === 2) break;
+      await new Promise((r) => setTimeout(r, attempt === 0 ? 1000 : 3000));
+    }
+    throw failure;
+  };
+
+  // As on the Anthropic path: forcing the structured tool is tried first, and
+  // a model that refuses the forced choice is asked again with the tool
+  // offered and remembered, so its later calls skip the refused attempt.
+  const forced = plan.mode === "forced_tool";
+  const memo = `openrouter:${plan.model}`;
+  let data: OpenRouterResponse;
+  let offered = forced && MODELS_REFUSING_FORCED_TOOL.has(memo);
+  try {
+    data = await send(offered);
+  } catch (err) {
+    if (!forced || offered || !refusedForcedChoice(err)) throw err;
+    MODELS_REFUSING_FORCED_TOOL.add(memo);
+    offered = true;
+    data = await send(true);
+  }
+
+  const choice = data.choices?.[0];
+  const text = typeof choice?.message?.content === "string" ? choice.message.content : "";
+  const calls = choice?.message?.tool_calls ?? [];
+  let content = text;
+  let toolCalls = calls;
+  if (plan.mode === "forced_tool" || plan.mode === "offered_tool") {
+    // The structured tool's arguments ARE the answer; a model only offered
+    // the tool may put the JSON in text instead, and that is passed on alone.
+    const structured = calls.find((c) => c.function?.name === STRUCTURED_TOOL_NAME);
+    toolCalls = calls.filter((c) => c !== structured);
+    const args = structured?.function?.arguments ?? "";
+    content = structured ? (jsonFromText(args) ?? args) : (jsonFromText(text) ?? text);
+  } else if (plan.mode === "json_schema" || plan.mode === "json_object") {
+    content = jsonFromText(text) ?? text;
+  }
+
+  const used = openrouterUsage(data.usage);
+  return {
+    id: data.id ?? `openrouter-${Date.now()}`,
+    created: data.created ?? Math.floor(Date.now() / 1000),
+    model: data.model ?? plan.model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: choice?.finish_reason ?? null,
+      },
+    ],
+    usage: {
+      prompt_tokens: used.input,
+      completion_tokens: used.output,
+      total_tokens: used.input + used.output,
+      cache_creation_input_tokens: used.cacheWrite,
+      cache_read_input_tokens: used.cacheRead,
+      ...(used.costUsd !== null ? { cost: used.costUsd } : {}),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Provider selection
 // ---------------------------------------------------------------------------
 
@@ -1186,16 +1480,21 @@ function resolveProvider(
   if (preferred === "gemini" && creds.geminiApiKey) return "gemini";
   if (preferred === "anthropic" && creds.anthropicApiKey) return "anthropic";
   if (preferred === "deepseek" && creds.deepseekApiKey) return "deepseek";
+  if (preferred === "openrouter" && creds.openrouterApiKey) return "openrouter";
 
-  // Fallback order: Anthropic → OpenAI → Gemini → DeepSeek. DeepSeek is last:
-  // a workspace reaches it unasked only when it is the one key there is.
+  // Fallback order: Anthropic → OpenAI → Gemini → DeepSeek → OpenRouter.
+  // DeepSeek and OpenRouter are last: a workspace reaches them unasked only
+  // when theirs are the only keys there are. So the platform's shared
+  // OpenRouter key moves nobody until a workspace picks OpenRouter or the
+  // platform owner makes it the platform default.
   if (creds.anthropicApiKey) return "anthropic";
   if (creds.openaiApiKey) return "openai";
   if (creds.geminiApiKey) return "gemini";
   if (creds.deepseekApiKey) return "deepseek";
+  if (creds.openrouterApiKey) return "openrouter";
 
   throw new Error(
-    "No AI provider configured. Set a workspace key in Settings → Integrations, or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY in env."
+    "No AI provider configured. Set a workspace key in Settings → Integrations, or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY / OPENROUTER_API_KEY in env."
   );
 }
 
@@ -1404,6 +1703,9 @@ async function callProvider(params: InvokeParams, creds: ResolvedCreds, workspac
       case "deepseek":
         result = await invokeViaDeepSeek(params, creds);
         break;
+      case "openrouter":
+        result = await invokeViaOpenRouter(params, creds);
+        break;
       default:
         throw new Error(`Unsupported provider: ${provider as string}`);
     }
@@ -1428,6 +1730,8 @@ async function callProvider(params: InvokeParams, creds: ResolvedCreds, workspac
       output: result.usage?.completion_tokens,
       cacheWrite: result.usage?.cache_creation_input_tokens,
       cacheRead: result.usage?.cache_read_input_tokens,
+      // OpenRouter says what it charged; the other providers are priced from list prices in the report.
+      ...(typeof result.usage?.cost === "number" ? { costUsd: result.usage.cost } : {}),
     },
   });
   return result;

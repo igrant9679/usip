@@ -80,8 +80,17 @@ export function pricedModel(model: string): string | null {
   return Object.keys(PRICES).find((id) => m === id || m.startsWith(`${id}-`)) ?? null;
 }
 
+/**
+ * The meter a provider-reported cost is kept in (server/services/spend.ts),
+ * in millionths of a USD. OpenRouter reports what each call cost, so its
+ * dollars are its own figure rather than a list-price estimate, and its
+ * token lines carry no price of their own (that would count the money twice).
+ */
+export const COST_METER = "cost_usd_micros";
+
 /** USD for `quantity` of one meter, or null when there is no price on file for it. */
 export function unitCostUsd(vendor: string, meter: string, model: string, quantity: number): number | null {
+  if (meter === COST_METER) return quantity / 1_000_000;
   if (vendor !== "anthropic") return null;
   if (meter === "web_searches") return quantity * WEB_SEARCH_USD;
   const id = pricedModel(model);
@@ -98,6 +107,9 @@ export function unitCostUsd(vendor: string, meter: string, model: string, quanti
 
 const TOKEN_METERS = new Set(["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"]);
 
+/** Vendors that report what each call cost (COST_METER): their token rows carry no price of their own. */
+const SELF_PRICED_VENDORS = new Set(["openrouter"]);
+
 /**
  * What one model call has cost on average, from the ledger rows of the calls
  * in question, for a control that says what it will spend before it spends
@@ -110,7 +122,7 @@ export function averageCallCostUsd(rows: Array<Pick<SpendRowIn, "vendor" | "mete
   let calls = 0;
   for (const r of rows) {
     if (r.meter === "input_tokens") calls += r.calls;
-    if (!r.quantity) continue;
+    if (!r.quantity || (SELF_PRICED_VENDORS.has(r.vendor) && TOKEN_METERS.has(r.meter))) continue;
     const c = unitCostUsd(r.vendor, r.meter, r.model, r.quantity);
     if (c === null) return null;
     usd += c;
@@ -134,6 +146,8 @@ export function summarizeSpend(rows: SpendRowIn[], days: string[]): SpendSummary
     line.total += r.quantity;
     line.calls += r.calls;
 
+    // A cost is money, not a unit of work: it is in the lines, not in "where it went".
+    if (r.meter === COST_METER) continue;
     const fMeter = TOKEN_METERS.has(r.meter) ? "tokens" : r.meter;
     const fKey = [r.vendor, r.feature, fMeter].join("\u0000");
     const f = features.get(fKey) ?? { vendor: r.vendor, feature: r.feature || "(unnamed)", meter: fMeter, total: 0 };
@@ -162,6 +176,7 @@ export const METER_LABEL: Record<string, string> = {
   cache_write_tokens: "Cache write tokens",
   cache_read_tokens: "Cache read tokens",
   web_searches: "Web searches",
+  cost_usd_micros: "Cost the vendor reported (millionths of $1)",
   daily_credits: "Daily credits (single, power)",
   instant_credits: "Instant credits (single, quick)",
   bulk_emails: "Bulk verification addresses",
@@ -181,6 +196,7 @@ export const VENDOR_LABEL: Record<string, string> = {
   openai: "OpenAI",
   gemini: "Gemini",
   deepseek: "DeepSeek",
+  openrouter: "OpenRouter",
   reoon: "Reoon",
   quickenrich: "QuickEnrich",
   apollo: "Apollo",

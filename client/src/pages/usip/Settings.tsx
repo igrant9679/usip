@@ -13,6 +13,9 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { AI_KEY_KINDS, KeySharingCard } from "@/components/usip/settings/KeySharingCard";
 import { ModelTiersCard } from "@/components/usip/settings/ModelTiersCard";
+import { OpenRouterModelPicker } from "@/components/usip/settings/OpenRouterModelPicker";
+import { PlatformAiDefaultCard } from "@/components/usip/settings/PlatformAiDefaultCard";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
@@ -1376,13 +1379,32 @@ const AI_PROVIDERS = [
     docsUrl: "https://platform.deepseek.com/api_keys",
     modelPlaceholder: "deepseek-flash",
   },
+  {
+    id: "openrouter" as const,
+    name: "OpenRouter",
+    hint: "One key for models from many vendors, picked from OpenRouter's own list with prices. With no key of your own, the platform's shared OpenRouter key is used when you pick OpenRouter.",
+    docsUrl: "https://openrouter.ai/settings/keys",
+    // No placeholder: the model is picked from OpenRouter's live list (OpenRouterModelPicker).
+    modelPlaceholder: "",
+  },
 ];
+
+/** What OpenRouter said about a key it accepted, in words. */
+function openrouterCredit(c: { limit: number | null; limitRemaining: number | null }): string {
+  return c.limitRemaining !== null && c.limit !== null
+    ? `$${c.limitRemaining.toFixed(2)} of $${c.limit.toFixed(2)} credit left`
+    : "no credit limit set on the key";
+}
 
 function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
   const utils = trpc.useUtils();
   const credsQ = trpc.aiCredentials.get.useQuery();
+  const { user } = useAuth();
   const upsertMut = trpc.aiCredentials.upsert.useMutation({
-    onSuccess: () => { utils.aiCredentials.get.invalidate(); toast.success("Saved"); },
+    onSuccess: (d) => {
+      utils.aiCredentials.get.invalidate();
+      toast.success("keyCheck" in d && d.keyCheck ? `Saved. OpenRouter accepted the key: ${openrouterCredit(d.keyCheck)}.` : "Saved");
+    },
     onError: (e) => toast.error(e.message),
   });
   const setDefaultMut = trpc.aiCredentials.setDefaultProvider.useMutation({
@@ -1401,7 +1423,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
   const data = credsQ.data;
 
   return (
-    <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, Gemini or DeepSeek. Keys are encrypted at rest. Falls back to server-level keys if none set.">
+    <Section title="AI Providers" description="Bring your own API keys for Anthropic, OpenAI, Gemini, DeepSeek or OpenRouter. Keys are encrypted at rest. Falls back to server-level keys if none set.">
       {credsQ.isLoading ? (
         <div className="p-4 md:p-5 flex justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : (
@@ -1409,10 +1431,13 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
           {AI_PROVIDERS.map((p) => {
             const cur = data?.[p.id];
             const draft = drafts[p.id] ?? { apiKey: "", model: cur?.model ?? "" };
+            // OpenRouter with no key of its own runs on the platform's shared key, so it can still be tested and picked.
+            const onPlatformKey = p.id === "openrouter" && !cur?.configured && !!data?.openrouter.platformKey;
+            const usable = !!cur?.configured || onPlatformKey;
             return (
               <div key={p.id} className="px-4 py-3">
                 <div className="flex items-center gap-3">
-                  {cur?.configured
+                  {usable
                     ? <CheckCircle2 className="size-4 text-green-600" />
                     : <div className="size-4 rounded-full border-2 border-muted-foreground/30" />}
                   <div className="flex-1 min-w-0">
@@ -1428,6 +1453,11 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                           Shared from {cur.sharedFrom}
                         </span>
                       )}
+                      {onPlatformKey && (
+                        <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                          Using the platform&apos;s shared key
+                        </span>
+                      )}
                       {data?.defaultProvider === p.id && (
                         <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">default</span>
                       )}
@@ -1438,7 +1468,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                     <Button size="sm" variant="ghost" asChild>
                       <a href={p.docsUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-3.5" /></a>
                     </Button>
-                    {cur?.configured && (
+                    {usable && (
                       <Button
                         size="sm" variant="ghost"
                         disabled={testMut.isPending}
@@ -1450,7 +1480,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                         Test
                       </Button>
                     )}
-                    {isAdmin && data?.defaultProvider !== p.id && cur?.configured && (
+                    {isAdmin && data?.defaultProvider !== p.id && usable && (
                       <Button
                         size="sm" variant="outline"
                         onClick={() => setDefaultMut.mutate({ provider: p.id })}
@@ -1473,12 +1503,21 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Model (optional)</Label>
-                      <Input aria-label="Model (optional)"
-                        value={draft.model}
-                        onChange={(e) => setDraft(p.id, { model: e.target.value })}
-                        placeholder={p.modelPlaceholder}
-                        className="h-8 text-xs"
-                      />
+                      {p.id === "openrouter" ? (
+                        <OpenRouterModelPicker
+                          allowDefault
+                          value={draft.model}
+                          onChange={(id) => setDraft(p.id, { model: id })}
+                          className="w-full"
+                        />
+                      ) : (
+                        <Input aria-label="Model (optional)"
+                          value={draft.model}
+                          onChange={(e) => setDraft(p.id, { model: e.target.value })}
+                          placeholder={p.modelPlaceholder}
+                          className="h-8 text-xs"
+                        />
+                      )}
                     </div>
                     <div className="md:col-span-2 flex gap-2">
                       <Button
@@ -1507,6 +1546,8 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
           })}
         </div>
       )}
+      {/* The PLATFORM role, not the workspace one: only the platform owner sets the platform default (adminProcedure). */}
+      {user?.role === "admin" && <div className="mt-4"><PlatformAiDefaultCard /></div>}
       <div className="mt-4"><ModelTiersCard isAdmin={isAdmin} /></div>
       <div className="mt-4"><KeySharingCard kinds={AI_KEY_KINDS} /></div>
     </Section>

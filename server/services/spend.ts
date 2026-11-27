@@ -28,12 +28,14 @@ import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { spendLedger, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { getRequestFeature } from "../_core/requestContext";
+import { COST_METER } from "@shared/spendReport";
 
 export type SpendVendor =
   | "anthropic"
   | "openai"
   | "gemini"
   | "deepseek"
+  | "openrouter"
   | "reoon"
   | "quickenrich"
   | "apollo"
@@ -115,7 +117,7 @@ export async function recordSpend(e: SpendEvent): Promise<void> {
   }
 }
 
-export type AiVendor = "anthropic" | "openai" | "gemini" | "deepseek";
+export type AiVendor = "anthropic" | "openai" | "gemini" | "deepseek" | "openrouter";
 
 /** One model call's usage, in the units the provider bills. */
 export type AiUsage = {
@@ -124,6 +126,12 @@ export type AiUsage = {
   cacheWrite?: number | null;
   cacheRead?: number | null;
   webSearches?: number | null;
+  /**
+   * What the provider says the call cost, in USD, when it says (OpenRouter
+   * does, on every response). Kept as its own meter in millionths of a
+   * dollar, so the report shows the provider's own figure, not an estimate.
+   */
+  costUsd?: number | null;
 };
 
 /**
@@ -146,6 +154,7 @@ export async function recordAiUsage(e: {
   await recordSpend({ ...base, meter: "cache_write_tokens", quantity: u.cacheWrite ?? 0 });
   await recordSpend({ ...base, meter: "cache_read_tokens", quantity: u.cacheRead ?? 0 });
   await recordSpend({ ...base, meter: "web_searches", quantity: u.webSearches ?? 0 });
+  await recordSpend({ ...base, meter: COST_METER, quantity: (u.costUsd ?? 0) * 1_000_000 });
 }
 
 /** Test seam for the once-per-feature warning. */

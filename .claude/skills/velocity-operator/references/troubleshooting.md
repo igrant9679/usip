@@ -22,6 +22,7 @@
 | Company shows as wrong brand | Enrichment guessed from a mailbox domain or slug | Pin the brand/domain on the company; pins beat every provider |
 | LinkedIn actions fail | Unipile disconnected or caps reached | Connected Accounts; LinkedIn Limits |
 | AI features fail mid-day | Monthly AI budget exhausted or provider key missing | Billing and credits; Settings → Integrations → AI credentials |
+| "OpenRouter refused … (401)" or "out of credit (402)" | The OpenRouter key is wrong/revoked, or has no credit left (the message says whose key: the workspace's or the platform's shared one) | Workspace key: replace it on the OpenRouter card. Shared key: the platform owner rotates `OPENROUTER_API_KEY` on Railway or adds credit; Platform default provider → Check shared OpenRouter key shows its credit |
 | "FORBIDDEN" from the API | Role too low or wrong workspace header | `x-workspace-id`; role |
 | Signed out sooner than expected, mid-day | Settings → Security → Session timeout is now ENFORCED (2026-09-20) and is the ABSOLUTE age of a sign-in, not idle time. A member in two workspaces gets the shorter of the two | Raise the number; it lands at each member's next sign-in, not immediately |
 | Whole app replaced by "Two-factor authentication required" | Settings → Security → Enforce 2FA is on and this member has no authenticator app | Connect one on the panel. Lost phone: an admin resets 2FA from the Team page — no backup codes. A super admin is never blocked |

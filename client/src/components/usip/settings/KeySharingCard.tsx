@@ -24,9 +24,9 @@ import { confirmAction } from "@/components/usip/Common";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
-export type ShareableKind = "anthropic" | "openai" | "gemini" | "deepseek" | "xai" | "apollo" | "reoon" | "quickenrich" | "warmysender" | "leadocean";
+export type ShareableKind = "anthropic" | "openai" | "gemini" | "deepseek" | "openrouter" | "xai" | "apollo" | "reoon" | "quickenrich" | "warmysender" | "leadocean";
 
-export const AI_KEY_KINDS: ShareableKind[] = ["anthropic", "openai", "gemini", "deepseek"];
+export const AI_KEY_KINDS: ShareableKind[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter"];
 export const SOURCE_KEY_KINDS: ShareableKind[] = ["apollo", "quickenrich", "warmysender", "leadocean", "reoon"];
 export const VOICE_KEY_KINDS: ShareableKind[] = ["xai"];
 
